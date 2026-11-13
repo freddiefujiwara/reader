@@ -1,0 +1,58 @@
+# This workflow will do a clean install of node dependencies, cache/restore them, build the source code and run tests across different versions of node
+# For more information see: https://help.github.com/actions/language-and-framework-guides/using-nodejs-with-github-actions
+
+name: Node.js CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [24.x]
+        # See supported Node.js release schedule at https://nodejs.org/en/about/releases/
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run tests
+        run: npm test
+
+      - name: Inject API secret
+        run: sed -i -e 's@<API>@${{ secrets.API }}@g' src/config.js
+
+      - name: Build
+        run: npm run build --if-present
+
+      - name: Build staging variant into dist/staging
+        run: |
+          npm run build:staging
+          mkdir -p dist/staging
+          cp -r dist-staging/* dist/staging/
+
+      - name: "Deploy to gh-pages 🚀"
+        uses: JamesIves/github-pages-deploy-action@releases/v3
+        if: ${{ matrix.node-version == '24.x' && github.event_name == 'push' }}
+        with:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: gh-pages
+          FOLDER: dist
