@@ -72,3 +72,43 @@ describe('fetchOneFeed / fetchAllFeeds', () => {
     await expect(fetchAllFeeds([], { fetcher: routerFetcher() })).resolves.toEqual([]);
   });
 });
+
+describe('fetchAllFeeds の同時実行数', () => {
+  it('同時実行は6件までに抑え、完了が前後しても結果は入力順で返る', async () => {
+    const feeds = Array.from({ length: 10 }, (_, i) => ({
+      id: `f${i}`,
+      url: `https://example.com/f${i}.xml`,
+      fetchUrl: `https://example.com/f${i}.xml`,
+    }));
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const fetcher = vi.fn(async (url) => {
+      const target = decodeURIComponent(url.split('?u=')[1]);
+      const n = Number(target.match(/f(\d+)\.xml/)[1]);
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      // 後ろのフィードほど早く終わらせ、完了順を入力順とずらす。
+      await new Promise((r) => setTimeout(r, (10 - n) * 5));
+      inFlight--;
+      const xml = `<rss version="2.0"><channel><item><title>T${n}</title><link>https://example.com/${n}</link></item></channel></rss>`;
+      return { ok: true, status: 200, json: async () => ({ url: target, content: xml, error: null }) };
+    });
+    const results = await fetchAllFeeds(feeds, { fetcher, retryDelayMs: 0 });
+    expect(maxInFlight).toBeLessThanOrEqual(6);
+    expect(results.map((r) => r.feed.id)).toEqual(feeds.map((f) => f.id));
+    expect(results.map((r) => r.entries[0].title)).toEqual(feeds.map((_, i) => `T${i}`));
+  });
+});
+
+describe('fetchFeedXml の境界', () => {
+  it('content が空なら empty_content を投げ、再試行しない', async () => {
+    const fetcher = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ url: 'x', content: '', error: null }) }));
+    await expect(fetchFeedXml('https://example.com/f', { fetcher, retryDelayMs: 0 })).rejects.toThrow('empty_content');
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  it('TypeError が続く場合は2回で諦めて投げる', async () => {
+    const fetcher = vi.fn(async () => { throw new TypeError('Load failed'); });
+    await expect(fetchFeedXml('https://example.com/f', { fetcher, retryDelayMs: 0 })).rejects.toThrow(TypeError);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+});
