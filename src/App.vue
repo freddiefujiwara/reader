@@ -30,6 +30,7 @@ import {
   patchArticle,
   visibleArticles,
   visibleFeedChips,
+  feedCategories,
 } from './lib/listState.js';
 import { formatPublishedAt } from './lib/format.js';
 
@@ -70,6 +71,7 @@ const unreadTotalCount = computed(() =>
   state.value.feeds.reduce((n, f) => n + (f.unreadCount || 0), 0)
 );
 const chipFeeds = computed(() => visibleFeedChips(state.value));
+const categoryList = computed(() => feedCategories(state.value.feeds));
 const hasMore = computed(() => state.value.articles.length < state.value.total);
 
 const FILTERS = [
@@ -85,6 +87,7 @@ async function fetchList({ append = false } = {}) {
   try {
     const payload = await listArticles(session.value.token, {
       feedId: state.value.feedId,
+      category: state.value.category,
       filter: state.value.filter,
       limit: PAGE_SIZE,
       offset: append ? state.value.articles.length : 0,
@@ -111,6 +114,13 @@ function setFeed(feedId) {
   fetchList();
 }
 
+function setCategory(category) {
+  if (state.value.category === category) return;
+  // カテゴリを変えたらフィード選択は解除する (対象外フィードが残らないように)。
+  state.value = { ...state.value, category, feedId: '', articles: [], total: 0 };
+  fetchList();
+}
+
 function setFilter(filter) {
   if (state.value.filter === filter) return;
   state.value = { ...state.value, filter, articles: [], total: 0 };
@@ -121,8 +131,8 @@ function setFilter(filter) {
 async function goUnreadAll() {
   const fromAdmin = view.value !== 'timeline';
   if (fromAdmin) view.value = 'timeline';
-  if (state.value.feedId === '' && state.value.filter === 'unread' && !fromAdmin) return;
-  state.value = { ...state.value, feedId: '', filter: 'unread', articles: [], total: 0 };
+  if (state.value.feedId === '' && state.value.category === '' && state.value.filter === 'unread' && !fromAdmin) return;
+  state.value = { ...state.value, feedId: '', category: '', filter: 'unread', articles: [], total: 0 };
   if (fromAdmin) await waitReorderSettled();
   fetchList();
 }
@@ -151,9 +161,12 @@ async function onMarkAllRead() {
   if (!isOwner.value || savingAll.value) return;
   savingAll.value = true;
   const before = state.value;
-  state.value = markAllReadInList(state.value, state.value.feedId);
+  state.value = markAllReadInList(state.value, state.value.feedId, state.value.category);
   try {
-    await markAllRead(session.value.token, state.value.feedId);
+    await markAllRead(session.value.token, {
+      feedId: state.value.feedId,
+      category: state.value.feedId ? '' : state.value.category,
+    });
     // 未読ビューのときは既読化した記事が残らないよう取り直す。
     if (state.value.filter === 'unread') await fetchList();
   } catch (e) {
@@ -456,6 +469,22 @@ onMounted(async () => {
         <p v-if="isReadonly" class="readonly-note">共有リンクで閲覧中（読み取り専用）です。既読やスターは付けられません。</p>
 
         <template v-if="view === 'timeline'">
+        <div v-if="categoryList.length" class="feed-chips category-chips" role="tablist" aria-label="カテゴリで絞り込み">
+          <button
+            type="button"
+            class="chip"
+            :class="{ active: state.category === '' }"
+            @click="setCategory('')"
+          >すべて</button>
+          <button
+            v-for="c in categoryList"
+            :key="c"
+            type="button"
+            class="chip"
+            :class="{ active: state.category === c }"
+            @click="setCategory(c)"
+          >{{ c }}</button>
+        </div>
         <div class="feed-chips" role="tablist" aria-label="フィードで絞り込み">
           <button
             type="button"
