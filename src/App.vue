@@ -59,7 +59,18 @@ import {
 import { normalizeFeedIds } from './lib/feedHash.js';
 import { fetchAllFeeds, fetchFeedXml } from './lib/feedFetch.js';
 import { formatPublishedAt } from './lib/format.js';
-import { clampSeek, formatTime, nextSpeed, progressRatio } from './lib/player.js';
+import {
+  buildQueue,
+  clampSeek,
+  formatTime,
+  loadPlayMode,
+  nextEpisodePlan,
+  nextRepeat,
+  nextSpeed,
+  progressRatio,
+  REPEAT_LABELS,
+  savePlayMode,
+} from './lib/player.js';
 
 // 画面に出す件数の初期値と「もっと見る」の増分 (v2 は全件ローカルにあるため、
 // サーバー取得ではなく表示ウィンドウを広げるだけ)。
@@ -337,6 +348,18 @@ const currentTime = ref(0);
 const duration = ref(0);
 const speed = ref(1);
 const seeking = ref(false);
+// 再生モード (blog のプレイヤーと同じ: ランダムのトグルと
+// リピートの循環)。端末に保存して再訪時も引き継ぐ。
+const initialPlayMode = loadPlayMode();
+const shuffleOn = ref(initialPlayMode.shuffle);
+const repeatMode = ref(initialPlayMode.repeat);
+const repeatLabel = computed(() => REPEAT_LABELS[repeatMode.value]);
+const shuffleLabel = computed(() => (shuffleOn.value ? 'ランダム：オン' : 'ランダム：オフ'));
+// 再生開始時点のキューのスナップショット (記事オブジェクトの配列)。
+// 再生中に既読化などで表示リストが変わっても並びは変えない。
+const playQueue = ref([]);
+// このラウンドで再生を始めた記事ID (ランダム再生の未再生判定用)。
+let playedInRound = new Set();
 // 再生位置のメモリ上の控え (DB 読み直しを待たずに再開するため)。
 const playPosMemory = new Map();
 let pendingSeek = 0;
@@ -368,6 +391,13 @@ function tryPlayAudio() {
 function savePlayPos() {
   const ep = currentEpisode.value;
   if (!ep) return;
+  // 再生し終えた要素の現在位置は「終わり」そのもので再開位置ではない。
+  // 終了直後の自動送り (loadEpisode 内の保存) で、クリア済みの位置を
+  // 末尾で上書きしてしまわないよう、ここで 0 に倒す。
+  if (audio.ended) {
+    playPosMemory.set(ep.id, 0);
+    return;
+  }
   const pos = Math.floor(audio.currentTime || 0);
   playPosMemory.set(ep.id, pos);
   if (pos > 0) setLocalArticlePlayPos(ep.id, pos).catch(() => {});
@@ -394,7 +424,8 @@ function updateMediaSession(article) {
   }
 }
 
-function startEpisode(article) {
+// エピソードを Audio 要素へ載せて再生する共通処理。キューは触らない。
+function loadEpisode(article) {
   savePlayPos();
   currentEpisode.value = article;
   duration.value = 0;
@@ -404,6 +435,28 @@ function startEpisode(article) {
   audio.playbackRate = speed.value;
   updateMediaSession(article);
   tryPlayAudio();
+}
+
+// ユーザーがカードから選んだとき: その時点の表示リスト (フィルタ
+// 適用後) から同じフィードの音声つき記事をキューとして固定し、
+// ラウンドを数え直してから再生する。以後の自動送りはこのキューに
+// 対して行う。
+function startEpisode(article) {
+  playQueue.value = buildQueue(visible.value, article);
+  playedInRound = new Set([article.id]);
+  loadEpisode(article);
+}
+
+function toggleShuffle() {
+  shuffleOn.value = !shuffleOn.value;
+  savePlayMode({ shuffle: shuffleOn.value, repeat: repeatMode.value });
+  // blog と同じく、切り替えたら再生中の曲からラウンドを数え直す。
+  playedInRound = new Set(currentEpisode.value ? [currentEpisode.value.id] : []);
+}
+
+function cycleRepeat() {
+  repeatMode.value = nextRepeat(repeatMode.value);
+  savePlayMode({ shuffle: shuffleOn.value, repeat: repeatMode.value });
 }
 
 function togglePlay() {
@@ -481,11 +534,32 @@ audio.addEventListener('ended', () => {
   isPlaying.value = false;
   const ep = currentEpisode.value;
   if (!ep) return;
-  clearPlayPos(ep.id);
-  currentTime.value = 0;
-  // 聴き終えたら、記事を開いたときと同じ経路で既読にする。
+  // 聴き終えたら、記事を開いたときと同じ経路で既読にする
+  // (単曲リピートでも、既読化は冪等なので毎回通してよい)。
   const view = state.value.articles.find((a) => a.id === ep.id) || ep;
   onOpenArticle(view);
+  clearPlayPos(ep.id);
+  currentTime.value = 0;
+  if (repeatMode.value === 'one') {
+    // 単曲リピート: src は差し替えず先頭から再生し直す。再開位置
+    // (pendingSeek は metadata 読み込み時だけ効く) とは競合しない。
+    audio.currentTime = 0;
+    tryPlayAudio();
+    return;
+  }
+  const plan = nextEpisodePlan({
+    queue: playQueue.value.map((a) => a.id),
+    currentId: ep.id,
+    repeat: repeatMode.value,
+    shuffle: shuffleOn.value,
+    playedIds: playedInRound,
+  });
+  if (plan.type !== 'advance') return;
+  const next = playQueue.value.find((a) => a.id === plan.id);
+  if (!next) return;
+  if (plan.resetPlayed) playedInRound = new Set();
+  playedInRound.add(next.id);
+  loadEpisode(next);
 });
 
 // セッション失効時の共通処理。保存分を消してサインイン画面に戻す。
@@ -1108,7 +1182,9 @@ onMounted(async () => {
           <span class="player-time player-total">{{ formatTime(displayDuration) }}</span>
         </div>
         <div class="player-controls">
-          <button type="button" class="player-button" aria-label="15秒戻る" @click="skipBy(-15)">−15秒</button>
+          <button type="button" class="player-button player-skip" aria-label="15秒戻る" title="15秒戻る" @click="skipBy(-15)">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z" /><text x="12" y="16.1" text-anchor="middle" font-size="8.5" font-weight="700">15</text></svg>
+          </button>
           <button
             type="button"
             class="player-play"
@@ -1118,8 +1194,34 @@ onMounted(async () => {
             <svg v-if="isPlaying" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h4v14H6zM14 5h4v14h-4z" /></svg>
             <svg v-else viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>
           </button>
-          <button type="button" class="player-button" aria-label="30秒進む" @click="skipBy(30)">+30秒</button>
+          <button type="button" class="player-button player-skip" aria-label="30秒進む" title="30秒進む" @click="skipBy(30)">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><g transform="translate(24 0) scale(-1 1)"><path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z" /></g><text x="12" y="16.1" text-anchor="middle" font-size="8.5" font-weight="700">30</text></svg>
+          </button>
           <button type="button" class="player-button" aria-label="再生速度" @click="cycleSpeed">{{ speedLabel }}</button>
+        </div>
+        <div class="player-toggles">
+          <button
+            type="button"
+            class="player-toggle"
+            :class="{ 'is-on': repeatMode !== 'none' }"
+            :aria-label="repeatLabel"
+            :title="repeatLabel"
+            @click="cycleRepeat"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z" /></svg>
+            <span v-if="repeatMode === 'one'" class="player-badge">1</span>
+          </button>
+          <button
+            type="button"
+            class="player-toggle"
+            :class="{ 'is-on': shuffleOn }"
+            :aria-label="shuffleLabel"
+            :title="shuffleLabel"
+            :aria-pressed="shuffleOn ? 'true' : 'false'"
+            @click="toggleShuffle"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.59 9.17 5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z" /></svg>
+          </button>
         </div>
       </div>
 
