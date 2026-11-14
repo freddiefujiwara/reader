@@ -43,10 +43,6 @@ export function patchArticle(articles, articleId, patch) {
   });
 }
 
-export function unreadTotal(articles) {
-  return articles.reduce((n, a) => n + (a.isRead ? 0 : 1), 0);
-}
-
 // ローカルの記事から数えた未読数をフィードへ付け直す。
 // サーバー応答の unreadCount は使わず、端末に居る記事だけが数えられる。
 export function withUnreadCounts(feeds, articles) {

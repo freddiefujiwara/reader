@@ -3,7 +3,6 @@ import {
   createListState,
   visibleArticles,
   patchArticle,
-  unreadTotal,
   withUnreadCounts,
   sortArticlesDesc,
   markAllReadInList,
@@ -37,16 +36,13 @@ describe('visibleArticles', () => {
   });
 });
 
-describe('patchArticle / unreadTotal', () => {
+describe('patchArticle', () => {
   it('対象記事だけ差し替え、元配列を壊さない', () => {
     const s = baseState();
     const next = patchArticle(s.articles, '1', { isRead: true });
     expect(next[0].isRead).toBe(true);
     expect(s.articles[0].isRead).toBe(false);
     expect(next[1]).toBe(s.articles[1]);
-  });
-  it('未読数を数える', () => {
-    expect(unreadTotal(baseState().articles)).toBe(2);
   });
 });
 
