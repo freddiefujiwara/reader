@@ -430,6 +430,34 @@ button.ghost.active {
   gap: 12px;
 }
 
+/* 絞り込み一式 (カテゴリ/フィード/表示切替) をヘッダー直下に固定する。
+   フィード管理などの操作ボタンは固定に含めない。 */
+.filter-bar {
+  position: sticky;
+  top: 64px;
+  z-index: 30;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+  margin: -12px -20px 12px;
+  padding: 10px 20px 8px;
+}
+
+.filter-bar .feed-chips {
+  margin-bottom: 2px;
+  padding-bottom: 6px;
+}
+
+.filter-bar .category-chips {
+  margin-bottom: 0;
+  padding-bottom: 2px;
+}
+
+.filter-bar .view-tabs {
+  margin-bottom: 2px;
+}
+
 .feed-chips {
   display: flex;
   gap: 8px;
@@ -450,8 +478,8 @@ button.ghost.active {
   color: var(--muted);
   border: 1px solid var(--border);
   border-radius: 999px;
-  padding: 8px 14px;
-  min-height: 40px;
+  padding: 5px 12px;
+  min-height: 34px;
   font: inherit;
   font-size: 0.9rem;
   font-weight: 700;
@@ -484,8 +512,8 @@ button.ghost.active {
   background: transparent;
   border-color: transparent;
   box-shadow: none;
-  min-height: 32px;
-  padding: 4px 10px;
+  min-height: 28px;
+  padding: 3px 10px;
   font-size: 0.8rem;
   font-weight: 600;
 }
@@ -504,7 +532,7 @@ button.ghost.active {
   gap: 4px;
   list-style: none;
   margin: 0 0 16px;
-  padding: 5px;
+  padding: 4px;
   background: var(--track);
   border-radius: 999px;
 }
@@ -518,7 +546,7 @@ button.ghost.active {
   font-size: 13.5px;
   font-weight: 700;
   letter-spacing: 0.05em;
-  padding: 7px 10px;
+  padding: 5px 10px;
   border-radius: 999px;
   cursor: pointer;
   white-space: nowrap;
