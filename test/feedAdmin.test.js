@@ -104,11 +104,13 @@ describe('isYouTubeChannelUrl (YouTube チャンネルページの判定)', () =
   });
 });
 
-describe('isYouTubeFeedInput (取得を省く YouTube 入力の3形式)', () => {
-  it('疑似フィード・チャンネルページ・@ハンドルのすべてが該当する', () => {
-    expect(isYouTubeFeedInput('https://www.youtube.com/feeds/videos.xml?channel_id=UCx')).toBe(true);
+describe('isYouTubeFeedInput (取得を省く YouTube 入力)', () => {
+  it('チャンネルページと @ハンドルが該当する', () => {
     expect(isYouTubeFeedInput('https://www.youtube.com/channel/UCxNfaRC6MbAnwSR1Dqqv69A')).toBe(true);
     expect(isYouTubeFeedInput('https://www.youtube.com/@rakutentech')).toBe(true);
+  });
+  it('疑似フィード (videos.xml) は該当しない (移行完了に伴い互換を削除)', () => {
+    expect(isYouTubeFeedInput('https://www.youtube.com/feeds/videos.xml?channel_id=UCxNfaRC6MbAnwSR1Dqqv69A')).toBe(false);
   });
   it('通常フィードは該当しない', () => {
     expect(isYouTubeFeedInput('https://feeds.rebuild.fm/rebuildfm')).toBe(false);
@@ -161,9 +163,9 @@ describe('youtubeVideoIdFromLink (動画 ID の抽出)', () => {
 });
 
 describe('planFeedAdd (追加の進め方)', () => {
-  it('YouTube 疑似フィードは取得を省く', () => {
+  it('YouTube 疑似フィード (videos.xml) は取得を省かない (互換は削除済み)', () => {
     expect(planFeedAdd({ url: 'https://www.youtube.com/feeds/videos.xml?channel_id=UCx' }))
-      .toEqual({ mode: 'youtube' });
+      .toEqual({ mode: 'fetch' });
   });
   it('YouTube チャンネルページと @ハンドルも取得を省く', () => {
     expect(planFeedAdd({ url: 'https://www.youtube.com/channel/UCxNfaRC6MbAnwSR1Dqqv69A' }))
