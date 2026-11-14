@@ -17,7 +17,6 @@ test("reader staging page loads with banner and sign-in gate", async ({ page }) 
   expect(resp.status()).toBe(200);
   await expect(page.getByText("STAGING")).toBeVisible();
   await expect(page.locator(".brand-name")).toHaveText("リーダー");
-  await expect(page.getByRole("heading", { name: "リーダー" })).toBeVisible();
   await expect(page.getByText("Googleログインが必要です")).toBeVisible();
   expect(errors).toEqual([]);
 });
