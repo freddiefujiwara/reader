@@ -453,7 +453,7 @@ onMounted(async () => {
         >未読 {{ unreadTotalCount }}</button>
         <span v-if="isReadonly" class="meta">閲覧のみ</span>
         <button v-if="session && isOwner" class="ghost nav-mgmt" type="button" @click="openFeedAdmin">管理</button>
-        <button v-if="session" class="ghost" type="button" @click="signOut">ログアウト</button>
+        <button v-if="session" class="nav-logout" type="button" @click="signOut">ログアウト</button>
       </span>
     </nav>
     <div class="layout">
