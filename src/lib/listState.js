@@ -95,6 +95,11 @@ export function visibleFeedChips(state) {
   if (state?.category) {
     feeds = feeds.filter((f) => String(f.category || '').trim() === state.category);
   }
-  if (state?.filter !== 'unread') return feeds;
-  return feeds.filter((f) => (f.unreadCount || 0) > 0 || f.id === state.feedId);
+  if (state?.filter === 'unread') {
+    return feeds.filter((f) => (f.unreadCount || 0) > 0 || f.id === state.feedId);
+  }
+  if (state?.filter === 'starred') {
+    return feeds.filter((f) => (f.starredCount || 0) > 0 || f.id === state.feedId);
+  }
+  return feeds;
 }
