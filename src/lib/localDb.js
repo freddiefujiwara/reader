@@ -16,21 +16,33 @@ export function localDbName(env) {
 
 /* ---- 純粋な計画関数 (IndexedDB に触れない) ---- */
 
-// 取得エントリから、IndexedDB へ put する記事レコードを組み立てる。
-// 新規記事は未読。既存記事は既読状態 (is_read / read_at) と取り込み日時
-// (fetched_at: 経過日数の起点) を保ち、メタデータだけ最新化する。
-export async function planUpserts(existingById, entries, feed, fetchedAtIso) {
-  const records = [];
+// エントリの記事IDを先に解決する。ID 計算 (SHA-256) は非同期なので、
+// IndexedDB トランザクションの中で行わず、外で済ませておくための分離。
+// リンクの無いエントリは取り込まず、同じ記事の重複は1件にまとめる。
+async function resolveEntryIds(entries, feedId) {
+  const resolved = [];
   const seen = new Set();
   for (const entry of entries || []) {
     const key = entry.guid || entry.link;
     if (!key || !entry.link) continue;
-    const id = await articleId(feed.id, key);
+    const id = await articleId(feedId, key);
     if (seen.has(id)) continue;
     seen.add(id);
+    resolved.push({ id, entry });
+  }
+  return resolved;
+}
+
+// ID 解決済みエントリから、IndexedDB へ put する記事レコードを組み立てる。
+// 新規記事は未読。既存記事は既読状態 (is_read / read_at)・再生位置
+// (play_pos) と取り込み日時 (fetched_at: 経過日数の起点) を保ち、
+// メタデータだけ最新化する。existingById が新しいほど、この不変条件
+// (既読を未読へ戻さない・再生位置を減らさない) が実際に守られる。
+function buildUpsertRecords(existingById, resolved, feed, fetchedAtIso) {
+  return resolved.map(({ id, entry }) => {
     const prev = existingById ? existingById[id] : null;
     if (prev) {
-      records.push({
+      return {
         ...prev,
         title: entry.title,
         link: entry.link,
@@ -39,26 +51,30 @@ export async function planUpserts(existingById, entries, feed, fetchedAtIso) {
         author: entry.author || '',
         audio_url: entry.audioUrl || '',
         duration_sec: entry.durationSec ?? null,
-      });
-    } else {
-      records.push({
-        id,
-        feed_id: feed.id,
-        title: entry.title,
-        link: entry.link,
-        published_at: entry.publishedAt || '',
-        fetched_at: fetchedAtIso,
-        summary: entry.summary || '',
-        author: entry.author || '',
-        audio_url: entry.audioUrl || '',
-        duration_sec: entry.durationSec ?? null,
-        play_pos: 0,
-        is_read: false,
-        read_at: '',
-      });
+      };
     }
-  }
-  return records;
+    return {
+      id,
+      feed_id: feed.id,
+      title: entry.title,
+      link: entry.link,
+      published_at: entry.publishedAt || '',
+      fetched_at: fetchedAtIso,
+      summary: entry.summary || '',
+      author: entry.author || '',
+      audio_url: entry.audioUrl || '',
+      duration_sec: entry.durationSec ?? null,
+      play_pos: 0,
+      is_read: false,
+      read_at: '',
+    };
+  });
+}
+
+// 取得エントリから、IndexedDB へ put する記事レコードを組み立てる。
+export async function planUpserts(existingById, entries, feed, fetchedAtIso) {
+  const resolved = await resolveEntryIds(entries, feed.id);
+  return buildUpsertRecords(existingById, resolved, feed, fetchedAtIso);
 }
 
 // ローカルの保持ルール: 既読記事は「取り込んでから60日」を過ぎたら消す。
@@ -271,6 +287,34 @@ export function putLocalArticles(records) {
 
 export function deleteLocalArticles(ids) {
   return deleteByIds('articles', ids);
+}
+
+// 1フィード分の取り込みを、単一の readwrite トランザクションで完結させる。
+// そのフィードの既存レコードの読み直し → レコード構築 → 付け替え状態の
+// 適用 → 書き込みを同じ tx で行う。IndexedDB の tx は直列化されるため、
+// この tx より前にコミットされた既読化・再生位置は読み直しに見え、後に
+// 来た既読化は取り込み済みレコードに対して効く。どちらの順序でも、
+// 取り込み開始時点の古いスナップショットで状態が巻き戻ることはない。
+// transfer は付け替え状態のマップ (無ければ null)。戻り値の consumedKeys
+// は取り込みで消費できたキーで、マップからの削除は呼び出し側が行う。
+export async function ingestFeedArticles(feed, entries, fetchedAtIso, transfer) {
+  const resolved = await resolveEntryIds(entries, feed.id);
+  const db = await openLocalDb();
+  const tx = db.transaction('articles', 'readwrite');
+  const store = tx.objectStore('articles');
+  const existing = await requestToPromise(store.index('feed_id').getAll(feed.id));
+  const existingById = {};
+  existing.forEach((r) => { existingById[r.id] = r; });
+  let records = buildUpsertRecords(existingById, resolved, feed, fetchedAtIso);
+  let consumedKeys = [];
+  if (transfer) {
+    const applied = applyTransferredState(records, transfer, feed.id, existingById);
+    records = applied.records;
+    consumedKeys = applied.consumedKeys;
+  }
+  records.forEach((r) => store.put(r));
+  await txDone(tx);
+  return { records, consumedKeys };
 }
 
 // 記事1件の既読を切り替える。対象が無ければ何もしない。

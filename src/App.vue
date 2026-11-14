@@ -37,20 +37,18 @@ import {
 } from './lib/listState.js';
 import {
   FEED_HASH_TRANSFER_KEY,
-  applyTransferredState,
   articleRecordToView,
   clearLocalArticlePlayPos,
   deleteLocalArticles,
   getLocalMeta,
+  ingestFeedArticles,
   loadLocalArticles,
   loadLocalFeeds,
   markLocalArticlesRead,
   migrateFeedHashIds,
   planLocalPrune,
   planOrphanArticles,
-  planUpserts,
   pruneTransferredState,
-  putLocalArticles,
   saveLocalFeeds,
   setLocalArticlePlayPos,
   setLocalArticleRead,
@@ -184,32 +182,28 @@ async function refreshOnce() {
     if (listOk) await saveLocalFeeds(feeds);
 
     // サーバー側で消えたフィードの記事はローカルからも落とす。
-    let records = await loadLocalArticles();
+    const records = await loadLocalArticles();
     const orphanIds = planOrphanArticles(records, feeds.map((f) => f.id));
     if (orphanIds.length) {
       await deleteLocalArticles(orphanIds);
-      const dropped = new Set(orphanIds);
-      records = records.filter((r) => !dropped.has(r.id));
     }
 
     // (b) 全フィード取得 → 取り込み。無効化されたフィードは取得しない。
+    // 取り込みはフィードごとに ingestFeedArticles が単一トランザクションで
+    // 最新のローカル状態を読み直してから書き込む。更新開始時点の
+    // スナップショットを書き込みの根拠にすると、取得の合間に付けた
+    // 既読・再生位置が古いレコードごと上書きされ巻き戻るため使わない。
     const fetchedAt = new Date().toISOString();
     const results = await fetchAllFeeds(feeds.filter((f) => f.enabled !== false));
-    const byId = {};
-    records.forEach((r) => { byId[r.id] = r; });
     // ID 移行で退避した状態 (既読・再生位置) を、再取得した記事へ戻す。
     let transfer = await getLocalMeta(FEED_HASH_TRANSFER_KEY);
     const hasTransfer = !!transfer && Object.keys(transfer).length > 0;
     for (const result of results) {
       if (!result.ok) continue;
-      let puts = await planUpserts(byId, result.entries, result.feed, fetchedAt);
-      if (hasTransfer) {
-        const applied = applyTransferredState(puts, transfer, result.feed.id, byId);
-        puts = applied.records;
-        applied.consumedKeys.forEach((key) => { delete transfer[key]; });
-      }
-      puts.forEach((r) => { byId[r.id] = r; });
-      await putLocalArticles(puts);
+      const { consumedKeys } = await ingestFeedArticles(
+        result.feed, result.entries, fetchedAt, hasTransfer ? transfer : null
+      );
+      consumedKeys.forEach((key) => { delete transfer[key]; });
     }
     if (hasTransfer) {
       // 取得できたフィード分は付け替え終了。一致しなかった記事は
@@ -221,11 +215,13 @@ async function refreshOnce() {
     }
 
     // 既読の初回取り込み (この端末で初回だけ)。取り込めた記事だけ既読にする。
+    // 存在確認は取り込み後の最新状態で行う (開始時点のスナップショットは使わない)。
     if (importPayload) {
+      const present = new Set((await loadLocalArticles()).map((r) => r.id));
       const readIds = (importPayload.articles || [])
         .filter((a) => a.isRead)
         .map((a) => a.id)
-        .filter((id) => byId[id]);
+        .filter((id) => present.has(id));
       await markLocalArticlesRead(readIds, fetchedAt);
       await setLocalMeta('statesImportedV2', true);
     }
