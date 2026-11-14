@@ -544,8 +544,13 @@ onMounted(async () => {
                     type="button"
                     :disabled="mgmtSavingId === f.id"
                     @click="onDeleteFeed(f)"
-                  >本当に削除</button>
-                  <button class="ghost" type="button" @click="cancelDeleteFeed">キャンセル</button>
+                  >{{ mgmtSavingId === f.id ? '削除中...' : '本当に削除' }}</button>
+                  <button
+                    class="ghost"
+                    type="button"
+                    :disabled="mgmtSavingId === f.id"
+                    @click="cancelDeleteFeed"
+                  >キャンセル</button>
                 </div>
               </div>
               <div v-else class="feed-actions">
