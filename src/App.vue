@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue';
+import { computed, nextTick, onMounted, ref } from 'vue';
 import { API_URL, GOOGLE_CLIENT_ID } from './config.js';
 import {
   deleteFeed,
@@ -37,6 +37,11 @@ const year = new Date().getFullYear();
 
 const session = ref(loadSession());
 const bootError = ref('');
+// 起動中 (セッション復元・共有リンク交換) とサインイン交換中は
+// ログインボタンを出さず「サインインしています…」にする (戻ってきた直後に
+// ボタンが見えて未ログインと誤解されるのを防ぐ)。
+const booting = ref(true);
+const signingIn = ref(false);
 const loading = ref(true);
 const loadingMore = ref(false);
 const savingAll = ref(false);
@@ -111,10 +116,12 @@ function setFilter(filter) {
 }
 
 // ヘッダーの未読ピル: 全フィードの未読一覧へ移動する。
-function goUnreadAll() {
-  if (view.value !== 'timeline') view.value = 'timeline';
-  if (state.value.feedId === '' && state.value.filter === 'unread') return;
+async function goUnreadAll() {
+  const fromAdmin = view.value !== 'timeline';
+  if (fromAdmin) view.value = 'timeline';
+  if (state.value.feedId === '' && state.value.filter === 'unread' && !fromAdmin) return;
   state.value = { ...state.value, feedId: '', filter: 'unread', articles: [], total: 0 };
+  if (fromAdmin) await waitReorderSettled();
   fetchList();
 }
 
@@ -189,11 +196,13 @@ function openFeedAdmin() {
   loadFeeds();
 }
 
-function backToTimeline() {
+async function backToTimeline() {
   view.value = 'timeline';
   formMode.value = '';
   confirmDeleteId.value = '';
   // 管理で変わったフィード構成・未読数をタイムラインへ反映するため取り直す。
+  // 並び替え保存が終わる前に取り直すと古い並びが返るため、先に完了を待つ。
+  await waitReorderSettled();
   fetchList();
 }
 
@@ -215,6 +224,19 @@ async function onToggleFeed(feed) {
 }
 
 const orderSender = createOrderSender((ids) => reorderFeeds(session.value.token, ids));
+// 進行中の並び替え保存 (最新の submit)。タイムラインへ戻る際はこれの完了を
+// 待ってから一覧を取り直す。待たないと、保存前の並びで書かれたシートを
+// 読んだ応答が返り、戻った直後のチップ順が古いままになる (競合)。
+let lastReorder = null;
+
+async function waitReorderSettled() {
+  if (!lastReorder) return;
+  try {
+    await lastReorder;
+  } catch {
+    // エラー表示と読み直しは onMoveFeed 側で行う。
+  }
+}
 
 async function onMoveFeed(feed, direction) {
   const next = moveFeedOrder(mgmtFeeds.value, feed.id, direction);
@@ -223,7 +245,8 @@ async function onMoveFeed(feed, direction) {
   // 保存中でも次の移動を受け付ける (ボタンは端以外では無効化しない)。
   mgmtFeeds.value = next;
   try {
-    await orderSender.submit(next.map((f) => f.id));
+    lastReorder = orderSender.submit(next.map((f) => f.id));
+    await lastReorder;
     mgmtError.value = '';
   } catch (e) {
     if (e.message === 'unauthorized') expireSession();
@@ -317,6 +340,7 @@ function adoptSession(data) {
 }
 
 async function onCredential(response) {
+  signingIn.value = true;
   try {
     const data = await exchangeSession(response.credential);
     adoptSession(data);
@@ -325,13 +349,19 @@ async function onCredential(response) {
   } catch (e) {
     bootError.value = `サインインできませんでした（${e.message}）。許可されたアカウントでお試しください。`;
     loading.value = false;
+  } finally {
+    signingIn.value = false;
   }
 }
 
 function renderSigninButton() {
   // GIS スクリプトの読み込み完了を待ってから描画する (tweet と同じ load 待ち)。
   const render = () => {
-    if (!window.google || !signinEl.value) return;
+    if (!window.google) return;
+    if (!signinEl.value) {
+      nextTick(render);
+      return;
+    }
     window.google.accounts.id.initialize({ client_id: GOOGLE_CLIENT_ID, callback: onCredential });
     window.google.accounts.id.renderButton(signinEl.value, {
       theme: 'outline',
@@ -373,13 +403,16 @@ onMounted(async () => {
   if (!API_URL) {
     bootError.value = 'データAPIのURLが未設定です（ビルド時の設定待ち）。';
     loading.value = false;
+    booting.value = false;
     return;
   }
   const shared = await tryShareFromHash();
+  booting.value = false;
   if (shared || session.value) {
     await fetchList();
   } else {
     loading.value = false;
+    await nextTick();
     renderSigninButton();
   }
 });
@@ -412,8 +445,8 @@ onMounted(async () => {
 
       <template v-if="!session">
         <section class="panel center signin-box">
-          <p class="hint">Googleログインが必要です。許可されたアカウントでサインインしてください。</p>
-          <div ref="signinEl"></div>
+          <p class="hint">{{ booting || signingIn ? 'サインインしています…' : 'Googleログインが必要です。許可されたアカウントでサインインしてください。' }}</p>
+          <div v-show="!booting && !signingIn" ref="signinEl"></div>
         </section>
       </template>
 
