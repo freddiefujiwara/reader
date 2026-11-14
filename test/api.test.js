@@ -37,6 +37,22 @@ describe('postJson', () => {
     const fetcher = okFetcher({ ok: false, error: 'unauthorized' });
     await expect(postJson({ action: 'list' }, { fetcher, apiUrl: API })).rejects.toThrow('unauthorized');
   });
+  it('ネットワーク失敗 (TypeError) は1回だけ再試行する', async () => {
+    let calls = 0;
+    const fetcher = vi.fn(async () => {
+      calls++;
+      if (calls === 1) throw new TypeError('Load failed');
+      return { ok: true, status: 200, json: async () => ({ ok: true, value: 2 }) };
+    });
+    const data = await postJson({ action: 'list' }, { fetcher, apiUrl: API, retryDelayMs: 0 });
+    expect(data).toEqual({ ok: true, value: 2 });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+  it('API エラー (ok:false) は再試行しない', async () => {
+    const fetcher = okFetcher({ ok: false, error: 'unauthorized' });
+    await expect(postJson({ action: 'list' }, { fetcher, apiUrl: API, retryDelayMs: 0 })).rejects.toThrow('unauthorized');
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
   it('HTTP エラーはステータス付きで投げる', async () => {
     const fetcher = vi.fn(async () => ({ ok: false, status: 500, json: async () => ({}) }));
     await expect(postJson({ action: 'list' }, { fetcher, apiUrl: API })).rejects.toThrow('HTTP 500');
