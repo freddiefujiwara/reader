@@ -84,16 +84,21 @@ describe('markAllReadInList', () => {
 
 describe('visibleFeedChips', () => {
   const feeds = [
-    { id: 'a', unreadCount: 3 },
-    { id: 'b', unreadCount: 0 },
-    { id: 'c', unreadCount: 1 },
+    { id: 'a', unreadCount: 3, starredCount: 0 },
+    { id: 'b', unreadCount: 0, starredCount: 2 },
+    { id: 'c', unreadCount: 1, starredCount: 1 },
   ];
-  it('未読フィルタ以外では全フィード', () => {
+  it('すべてフィルタでは全フィード', () => {
     expect(visibleFeedChips({ feeds, filter: 'all', feedId: '' }).map((f) => f.id)).toEqual(['a', 'b', 'c']);
-    expect(visibleFeedChips({ feeds, filter: 'starred', feedId: '' }).map((f) => f.id)).toEqual(['a', 'b', 'c']);
   });
   it('未読フィルタでは未読があるフィードだけ', () => {
     expect(visibleFeedChips({ feeds, filter: 'unread', feedId: '' }).map((f) => f.id)).toEqual(['a', 'c']);
+  });
+  it('スターフィルタではスターがあるフィードだけ', () => {
+    expect(visibleFeedChips({ feeds, filter: 'starred', feedId: '' }).map((f) => f.id)).toEqual(['b', 'c']);
+  });
+  it('選択中のフィードはスターゼロでも残す', () => {
+    expect(visibleFeedChips({ feeds, filter: 'starred', feedId: 'a' }).map((f) => f.id)).toEqual(['a', 'b', 'c']);
   });
   it('未読が全くなければ空 (チップは「すべて」だけになる)', () => {
     const zero = feeds.map((f) => ({ ...f, unreadCount: 0 }));
