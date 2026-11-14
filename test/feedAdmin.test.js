@@ -4,6 +4,8 @@ import {
   feedFormFromFeed,
   validateFeedUrl,
   isYouTubeFeedUrl,
+  isYouTubeChannelUrl,
+  isYouTubeFeedInput,
   planFeedAdd,
   resolveFeedAddForm,
   buildSaveFeedPayload,
@@ -73,9 +75,54 @@ describe('isYouTubeFeedUrl (YouTube 疑似フィードの判定)', () => {
   });
 });
 
+describe('isYouTubeChannelUrl (YouTube チャンネルページの判定)', () => {
+  const CHANNEL = 'https://www.youtube.com/channel/UCxNfaRC6MbAnwSR1Dqqv69A';
+  it('/channel/UC... は該当する (末尾のパスも許す)', () => {
+    expect(isYouTubeChannelUrl(CHANNEL)).toBe(true);
+    expect(isYouTubeChannelUrl('https://youtube.com/channel/UCxNfaRC6MbAnwSR1Dqqv69A')).toBe(true);
+    expect(isYouTubeChannelUrl('https://m.youtube.com/channel/UCxNfaRC6MbAnwSR1Dqqv69A')).toBe(true);
+    expect(isYouTubeChannelUrl(`${CHANNEL}/videos`)).toBe(true);
+    expect(isYouTubeChannelUrl(`${CHANNEL}/`)).toBe(true);
+  });
+  it('/@handle は該当する (末尾のパスも許す)', () => {
+    expect(isYouTubeChannelUrl('https://www.youtube.com/@rakutentech')).toBe(true);
+    expect(isYouTubeChannelUrl('https://www.youtube.com/@rakutentech/videos')).toBe(true);
+    expect(isYouTubeChannelUrl('https://www.youtube.com/@rakutentech/')).toBe(true);
+  });
+  it('videos.xml はチャンネルページではない', () => {
+    expect(isYouTubeChannelUrl('https://www.youtube.com/feeds/videos.xml?channel_id=UCxNfaRC6MbAnwSR1Dqqv69A')).toBe(false);
+  });
+  it('チャンネルページ以外の YouTube URL や他ホストは該当しない', () => {
+    expect(isYouTubeChannelUrl('https://www.youtube.com/watch?v=xNfaRC6MbAnwSR1D')).toBe(false);
+    expect(isYouTubeChannelUrl('https://www.youtube.com/channel/UCx')).toBe(false);
+    expect(isYouTubeChannelUrl('https://example.com/channel/UCxNfaRC6MbAnwSR1Dqqv69A')).toBe(false);
+    expect(isYouTubeChannelUrl('https://example.com/@rakutentech')).toBe(false);
+    expect(isYouTubeChannelUrl('not-a-url')).toBe(false);
+    expect(isYouTubeChannelUrl('')).toBe(false);
+  });
+});
+
+describe('isYouTubeFeedInput (取得を省く YouTube 入力の3形式)', () => {
+  it('疑似フィード・チャンネルページ・@ハンドルのすべてが該当する', () => {
+    expect(isYouTubeFeedInput('https://www.youtube.com/feeds/videos.xml?channel_id=UCx')).toBe(true);
+    expect(isYouTubeFeedInput('https://www.youtube.com/channel/UCxNfaRC6MbAnwSR1Dqqv69A')).toBe(true);
+    expect(isYouTubeFeedInput('https://www.youtube.com/@rakutentech')).toBe(true);
+  });
+  it('通常フィードは該当しない', () => {
+    expect(isYouTubeFeedInput('https://feeds.rebuild.fm/rebuildfm')).toBe(false);
+    expect(isYouTubeFeedInput('')).toBe(false);
+  });
+});
+
 describe('planFeedAdd (追加の進め方)', () => {
   it('YouTube 疑似フィードは取得を省く', () => {
     expect(planFeedAdd({ url: 'https://www.youtube.com/feeds/videos.xml?channel_id=UCx' }))
+      .toEqual({ mode: 'youtube' });
+  });
+  it('YouTube チャンネルページと @ハンドルも取得を省く', () => {
+    expect(planFeedAdd({ url: 'https://www.youtube.com/channel/UCxNfaRC6MbAnwSR1Dqqv69A' }))
+      .toEqual({ mode: 'youtube' });
+    expect(planFeedAdd({ url: 'https://www.youtube.com/@rakutentech' }))
       .toEqual({ mode: 'youtube' });
   });
   it('それ以外は保存前に取得する', () => {

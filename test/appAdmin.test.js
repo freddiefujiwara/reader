@@ -70,7 +70,8 @@ vi.mock('../src/lib/feedFetch.js', () => ({
 }));
 
 import App from '../src/App.vue';
-import { saveFeed } from '../src/lib/api.js';
+import { saveFeed, listFeeds } from '../src/lib/api.js';
+import { fetchFeedXml } from '../src/lib/feedFetch.js';
 
 const scrollCalls = [];
 let app = null;
@@ -254,5 +255,88 @@ describe('管理画面のジャンル絞り込み', () => {
     expect(moveButtons().length).toBe(0);
     const active = genreTablist().querySelector('.chip.active');
     expect(active.textContent.trim()).toBe('ポッドキャスト');
+  });
+});
+
+describe('管理画面の YouTube チャンネル URL 追加', () => {
+  // サーバーが返す解決済みフィード: URL は /channel/ の正規形、タイトル補完済み。
+  const RESOLVED = {
+    id: 'a1b2c3d4e5f60708',
+    title: 'rakutentech',
+    url: 'https://www.youtube.com/channel/UCxNfaRC6MbAnwSR1Dqqv69A',
+    category: '',
+    isPrivate: false,
+    lastStatus: '',
+    lastError: '',
+    lastFetchedAt: '',
+    unreadCount: 0,
+  };
+  let saved = false;
+
+  beforeEach(() => {
+    saved = false;
+    // 保存が済むと一覧に解決済みフィードが現れる、というサーバーの応答を再現する。
+    saveFeed.mockImplementation(async () => {
+      saved = true;
+      return { ok: true, feed: RESOLVED };
+    });
+    listFeeds.mockImplementation(async () => ({
+      ok: true,
+      feeds: saved ? [...FEEDS, RESOLVED] : FEEDS,
+    }));
+  });
+
+  afterEach(() => {
+    saveFeed.mockImplementation(async () => ({ ok: true, feed: FEEDS[0] }));
+    listFeeds.mockImplementation(async () => ({ ok: true, feeds: FEEDS }));
+  });
+
+  async function submitAddUrl(url) {
+    await mountAdmin();
+    findButton(el, 'フィードを追加').click();
+    await flush();
+    const form = el.querySelector('.feed-form');
+    const input = form.querySelector('#feed-url');
+    input.value = url;
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+    form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+    await flush();
+    await flush();
+  }
+
+  const cardTitles = () =>
+    [...el.querySelectorAll('.feed-card .feed-name')].map((n) => n.textContent.trim());
+
+  it('@ハンドルの URL は取得を省いてタイトル空で保存し、一覧に解決済みタイトルが出る', async () => {
+    await submitAddUrl('https://www.youtube.com/@rakutentech');
+    expect(errors).toEqual([]);
+    // プロキシ取得は走らない。
+    expect(fetchFeedXml).not.toHaveBeenCalled();
+    // 貼った URL のまま・タイトル '' で saveFeed へ渡る (ID は送らない)。
+    expect(saveFeed).toHaveBeenCalledTimes(1);
+    const [token, payload] = saveFeed.mock.calls[0];
+    expect(token).toBe('tok');
+    expect(payload).toEqual({
+      title: '',
+      url: 'https://www.youtube.com/@rakutentech',
+      category: '',
+      isPrivate: false,
+    });
+    // 保存後はフォームが閉じ、サーバーが返した解決済みフィードが一覧に出る。
+    expect(el.querySelector('.feed-form'), '保存後はフォームが閉じる').toBeNull();
+    expect(cardTitles()).toContain('rakutentech');
+    const urls = [...el.querySelectorAll('.feed-card .feed-url')].map((n) => n.textContent.trim());
+    expect(urls).toContain('https://www.youtube.com/channel/UCxNfaRC6MbAnwSR1Dqqv69A');
+  });
+
+  it('/channel/UC... の URL も取得を省いて保存する', async () => {
+    await submitAddUrl('https://www.youtube.com/channel/UCxNfaRC6MbAnwSR1Dqqv69A');
+    expect(errors).toEqual([]);
+    expect(fetchFeedXml).not.toHaveBeenCalled();
+    expect(saveFeed).toHaveBeenCalledTimes(1);
+    const [, payload] = saveFeed.mock.calls[0];
+    expect(payload.title).toBe('');
+    expect(payload.url).toBe('https://www.youtube.com/channel/UCxNfaRC6MbAnwSR1Dqqv69A');
+    expect(cardTitles()).toContain('rakutentech');
   });
 });
