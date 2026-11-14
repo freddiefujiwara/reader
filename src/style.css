@@ -104,6 +104,7 @@ body {
   gap: 10px;
   text-decoration: none;
   color: var(--text);
+  flex: none;
 }
 
 .brand-mark {
@@ -126,12 +127,14 @@ body {
   display: flex;
   flex-direction: column;
   line-height: 1.15;
+  flex: none;
 }
 
 .brand-name {
   font-family: "Shippori Mincho B1", "Hiragino Mincho ProN", "Yu Mincho", serif;
   font-size: 20px;
   font-weight: 700;
+  white-space: nowrap;
 }
 
 .brand-sub {
@@ -205,16 +208,39 @@ body {
   .site-nav {
     height: var(--nav-h);
     grid-template-columns: auto 1fr auto;
-    gap: 10px;
-    padding: 0 12px;
+    gap: 8px;
+    padding: 0 10px;
+  }
+
+  .brand {
+    gap: 8px;
+  }
+
+  .brand-name {
+    font-size: 18px;
   }
 
   .session-note {
-    gap: 6px;
+    gap: 5px;
   }
 
   .session-note .unread-pill {
-    padding: 6px 10px;
+    padding: 5px 8px;
+    font-size: 0.8rem;
+  }
+
+  /* button.ghost (0,1,1) が .nav-mgmt/.nav-refresh (0,1,0) に勝ってしまうため、
+     モバイル側は要素名付きで指定して実際に効かせる */
+  button.ghost.nav-mgmt,
+  button.ghost.nav-refresh {
+    padding: 6px 9px;
+    font-size: 0.8rem;
+    min-height: 36px;
+  }
+
+  .nav-logout {
+    font-size: 0.72rem;
+    padding: 4px 0;
   }
 
   .site-nav ul {
