@@ -176,30 +176,6 @@ body {
   box-shadow: var(--shadow-sm);
 }
 
-.streak-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  background: var(--surface-elevated);
-  color: var(--link-active);
-  font-weight: 900;
-  font-size: 13px;
-  padding: 7px 12px;
-  border-radius: 999px;
-  white-space: nowrap;
-}
-
-.streak-pill svg {
-  width: 14px;
-  height: 14px;
-  fill: var(--link);
-}
-
-/* ---- モバイル用 下部タブバー ---- */
-.tabbar {
-  display: none;
-}
-
 @media (max-width: 720px) {
   :root {
     --nav-h: 58px;
@@ -253,55 +229,6 @@ body {
 
   .layout {
     padding-bottom: 108px;
-  }
-
-  .tabbar {
-    display: flex;
-    position: fixed;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 60;
-    background: color-mix(in srgb, var(--surface) 94%, transparent);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    border-top: 1px solid var(--border);
-    padding: 8px 6px calc(8px + env(safe-area-inset-bottom));
-  }
-
-  .tabbar a {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 3px;
-    font-size: 10.5px;
-    font-weight: 700;
-    color: var(--muted-2);
-    text-decoration: none;
-    padding: 2px 0;
-  }
-
-  .tabbar a svg {
-    width: 23px;
-    height: 23px;
-    stroke: currentColor;
-    fill: none;
-    stroke-width: 1.9;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-  }
-
-  .tabbar a.active {
-    color: var(--link);
-  }
-
-  .tabbar a.active::after {
-    content: "";
-    width: 4px;
-    height: 4px;
-    border-radius: 99px;
-    background: var(--link);
   }
 }
 
