@@ -34,6 +34,7 @@ import {
 } from './lib/listState.js';
 import {
   articleRecordToView,
+  clearLocalArticlePlayPos,
   deleteLocalArticles,
   getLocalMeta,
   loadLocalArticles,
@@ -44,11 +45,13 @@ import {
   planUpserts,
   putLocalArticles,
   saveLocalFeeds,
+  setLocalArticlePlayPos,
   setLocalArticleRead,
   setLocalMeta,
 } from './lib/localDb.js';
 import { fetchAllFeeds } from './lib/feedFetch.js';
 import { formatPublishedAt } from './lib/format.js';
+import { clampSeek, formatTime, nextSpeed, progressRatio } from './lib/player.js';
 
 // 画面に出す件数の初期値と「もっと見る」の増分 (v2 は全件ローカルにあるため、
 // サーバー取得ではなく表示ウィンドウを広げるだけ)。
@@ -290,8 +293,172 @@ async function onMarkAllRead() {
   }
 }
 
+/* ---- ポッドキャスト再生 (端末ローカルのみ) ---- */
+
+// アプリ全体で1つの Audio 要素を共有する。見た目は blog の
+// プレイヤー (.music-player) の部品に揃える (style.css の player-* )。
+const audio = new Audio();
+audio.preload = 'metadata';
+const currentEpisode = ref(null);
+const isPlaying = ref(false);
+const currentTime = ref(0);
+const duration = ref(0);
+const speed = ref(1);
+const seeking = ref(false);
+// 再生位置のメモリ上の控え (DB 読み直しを待たずに再開するため)。
+const playPosMemory = new Map();
+let pendingSeek = 0;
+let lastPosSaveAt = 0;
+
+const displayDuration = computed(() => {
+  if (Number.isFinite(duration.value) && duration.value > 0) return duration.value;
+  return currentEpisode.value?.durationSec || 0;
+});
+const seekStyle = computed(() => {
+  const pct = Math.round(progressRatio(currentTime.value, displayDuration.value) * 1000) / 10;
+  return { background: `linear-gradient(to right, var(--primary) ${pct}%, var(--border) ${pct}%)` };
+});
+const speedLabel = computed(() => `${speed.value}×`);
+
+function isCurrentEpisode(article) {
+  return !!currentEpisode.value && currentEpisode.value.id === article.id;
+}
+
+function tryPlayAudio() {
+  try {
+    const attempt = audio.play();
+    if (attempt && typeof attempt.catch === 'function') attempt.catch(() => {});
+  } catch {
+    // 再生できなかった場合はボタンから押し直してもらう。
+  }
+}
+
+function savePlayPos() {
+  const ep = currentEpisode.value;
+  if (!ep) return;
+  const pos = Math.floor(audio.currentTime || 0);
+  playPosMemory.set(ep.id, pos);
+  if (pos > 0) setLocalArticlePlayPos(ep.id, pos).catch(() => {});
+}
+
+function clearPlayPos(id) {
+  playPosMemory.set(id, 0);
+  clearLocalArticlePlayPos(id).catch(() => {});
+}
+
+function updateMediaSession(article) {
+  if (!('mediaSession' in navigator) || typeof MediaMetadata === 'undefined') return;
+  try {
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: article.title,
+      artist: article.feedTitle || article.feedId || '',
+    });
+    navigator.mediaSession.setActionHandler('play', () => tryPlayAudio());
+    navigator.mediaSession.setActionHandler('pause', () => audio.pause());
+    navigator.mediaSession.setActionHandler('seekbackward', () => skipBy(-15));
+    navigator.mediaSession.setActionHandler('seekforward', () => skipBy(30));
+  } catch {
+    // Media Session が使えない環境では何もしない。
+  }
+}
+
+function startEpisode(article) {
+  savePlayPos();
+  currentEpisode.value = article;
+  duration.value = 0;
+  currentTime.value = 0;
+  pendingSeek = playPosMemory.has(article.id) ? playPosMemory.get(article.id) : (article.playPos || 0);
+  audio.src = article.audioUrl;
+  audio.playbackRate = speed.value;
+  updateMediaSession(article);
+  tryPlayAudio();
+}
+
+function togglePlay() {
+  if (!currentEpisode.value) return;
+  if (audio.paused) {
+    if (audio.ended) audio.currentTime = 0;
+    tryPlayAudio();
+  } else {
+    audio.pause();
+  }
+}
+
+function toggleEpisode(article) {
+  if (isCurrentEpisode(article)) togglePlay();
+  else startEpisode(article);
+}
+
+function skipBy(delta) {
+  if (!currentEpisode.value) return;
+  audio.currentTime = clampSeek((audio.currentTime || 0) + delta, audio.duration);
+  currentTime.value = audio.currentTime;
+}
+
+function cycleSpeed() {
+  speed.value = nextSpeed(speed.value);
+  audio.playbackRate = speed.value;
+}
+
+function onSeekInput(event) {
+  const value = Number(event.target.value);
+  currentTime.value = value;
+  audio.currentTime = clampSeek(value, Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : displayDuration.value);
+}
+
+function stopPlayer() {
+  savePlayPos();
+  audio.pause();
+  audio.removeAttribute('src');
+  audio.load();
+  currentEpisode.value = null;
+  isPlaying.value = false;
+  currentTime.value = 0;
+  duration.value = 0;
+  if ('mediaSession' in navigator) {
+    try {
+      navigator.mediaSession.metadata = null;
+    } catch {
+      // 何もしない。
+    }
+  }
+}
+
+audio.addEventListener('loadedmetadata', () => {
+  duration.value = audio.duration;
+  audio.playbackRate = speed.value;
+  if (pendingSeek > 0) {
+    audio.currentTime = clampSeek(pendingSeek, audio.duration);
+    currentTime.value = audio.currentTime;
+  }
+  pendingSeek = 0;
+});
+audio.addEventListener('timeupdate', () => {
+  if (!seeking.value) currentTime.value = audio.currentTime || 0;
+  if (Date.now() - lastPosSaveAt > 10_000) {
+    lastPosSaveAt = Date.now();
+    savePlayPos();
+  }
+});
+audio.addEventListener('play', () => { isPlaying.value = true; });
+audio.addEventListener('pause', () => {
+  isPlaying.value = false;
+  savePlayPos();
+});
+audio.addEventListener('ended', () => {
+  isPlaying.value = false;
+  const ep = currentEpisode.value;
+  if (!ep) return;
+  clearPlayPos(ep.id);
+  currentTime.value = 0;
+  // 聴き終えたら、記事を開いたときと同じ経路で既読にする。
+  const view = state.value.articles.find((a) => a.id === ep.id) || ep;
+  onOpenArticle(view);
+});
+
 // セッション失効時の共通処理。保存分を消してサインイン画面に戻す。
 function expireSession() {
+  stopPlayer();
   clearSession();
   session.value = null;
   view.value = 'timeline';
@@ -502,6 +669,7 @@ function renderSigninButton() {
 }
 
 function signOut() {
+  stopPlayer();
   clearSession();
   session.value = null;
   view.value = 'timeline';
@@ -533,6 +701,7 @@ let hiddenAt = 0;
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') {
     hiddenAt = Date.now();
+    savePlayPos();
     return;
   }
   if (session.value && view.value === 'timeline' && hiddenAt && Date.now() - hiddenAt > 60_000) {
@@ -590,7 +759,7 @@ onMounted(async () => {
         <button v-if="session" class="nav-logout" type="button" @click="signOut">ログアウト</button>
       </span>
     </nav>
-    <div class="layout">
+    <div class="layout" :class="{ 'has-player': !!currentEpisode }">
       <p v-if="bootError" class="panel center error">{{ bootError }}</p>
 
       <template v-if="!session">
@@ -661,16 +830,26 @@ onMounted(async () => {
               <a :href="a.link" target="_blank" rel="noopener" @click="onOpenArticle(a)">{{ a.title }}</a>
             </h2>
             <p v-if="a.summary" class="article-summary">{{ a.summary }}</p>
-            <div v-if="isOwner" class="article-foot">
+            <div class="article-foot">
               <span v-if="!a.isRead" class="unread-dot" aria-label="未読"></span>
               <button
+                v-if="a.audioUrl"
+                type="button"
+                class="play-btn"
+                :class="{ 'is-current': isCurrentEpisode(a) }"
+                :aria-label="isCurrentEpisode(a) && isPlaying ? '一時停止' : '再生'"
+                @click="toggleEpisode(a)"
+              >
+                <svg v-if="isCurrentEpisode(a) && isPlaying" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h4v14H6zM14 5h4v14h-4z" /></svg>
+                <svg v-else viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>
+              </button>
+              <span v-if="a.audioUrl && a.durationSec" class="audio-duration">{{ formatTime(a.durationSec) }}</span>
+              <button
+                v-if="isOwner"
                 type="button"
                 class="read-toggle"
                 @click="applyRead(a, !a.isRead)"
               >{{ a.isRead ? '未読に戻す' : '既読にする' }}</button>
-            </div>
-            <div v-else class="article-foot">
-              <span v-if="!a.isRead" class="unread-dot" aria-label="未読"></span>
             </div>
           </article>
           <p v-if="hasMore" class="more-row">
@@ -811,6 +990,47 @@ onMounted(async () => {
           </template>
         </template>
       </template>
+
+      <div v-if="currentEpisode" class="player-bar">
+        <div class="player-now">
+          <span class="player-title">{{ currentEpisode.title }}</span>
+          <span v-if="currentEpisode.feedTitle" class="player-feed">{{ currentEpisode.feedTitle }}</span>
+          <button type="button" class="player-close" aria-label="プレイヤーを閉じる" @click="stopPlayer">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" /></svg>
+          </button>
+        </div>
+        <div class="player-progress">
+          <span class="player-time">{{ formatTime(currentTime) }}</span>
+          <input
+            class="player-seek"
+            type="range"
+            min="0"
+            :max="displayDuration || 0"
+            step="0.1"
+            :value="currentTime"
+            :style="seekStyle"
+            aria-label="再生位置"
+            @input="onSeekInput"
+            @pointerdown="seeking = true"
+            @pointerup="seeking = false"
+          />
+          <span class="player-time player-total">{{ formatTime(displayDuration) }}</span>
+        </div>
+        <div class="player-controls">
+          <button type="button" class="player-button" aria-label="15秒戻る" @click="skipBy(-15)">−15秒</button>
+          <button
+            type="button"
+            class="player-play"
+            :aria-label="isPlaying ? '一時停止' : '再生'"
+            @click="togglePlay"
+          >
+            <svg v-if="isPlaying" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h4v14H6zM14 5h4v14h-4z" /></svg>
+            <svg v-else viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>
+          </button>
+          <button type="button" class="player-button" aria-label="30秒進む" @click="skipBy(30)">+30秒</button>
+          <button type="button" class="player-button" aria-label="再生速度" @click="cycleSpeed">{{ speedLabel }}</button>
+        </div>
+      </div>
 
       <footer class="site-footer">
         <div class="foot-links">

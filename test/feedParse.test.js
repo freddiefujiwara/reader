@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseFeedXml, decodeXmlEntities, stripTags, toIsoDate, summarize } from '../src/lib/feedParse.js';
+import { parseFeedXml, parseItunesDuration, decodeXmlEntities, stripTags, toIsoDate, summarize } from '../src/lib/feedParse.js';
 
 const RSS2 = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
@@ -200,6 +200,76 @@ describe('parseFeedXml (Atom のフォールバック)', () => {
   });
   it('シングルクォートの属性も読める', () => {
     expect(entries[2].link).toBe('https://example.com/single');
+  });
+});
+
+describe('parseFeedXml (ポッドキャスト: enclosure と duration)', () => {
+  it('画像 enclosure より音声 enclosure を選ぶ', () => {
+    const xml = `<rss version="2.0"><channel><item>
+      <title>ep1</title><link>https://example.com/ep1</link>
+      <enclosure url="https://example.com/cover.jpg" type="image/jpeg" length="100" />
+      <enclosure url="https://example.com/ep1.mp3" type="audio/mpeg" length="200" />
+    </item></channel></rss>`;
+    const [entry] = parseFeedXml(xml, { id: 'pod' });
+    expect(entry.audioUrl).toBe('https://example.com/ep1.mp3');
+  });
+  it('type の無い enclosure は音声拡張子の URL だけ採用する', () => {
+    const xml = `<rss version="2.0"><channel>
+      <item><title>mp3</title><link>https://example.com/a</link>
+        <enclosure url="https://example.com/a.mp3?dl=1" length="10" /></item>
+      <item><title>jpg</title><link>https://example.com/b</link>
+        <enclosure url="https://example.com/b.jpg" length="10" /></item>
+    </channel></rss>`;
+    const entries = parseFeedXml(xml, { id: 'pod' });
+    expect(entries[0].audioUrl).toBe('https://example.com/a.mp3?dl=1');
+    expect(entries[1].audioUrl).toBe('');
+  });
+  it('enclosure が無ければ audioUrl は空で durationSec は null', () => {
+    const [entry] = parseFeedXml(RSS2, { id: 'sample' });
+    expect(entry.audioUrl).toBe('');
+    expect(entry.durationSec).toBeNull();
+  });
+  it('itunes:duration を秒に変換する', () => {
+    const xml = `<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"><channel><item>
+      <title>長さつき</title><link>https://example.com/d</link>
+      <enclosure url="https://example.com/d.mp3" type="audio/mpeg" />
+      <itunes:duration>1:02:03</itunes:duration>
+    </item></channel></rss>`;
+    const [entry] = parseFeedXml(xml, { id: 'pod' });
+    expect(entry.durationSec).toBe(3723);
+  });
+  it('Atom の rel="enclosure" リンクを音声にする', () => {
+    const xml = `<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>tag:example.com,2026:pod</id>
+    <title>Atomポッドキャスト</title>
+    <link rel="alternate" href="https://example.com/ep" />
+    <link rel="enclosure" type="audio/mpeg" href="https://example.com/ep.mp3" />
+    <published>2026-11-14T00:00:00Z</published>
+  </entry>
+</feed>`;
+    const [entry] = parseFeedXml(xml, { id: 'atom-pod' });
+    expect(entry.link).toBe('https://example.com/ep');
+    expect(entry.audioUrl).toBe('https://example.com/ep.mp3');
+  });
+});
+
+describe('parseItunesDuration', () => {
+  it('秒だけの表記', () => {
+    expect(parseItunesDuration('3723')).toBe(3723);
+  });
+  it('MM:SS 表記', () => {
+    expect(parseItunesDuration('34:53')).toBe(2093);
+  });
+  it('H:MM:SS 表記', () => {
+    expect(parseItunesDuration('2:34:53')).toBe(9293);
+  });
+  it('解釈できない値は null', () => {
+    expect(parseItunesDuration('abc')).toBeNull();
+    expect(parseItunesDuration('')).toBeNull();
+    expect(parseItunesDuration('1:2:3:4')).toBeNull();
+    expect(parseItunesDuration(null)).toBeNull();
   });
 });
 

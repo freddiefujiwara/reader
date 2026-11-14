@@ -41,6 +41,17 @@ test("reader staging header keeps the brand on one line at phone width", async (
   expect(box.height).toBeLessThan(30);
 });
 
+// Podcast player: the bar is hidden until an episode is chosen, so the
+// signed-out shell must not contain one. (Real playback is verified on
+// the user's device with a registered podcast feed; no feed is faked
+// into staging.)
+test("reader staging shows no player bar before any episode is chosen", async ({ page }) => {
+  const resp = await page.goto("/reader/staging/");
+  expect(resp.status()).toBe(200);
+  await expect(page.locator(".player-bar")).toHaveCount(0);
+  await expect(page.locator(".play-btn")).toHaveCount(0);
+});
+
 // Invalid share link: the app must surface the invalid-link message and
 // strip the token from the URL (history.replaceState) even though the
 // exchange fails. This path needs no valid token, so it can run in the

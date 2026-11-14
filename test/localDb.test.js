@@ -8,6 +8,8 @@ import {
   loadLocalArticles,
   deleteLocalArticles,
   setLocalArticleRead,
+  setLocalArticlePlayPos,
+  clearLocalArticlePlayPos,
   markLocalArticlesRead,
   getLocalMeta,
   setLocalMeta,
@@ -78,6 +80,24 @@ describe('既読の書き換え', () => {
     expect(row.is_read).toBe(false);
     expect(row.read_at).toBe('');
     await deleteLocalArticles(['toggle-1']);
+  });
+});
+
+describe('再生位置の保存', () => {
+  it('setLocalArticlePlayPos は秒を切り捨てて保存し、clear で 0 に戻る', async () => {
+    await putLocalArticles([rec('pos-1')]);
+    await setLocalArticlePlayPos('pos-1', 123.9);
+    let row = (await loadLocalArticles()).find((a) => a.id === 'pos-1');
+    expect(row.play_pos).toBe(123);
+    await clearLocalArticlePlayPos('pos-1');
+    row = (await loadLocalArticles()).find((a) => a.id === 'pos-1');
+    expect(row.play_pos).toBe(0);
+    await deleteLocalArticles(['pos-1']);
+  });
+  it('対象が無ければ何もしない', async () => {
+    await setLocalArticlePlayPos('no-such-episode', 60);
+    const all = await loadLocalArticles();
+    expect(all.some((a) => a.id === 'no-such-episode')).toBe(false);
   });
 });
 

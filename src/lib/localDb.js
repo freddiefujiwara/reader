@@ -36,6 +36,8 @@ export async function planUpserts(existingById, entries, feed, fetchedAtIso) {
         published_at: entry.publishedAt || prev.published_at || '',
         summary: entry.summary || '',
         author: entry.author || '',
+        audio_url: entry.audioUrl || '',
+        duration_sec: entry.durationSec ?? null,
       });
     } else {
       records.push({
@@ -47,6 +49,9 @@ export async function planUpserts(existingById, entries, feed, fetchedAtIso) {
         fetched_at: fetchedAtIso,
         summary: entry.summary || '',
         author: entry.author || '',
+        audio_url: entry.audioUrl || '',
+        duration_sec: entry.durationSec ?? null,
+        play_pos: 0,
         is_read: false,
         read_at: '',
       });
@@ -96,6 +101,9 @@ export function articleRecordToView(record, feedTitle) {
     fetchedAt: record.fetched_at || '',
     summary: record.summary || '',
     author: record.author || '',
+    audioUrl: record.audio_url || '',
+    durationSec: record.duration_sec ?? null,
+    playPos: record.play_pos || 0,
     isRead: !!record.is_read,
   };
 }
@@ -202,6 +210,26 @@ export async function markLocalArticlesRead(ids, readAtIso) {
     }
   }
   await txDone(tx);
+}
+
+// 再生位置 (秒) を保存する。対象が無ければ何もしない。
+// レコードはオブジェクトごと保存する形なので、フィールド追加に
+// DB のバージョン変更は要らない (索引は変えていない)。
+export async function setLocalArticlePlayPos(id, posSec) {
+  const db = await openLocalDb();
+  const tx = db.transaction('articles', 'readwrite');
+  const store = tx.objectStore('articles');
+  const record = await requestToPromise(store.get(id));
+  if (record) {
+    record.play_pos = Number.isFinite(posSec) && posSec > 0 ? Math.floor(posSec) : 0;
+    store.put(record);
+  }
+  await txDone(tx);
+}
+
+// 再生位置を消す (再生し終えたエピソード用)。
+export function clearLocalArticlePlayPos(id) {
+  return setLocalArticlePlayPos(id, 0);
 }
 
 // フィード一覧はサーバーの並び順が正本。sortOrder を付けて保存し、
