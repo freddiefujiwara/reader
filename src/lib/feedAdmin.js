@@ -89,3 +89,42 @@ export function formatFeedStatus(feed, now) {
   else if (feed.lastStatus) parts.push(`状態 ${feed.lastStatus}`);
   return parts.join('／');
 }
+
+// 並び替え保存の直列化＋合体 (coalesce)。送信中に新しい順序が来たら、
+// 進行中の送信が終わった後に「最新の順序だけ」を送る (途中の順序は送らない)。
+// submit の Promise は、その順序か、それを上書きした新しい順序の保存が
+// 完了した時点で解決する。保存に失敗したら、その送信分に対応する
+// submit が reject する (後続の送信は続けて試みる)。
+export function createOrderSender(send) {
+  let inFlight = false;
+  let pending = null; // { ids, waiters: [{ resolve, reject }] }
+
+  async function pump() {
+    inFlight = true;
+    while (pending) {
+      const current = pending;
+      pending = null;
+      try {
+        await send(current.ids);
+        current.waiters.forEach((w) => w.resolve());
+      } catch (e) {
+        current.waiters.forEach((w) => w.reject(e));
+      }
+    }
+    inFlight = false;
+  }
+
+  return {
+    submit(ids) {
+      return new Promise((resolve, reject) => {
+        if (pending) {
+          pending.ids = [...ids];
+          pending.waiters.push({ resolve, reject });
+        } else {
+          pending = { ids: [...ids], waiters: [{ resolve, reject }] };
+        }
+        if (!inFlight) pump();
+      });
+    },
+  };
+}

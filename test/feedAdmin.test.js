@@ -7,6 +7,7 @@ import {
   toggleEnabledPayload,
   formatFeedStatus,
   moveFeedOrder,
+  createOrderSender,
 } from '../src/lib/feedAdmin.js';
 
 describe('createFeedForm / feedFormFromFeed', () => {
@@ -146,5 +147,38 @@ describe('formatFeedStatus', () => {
     const text = formatFeedStatus(feed, now);
     expect(text).toContain('エラー: HTTP 404');
     expect(text).not.toContain('状態 200');
+  });
+});
+
+describe('createOrderSender', () => {
+  it('1回 submit すると1回送って解決する', async () => {
+    const sent = [];
+    const sender = createOrderSender(async (ids) => { sent.push(ids); });
+    await sender.submit(['a', 'b']);
+    expect(sent).toEqual([['a', 'b']]);
+  });
+
+  it('送信中の submit は最新順序に合体され、送信は2回で済む', async () => {
+    const sent = [];
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const sender = createOrderSender(async (ids) => { sent.push(ids); await gate; });
+    const p1 = sender.submit(['a', 'b', 'c']);
+    const p2 = sender.submit(['b', 'a', 'c']);
+    const p3 = sender.submit(['b', 'c', 'a']);
+    release();
+    await Promise.all([p1, p2, p3]);
+    expect(sent).toEqual([['a', 'b', 'c'], ['b', 'c', 'a']]);
+  });
+
+  it('失敗した送信の submit は reject し、次の submit は送れる', async () => {
+    let calls = 0;
+    const sender = createOrderSender(async () => {
+      calls += 1;
+      if (calls === 1) throw new Error('forbidden');
+    });
+    await expect(sender.submit(['a'])).rejects.toThrow('forbidden');
+    await sender.submit(['b']);
+    expect(calls).toBe(2);
   });
 });

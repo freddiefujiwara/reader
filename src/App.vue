@@ -18,6 +18,7 @@ import {
   feedFormFromFeed,
   formatFeedStatus,
   moveFeedOrder,
+  createOrderSender,
   toggleEnabledPayload,
   validateFeedForm,
 } from './lib/feedAdmin.js';
@@ -213,22 +214,23 @@ async function onToggleFeed(feed) {
   }
 }
 
+const orderSender = createOrderSender((ids) => reorderFeeds(session.value.token, ids));
+
 async function onMoveFeed(feed, direction) {
-  if (mgmtSavingId.value) return;
   const next = moveFeedOrder(mgmtFeeds.value, feed.id, direction);
   if (!next) return;
-  const before = mgmtFeeds.value;
+  // 画面は即座に動かし、保存は orderSender が直列化＋合体して送る。
+  // 保存中でも次の移動を受け付ける (ボタンは端以外では無効化しない)。
   mgmtFeeds.value = next;
-  mgmtSavingId.value = feed.id;
   try {
-    await reorderFeeds(session.value.token, next.map((f) => f.id));
+    await orderSender.submit(next.map((f) => f.id));
     mgmtError.value = '';
   } catch (e) {
-    mgmtFeeds.value = before;
     if (e.message === 'unauthorized') expireSession();
-    else mgmtError.value = `並び替えを保存できませんでした（${e.message}）。`;
-  } finally {
-    mgmtSavingId.value = '';
+    else {
+      mgmtError.value = `並び替えを保存できませんでした（${e.message}）。`;
+      loadFeeds();
+    }
   }
 }
 
@@ -592,14 +594,14 @@ onMounted(async () => {
                   class="ghost"
                   type="button"
                   aria-label="上へ移動"
-                  :disabled="i === 0 || !!mgmtSavingId"
+                  :disabled="i === 0"
                   @click="onMoveFeed(f, -1)"
                 >↑</button>
                 <button
                   class="ghost"
                   type="button"
                   aria-label="下へ移動"
-                  :disabled="i === mgmtFeeds.length - 1 || !!mgmtSavingId"
+                  :disabled="i === mgmtFeeds.length - 1"
                   @click="onMoveFeed(f, 1)"
                 >↓</button>
                 <button
