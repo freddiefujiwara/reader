@@ -6,6 +6,7 @@ import {
   patchArticle,
   unreadTotal,
   markAllReadInList,
+  visibleFeedChips,
 } from '../src/lib/listState.js';
 
 const A = (id, feedId, isRead = false, isStarred = false) => ({ id, feedId, isRead, isStarred });
@@ -77,5 +78,27 @@ describe('markAllReadInList', () => {
     const next = markAllReadInList(baseState(), '');
     expect(next.articles.every((a) => a.isRead)).toBe(true);
     expect(next.feeds.every((f) => f.unreadCount === 0)).toBe(true);
+  });
+});
+
+describe('visibleFeedChips', () => {
+  const feeds = [
+    { id: 'a', unreadCount: 3 },
+    { id: 'b', unreadCount: 0 },
+    { id: 'c', unreadCount: 1 },
+  ];
+  it('未読フィルタ以外では全フィード', () => {
+    expect(visibleFeedChips({ feeds, filter: 'all', feedId: '' }).map((f) => f.id)).toEqual(['a', 'b', 'c']);
+    expect(visibleFeedChips({ feeds, filter: 'starred', feedId: '' }).map((f) => f.id)).toEqual(['a', 'b', 'c']);
+  });
+  it('未読フィルタでは未読があるフィードだけ', () => {
+    expect(visibleFeedChips({ feeds, filter: 'unread', feedId: '' }).map((f) => f.id)).toEqual(['a', 'c']);
+  });
+  it('未読が全くなければ空 (チップは「すべて」だけになる)', () => {
+    const zero = feeds.map((f) => ({ ...f, unreadCount: 0 }));
+    expect(visibleFeedChips({ feeds: zero, filter: 'unread', feedId: '' })).toEqual([]);
+  });
+  it('選択中のフィードは未読ゼロでも残す', () => {
+    expect(visibleFeedChips({ feeds, filter: 'unread', feedId: 'b' }).map((f) => f.id)).toEqual(['a', 'b', 'c']);
   });
 });
