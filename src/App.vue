@@ -209,11 +209,6 @@ onMounted(async () => {
       </span>
     </nav>
     <div class="layout">
-      <header class="page-head">
-        <h1>リーダー</h1>
-        <p class="lead">登録フィードの新着をまとめて読む</p>
-      </header>
-
       <p v-if="bootError" class="panel center error">{{ bootError }}</p>
 
       <template v-if="!session">
