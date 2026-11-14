@@ -514,9 +514,9 @@ onMounted(async () => {
         </div>
         </div>
 
-        <div v-if="isOwner" class="list-toolbar">
+        <div v-if="isOwner" class="action-bar">
           <button class="ghost" type="button" @click="openFeedAdmin">フィード管理</button>
-          <button class="ghost" type="button" :disabled="savingAll || loading" @click="onMarkAllRead">
+          <button class="primary" type="button" :disabled="savingAll || loading" @click="onMarkAllRead">
             {{ state.feedId ? 'このフィードをすべて既読' : 'すべて既読' }}
           </button>
         </div>
