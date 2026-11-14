@@ -46,6 +46,7 @@ import {
   loadLocalFeeds,
   markLocalArticlesRead,
   migrateFeedHashIds,
+  migrateYouTubeChannelUrlIds,
   planLocalPrune,
   planOrphanArticles,
   pruneTransferredState,
@@ -184,6 +185,12 @@ async function refreshOnce() {
     // フィードID移行 (初回のみ)。キャッシュを新しい一覧で上書きする
     // 前に済ませる (移行の素材はキャッシュ済みの旧ID一覧のため)。
     await migrateFeedHashIds();
+    // YouTube の保存 URL 形式変更 (videos.xml → /channel/) に伴う移行。
+    // サーバー側のシート移行より先にこのコードが行き渡る必要があるため、
+    // 移行はサーバーが新形式を返し始めてから効く。完了までは更新の
+    // たびに試し直す (素材はキャッシュ済みの旧形式一覧のため、
+    // キャッシュの上書き前に呼ぶ)。
+    await migrateYouTubeChannelUrlIds(feeds);
     if (listOk) await saveLocalFeeds(feeds);
 
     // サーバー側で消えたフィードの記事はローカルからも落とす。
