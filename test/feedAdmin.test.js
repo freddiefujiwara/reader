@@ -37,7 +37,7 @@ describe('createFeedForm / feedFormFromFeed', () => {
 });
 
 describe('validateFeedForm', () => {
-  const ok = { id: 'nhk-news_1', title: 'NHK', url: 'https://example.com/rss', category: 'news' };
+  const ok = { id: 'nhk-news1', title: 'NHK', url: 'https://example.com/rss', category: 'news' };
   it('正しい入力は空文字 (問題なし)', () => {
     expect(validateFeedForm(ok)).toBe('');
   });
@@ -64,6 +64,27 @@ describe('validateFeedForm', () => {
   });
   it('カテゴリ空は許容する', () => {
     expect(validateFeedForm({ ...ok, category: '' })).toBe('');
+  });
+});
+
+// ID ルールはサーバー側 (reader-gas の FEED_ID_PATTERN
+// /^[a-z0-9][a-z0-9-]{0,63}$/) と完全一致させる。境界を固定する。
+describe('validateFeedForm ID ルール (サーバーと一致)', () => {
+  const base = { title: 'NHK', url: 'https://example.com/rss', category: 'news' };
+  it('アンダースコアはエラー', () => {
+    expect(validateFeedForm({ ...base, id: 'nhk_news' })).not.toBe('');
+  });
+  it('64文字ちょうどは通る', () => {
+    expect(validateFeedForm({ ...base, id: `a${'b'.repeat(63)}` })).toBe('');
+  });
+  it('65文字はエラー', () => {
+    expect(validateFeedForm({ ...base, id: `a${'b'.repeat(64)}` })).not.toBe('');
+  });
+  it('先頭ハイフンはエラー', () => {
+    expect(validateFeedForm({ ...base, id: '-nhk' })).not.toBe('');
+  });
+  it('大文字はエラー', () => {
+    expect(validateFeedForm({ ...base, id: 'NHK' })).not.toBe('');
   });
 });
 
