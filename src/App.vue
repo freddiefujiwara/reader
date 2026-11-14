@@ -90,6 +90,7 @@ const mgmtError = ref('');
 const mgmtSavingId = ref('');
 const confirmDeleteId = ref('');
 const formMode = ref(''); // '' | 'add' | 'edit'
+const formEl = ref(null);
 const form = ref(createFeedForm());
 const formBase = ref(null);
 const formError = ref('');
@@ -616,12 +617,24 @@ async function onDeleteFeed(feed) {
   }
 }
 
+// フォームは一覧より上に開くため、下の方のフィードから開くと画面の外に
+// 出てしまい「ボタンを押しても何も起きない」ように見える。開いたら必ず
+// フォームが見える位置までスクロールする。
+async function revealForm() {
+  await nextTick();
+  const el = formEl.value;
+  if (el && typeof el.scrollIntoView === 'function') {
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+}
+
 function startAddFeed() {
   formMode.value = 'add';
   formBase.value = null;
   form.value = createFeedForm();
   formError.value = '';
   confirmDeleteId.value = '';
+  revealForm();
 }
 
 function startEditFeed(feed) {
@@ -630,6 +643,7 @@ function startEditFeed(feed) {
   form.value = feedFormFromFeed(feed);
   formError.value = '';
   confirmDeleteId.value = '';
+  revealForm();
 }
 
 function closeForm() {
@@ -948,7 +962,7 @@ onMounted(async () => {
             <button v-if="!formMode" class="primary" type="button" @click="startAddFeed">フィードを追加</button>
           </div>
 
-          <form v-if="formMode" class="panel feed-form" @submit.prevent="submitFeedForm">
+          <form v-if="formMode" ref="formEl" class="panel feed-form" @submit.prevent="submitFeedForm">
             <h2 class="feed-form-title">{{ formMode === 'edit' ? 'フィードを編集' : 'フィードを追加' }}</h2>
             <template v-if="formMode === 'edit'">
               <div class="field">
