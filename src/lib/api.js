@@ -14,7 +14,11 @@ export async function postJson(body, { fetcher = fetch, apiUrl = API_URL } = {})
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
   if (!data || data.ok !== true) {
-    throw new Error((data && data.error) || 'api_error');
+    const err = new Error((data && data.error) || 'api_error');
+    // 検証エラー (invalid) など、サーバーが人間向けの理由を返す場合は
+    // message を別途持たせておき、画面側でそのまま出せるようにする。
+    if (data && typeof data.message === 'string') err.serverMessage = data.message;
+    throw err;
   }
   return data;
 }
@@ -52,4 +56,24 @@ export function markAllRead(sessionToken, feedId = '', opts) {
   const body = { action: 'markAllRead', sessionToken };
   if (feedId) body.feedId = feedId;
   return postJson(body, opts);
+}
+
+// フィード管理の一覧 (オーナーセッションのみ)。
+// -> { ok, feeds: [{id, title, url, category, enabled, isPrivate,
+//     lastStatus, lastError, lastFetchedAt, unreadCount}] }
+export function listFeeds(sessionToken, opts) {
+  return postJson({ action: 'listFeeds', sessionToken }, opts);
+}
+
+// フィードの追加・更新 (オーナーセッションのみ)。
+// isPrivate はサーバー側が URL のホスト (a.ze.gs) から決めるため、
+// 送った値は参考値で、確定値は応答の feed で確認する。
+// -> { ok, feed } / 検証エラーは error: 'invalid' + serverMessage。
+export function saveFeed(sessionToken, feed, opts) {
+  return postJson({ action: 'saveFeed', sessionToken, feed }, opts);
+}
+
+// フィードの削除 (オーナーセッションのみ)。記事もあわせて消える。
+export function deleteFeed(sessionToken, feedId, opts) {
+  return postJson({ action: 'deleteFeed', sessionToken, feedId }, opts);
 }

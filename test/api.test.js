@@ -1,5 +1,15 @@
 import { describe, it, expect, vi } from 'vitest';
-import { postJson, exchangeSession, exchangeShare, listArticles, markArticle, markAllRead } from '../src/lib/api.js';
+import {
+  postJson,
+  exchangeSession,
+  exchangeShare,
+  listArticles,
+  markArticle,
+  markAllRead,
+  listFeeds,
+  saveFeed,
+  deleteFeed,
+} from '../src/lib/api.js';
 
 const API = 'https://example.invalid/exec';
 
@@ -63,5 +73,45 @@ describe('action の組み立て', () => {
     const fetcher = okFetcher({ ok: true, marked: 3 });
     await markAllRead('tok', '', { fetcher, apiUrl: API });
     expect(lastBody(fetcher)).toEqual({ action: 'markAllRead', sessionToken: 'tok' });
+  });
+});
+
+describe('フィード管理の action', () => {
+  it('listFeeds', async () => {
+    const feeds = [{ id: 'nhk', title: 'NHK', unreadCount: 2 }];
+    const fetcher = okFetcher({ ok: true, feeds });
+    const data = await listFeeds('tok', { fetcher, apiUrl: API });
+    expect(data.feeds).toEqual(feeds);
+    expect(lastBody(fetcher)).toEqual({ action: 'listFeeds', sessionToken: 'tok' });
+  });
+  it('saveFeed は feed をそのまま送り、応答の feed を返す', async () => {
+    const feed = {
+      id: 'nhk',
+      title: 'NHKニュース',
+      url: 'https://example.com/rss',
+      category: 'news',
+      enabled: true,
+      isPrivate: false,
+    };
+    const fetcher = okFetcher({ ok: true, feed });
+    const data = await saveFeed('tok', feed, { fetcher, apiUrl: API });
+    expect(data.feed).toEqual(feed);
+    expect(lastBody(fetcher)).toEqual({ action: 'saveFeed', sessionToken: 'tok', feed });
+  });
+  it('saveFeed の検証エラーは invalid で、serverMessage にサーバーの文言が入る', async () => {
+    const fetcher = okFetcher({ ok: false, error: 'invalid', message: 'URLの形式が正しくありません' });
+    const err = await saveFeed('tok', { id: 'x' }, { fetcher, apiUrl: API }).catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toBe('invalid');
+    expect(err.serverMessage).toBe('URLの形式が正しくありません');
+  });
+  it('deleteFeed', async () => {
+    const fetcher = okFetcher({ ok: true });
+    await deleteFeed('tok', 'nhk', { fetcher, apiUrl: API });
+    expect(lastBody(fetcher)).toEqual({ action: 'deleteFeed', sessionToken: 'tok', feedId: 'nhk' });
+  });
+  it('deleteFeed の未知 id は not_found を投げる', async () => {
+    const fetcher = okFetcher({ ok: false, error: 'not_found' });
+    await expect(deleteFeed('tok', 'nope', { fetcher, apiUrl: API })).rejects.toThrow('not_found');
   });
 });
