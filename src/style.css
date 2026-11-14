@@ -941,6 +941,11 @@ button.ghost.danger {
   margin: 0;
 }
 
+/* 開いたフォームへスクロールしたとき、固定ナビの下に隠れないようにする */
+.feed-form {
+  scroll-margin-top: calc(var(--nav-h, 64px) + 12px);
+}
+
 .feed-form-title {
   margin: 0 0 12px;
   font-size: 1.05rem;
