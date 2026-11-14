@@ -3,7 +3,9 @@
 // 検証ルールはサーバー側 (reader-gas) と揃える: id はスラッグ、URL は https。
 import { formatPublishedAt } from './format.js';
 
-const SLUG_RE = /^[a-z0-9][a-z0-9_-]*$/;
+// サーバー側 (reader-gas の FEED_ID_PATTERN) と完全一致させる:
+// アンダースコア不可、先頭含め最大64文字。
+const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 export function createFeedForm() {
   return { id: '', title: '', url: '', category: '' };
@@ -23,7 +25,7 @@ export function feedFormFromFeed(feed) {
 // 問題が無ければ ''、あれば画面に出す文言を返す。
 export function validateFeedForm(form, { isEdit = false } = {}) {
   if (!isEdit && !SLUG_RE.test(String(form?.id || '').trim())) {
-    return 'IDは半角英小文字・数字・ハイフン・アンダースコアで、先頭は英数字にしてください。';
+    return 'IDは半角英小文字・数字・ハイフンで、先頭は英数字、64文字以内にしてください。';
   }
   if (!String(form?.title || '').trim()) {
     return 'タイトルを入力してください。';
