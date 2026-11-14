@@ -469,6 +469,7 @@ onMounted(async () => {
         <p v-if="isReadonly" class="readonly-note">共有リンクで閲覧中（読み取り専用）です。既読やスターは付けられません。</p>
 
         <template v-if="view === 'timeline'">
+        <div class="filter-bar">
         <div v-if="categoryList.length" class="feed-chips category-chips" role="tablist" aria-label="カテゴリで絞り込み">
           <button
             type="button"
@@ -510,6 +511,7 @@ onMounted(async () => {
             :class="{ active: state.filter === f.key }"
             @click="setFilter(f.key)"
           >{{ f.label }}</button>
+        </div>
         </div>
 
         <div v-if="isOwner" class="list-toolbar">
