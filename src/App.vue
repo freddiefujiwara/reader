@@ -452,6 +452,7 @@ onMounted(async () => {
           @click="goUnreadAll"
         >未読 {{ unreadTotalCount }}</button>
         <span v-if="isReadonly" class="meta">閲覧のみ</span>
+        <button v-if="session && isOwner" class="ghost nav-mgmt" type="button" @click="openFeedAdmin">管理</button>
         <button v-if="session" class="ghost" type="button" @click="signOut">ログアウト</button>
       </span>
     </nav>
@@ -503,22 +504,6 @@ onMounted(async () => {
           >{{ f.title }}<span v-if="f.unreadCount > 0" class="chip-count">{{ f.unreadCount }}</span></button>
         </div>
 
-        <div class="view-tabs" role="tablist" aria-label="表示切替">
-          <button
-            v-for="f in FILTERS"
-            :key="f.key"
-            type="button"
-            :class="{ active: state.filter === f.key }"
-            @click="setFilter(f.key)"
-          >{{ f.label }}</button>
-        </div>
-        </div>
-
-        <div v-if="isOwner" class="list-toolbar">
-          <button class="ghost" type="button" @click="openFeedAdmin">フィード管理</button>
-          <button class="ghost" type="button" :disabled="savingAll || loading" @click="onMarkAllRead">
-            {{ state.feedId ? 'このフィードをすべて既読' : 'すべて既読' }}
-          </button>
         </div>
 
         <p v-if="listError" class="panel center error">{{ listError }}
@@ -567,6 +552,25 @@ onMounted(async () => {
             </button>
           </p>
         </template>
+
+        <div class="bottom-bar">
+          <div class="view-tabs" role="tablist" aria-label="表示切替">
+            <button
+              v-for="f in FILTERS"
+              :key="f.key"
+              type="button"
+              :class="{ active: state.filter === f.key }"
+              @click="setFilter(f.key)"
+            >{{ f.label }}</button>
+          </div>
+          <button
+            v-if="isOwner"
+            class="primary mark-all-btn"
+            type="button"
+            :disabled="savingAll || loading"
+            @click="onMarkAllRead"
+          >すべて既読</button>
+        </div>
         </template>
 
         <template v-else>
