@@ -41,6 +41,17 @@ const FEEDS = [
     lastFetchedAt: '2026-11-15T01:00:00.000Z',
     unreadCount: 1,
   },
+  {
+    id: '35797c975382389f',
+    title: 'X freddie',
+    url: 'https://a.ze.gs/x.freddie.xml',
+    category: 'private',
+    isPrivate: true,
+    lastStatus: '200',
+    lastError: '',
+    lastFetchedAt: '2026-11-15T01:00:00.000Z',
+    unreadCount: 46,
+  },
 ];
 
 vi.mock('../src/lib/api.js', () => ({
@@ -173,6 +184,19 @@ describe('管理画面の編集フォーム', () => {
     expect(form, '追加フォームが開く').toBeTruthy();
     expect(form.querySelector('.feed-form-title').textContent).toContain('フィードを追加');
     expect(scrollCalls.some((c) => c.el === form)).toBe(true);
+  });
+});
+
+describe('管理画面のプライベート表示', () => {
+  it('isPrivate なフィードでも「プライベート」バッジを表示しない', async () => {
+    await mountAdmin();
+    expect(errors).toEqual([]);
+    // 対象フィード自体は通常どおり描画される。
+    const titles = [...el.querySelectorAll('.feed-card .feed-name')].map((n) => n.textContent.trim());
+    expect(titles).toContain('X freddie');
+    // バッジ (private-badge) も「プライベート」の文言も出ない。
+    expect(el.querySelector('.private-badge')).toBeNull();
+    expect(el.textContent).not.toContain('プライベート');
   });
 });
 
