@@ -1046,7 +1046,7 @@ onMounted(async () => {
                 autocomplete="off"
                 placeholder="https://example.com/feed.xml"
               />
-              <p class="field-note">タイトルはフィードから自動で取得します。a.ze.gs のフィードは自動で「プライベート」扱いになります（切り替えはできません）。</p>
+              <p class="field-note">タイトルはフィードから自動で取得します。</p>
             </div>
             <div class="field">
               <label for="feed-category">ジャンル</label>
@@ -1103,7 +1103,6 @@ onMounted(async () => {
                 <span class="feed-name">{{ feedDisplayName(f) }}</span>
                 <span v-if="f.category">{{ f.category }}</span>
                 <span>未読 {{ f.unreadCount || 0 }}件</span>
-                <span v-if="f.isPrivate" class="private-badge">プライベート</span>
               </p>
               <p class="feed-url">{{ f.url }}</p>
               <p class="feed-status">{{ formatFeedStatus(f) }}</p>
