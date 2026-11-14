@@ -6,6 +6,20 @@ export function createListState() {
   return { articles: [], feeds: [], feedId: '', category: '', filter: 'all' };
 }
 
+// フィードの表示名。タイトル未取得 (YouTube の補完待ちなど) の間は
+// URL のホスト名で代替し、それも無ければ ID を出す。
+export function feedDisplayName(feed) {
+  const title = String(feed?.title || '').trim();
+  if (title) return title;
+  try {
+    const host = new URL(String(feed?.url || '')).hostname;
+    if (host) return host;
+  } catch {
+    // URL として解釈できなければ ID で代替する。
+  }
+  return String(feed?.id || '');
+}
+
 // フィード一覧からカテゴリ名を出現順に取り出す (カテゴリ行の表示用)。
 // 空カテゴリは含めない。
 export function feedCategories(feeds) {

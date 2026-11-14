@@ -973,6 +973,33 @@ button.ghost.danger {
   opacity: 0.55;
 }
 
+.field-label {
+  display: block;
+  font-weight: 700;
+  font-size: 0.9rem;
+  margin-bottom: 4px;
+}
+
+.field-static {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  word-break: break-all;
+}
+
+.field .field-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 400;
+}
+
+.field .field-check input {
+  width: auto;
+}
+
 .field-note {
   color: var(--muted-2);
   font-size: 0.82rem;

@@ -13,7 +13,15 @@ import {
   markLocalArticlesRead,
   getLocalMeta,
   setLocalMeta,
+  planUpserts,
+  applyTransferredState,
+  migrateFeedHashIds,
+  transferKey,
+  FEED_HASH_MIGRATED_KEY,
+  FEED_HASH_TRANSFER_KEY,
 } from '../src/lib/localDb.js';
+import { articleId } from '../src/lib/articleId.js';
+import { feedIdFromUrl } from '../src/lib/feedHash.js';
 
 // IndexedDB ラッパー層の検証 (計画関数は localPlan.test.js 側)。
 // jsdom には IndexedDB が無いため fake-indexeddb で代替する。
@@ -108,5 +116,89 @@ describe('メタ情報', () => {
     await setLocalMeta('someCount', 42);
     await expect(getLocalMeta('someCount')).resolves.toBe(42);
     await expect(getLocalMeta('never-set')).resolves.toBeUndefined();
+  });
+});
+
+describe('フィードIDのハッシュ化の移行 (migrateFeedHashIds)', () => {
+  const NHK_URL = 'https://www3.nhk.or.jp/rss/news/cat0.xml';
+  const YT_URL = 'https://www.youtube.com/feeds/videos.xml?channel_id=UCx';
+  const LINK = 'https://example.com/a/1';
+  const WATCH = 'https://www.youtube.com/watch?v=vid1';
+
+  it('旧IDの記事を付け替え、既読と再生位置を引き継ぎ、二度目は走らない', async () => {
+    const newNhk = await feedIdFromUrl(NHK_URL);
+    const newYt = await feedIdFromUrl(YT_URL);
+    const directId = await articleId('nhk', LINK);
+    const stagedId = await articleId('yt-x', 'vid1');
+    await saveLocalFeeds([
+      { id: 'nhk', title: 'NHK', url: NHK_URL },
+      { id: 'yt-x', title: 'YT', url: YT_URL },
+    ]);
+    await putLocalArticles([
+      rec(directId, {
+        feed_id: 'nhk', link: LINK, is_read: true,
+        read_at: '2026-11-14T01:00:00.000Z', play_pos: 33,
+      }),
+      rec(stagedId, {
+        feed_id: 'yt-x', link: WATCH, is_read: true,
+        read_at: '2026-11-12T00:00:00.000Z', play_pos: 77,
+        fetched_at: '2026-11-10T00:00:00.000Z',
+      }),
+    ]);
+
+    const result = await migrateFeedHashIds();
+    expect(result).toEqual({ migrated: true, rekeyed: 1, staged: 1 });
+    await expect(getLocalMeta(FEED_HASH_MIGRATED_KEY)).resolves.toBe(true);
+
+    // guid がリンクと同じ記事は、その場で新しい ID へ付け替わる。
+    let all = await loadLocalArticles();
+    const moved = all.find((a) => a.feed_id === newNhk);
+    expect(moved).toBeTruthy();
+    expect(moved.id).toBe(await articleId(newNhk, LINK));
+    expect(moved.is_read).toBe(true);
+    expect(moved.read_at).toBe('2026-11-14T01:00:00.000Z');
+    expect(moved.play_pos).toBe(33);
+    expect(all.some((a) => a.id === directId)).toBe(false);
+
+    // YouTube の記事は旧レコードが消え、状態が付け替えマップへ退避する。
+    expect(all.some((a) => a.id === stagedId)).toBe(false);
+    const transfer = await getLocalMeta(FEED_HASH_TRANSFER_KEY);
+    expect(transfer).toEqual({
+      [transferKey(newYt, WATCH)]: {
+        is_read: true, read_at: '2026-11-12T00:00:00.000Z',
+        play_pos: 77, fetched_at: '2026-11-10T00:00:00.000Z',
+      },
+    });
+
+    // 再取得の取り込みで、退避した状態が新しい記事へ戻る (重複は出ない)。
+    const byId = {};
+    all.forEach((r) => { byId[r.id] = r; });
+    const entries = [{
+      guid: 'vid1', title: 'v', link: WATCH,
+      publishedAt: '2026-11-13T00:00:00.000Z', summary: '', author: '',
+      audioUrl: '', durationSec: null,
+    }];
+    const planned = await planUpserts(byId, entries, { id: newYt }, '2026-11-14T05:00:00.000Z');
+    const applied = applyTransferredState(planned, transfer, newYt, byId);
+    expect(applied.consumedKeys).toEqual([transferKey(newYt, WATCH)]);
+    await putLocalArticles(applied.records);
+    all = await loadLocalArticles();
+    const restored = all.filter((a) => a.feed_id === newYt);
+    expect(restored.length).toBe(1);
+    expect(restored[0].is_read).toBe(true);
+    expect(restored[0].play_pos).toBe(77);
+    expect(restored[0].fetched_at).toBe('2026-11-10T00:00:00.000Z');
+
+    // フラグがあるので二度目は走らず、付け替えも繰り返さない。
+    await expect(migrateFeedHashIds()).resolves.toEqual({ migrated: false });
+    all = await loadLocalArticles();
+    expect(all.filter((a) => a.feed_id === newNhk).length).toBe(1);
+    expect(all.filter((a) => a.feed_id === newYt).length).toBe(1);
+
+    // 後片付け (このファイルの他テストへ影響を残さない)。
+    await deleteLocalArticles(all.map((a) => a.id));
+    await saveLocalFeeds([]);
+    await setLocalMeta(FEED_HASH_MIGRATED_KEY, undefined);
+    await setLocalMeta(FEED_HASH_TRANSFER_KEY, undefined);
   });
 });

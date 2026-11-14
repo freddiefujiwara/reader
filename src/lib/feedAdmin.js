@@ -1,29 +1,29 @@
 // フィード管理の純粋な補助 (フォーム検証・保存ペイロード組み立て・状態表示)。
 // Vue に依存しない関数だけにし、単体テストで振る舞いを固定する。
-// 検証ルールはサーバー側 (reader-gas) と揃える: id はスラッグ、URL は https。
+// フィード ID は URL のハッシュ (サーバーが決める) になったため、
+// フォームが扱うのは URL とジャンル (サーバー側の category) だけ。
+// タイトルはフィードからの自動取得のみで、人は入力しない。
 import { formatPublishedAt } from './format.js';
 import { parseFeedMeta } from './feedParse.js';
-import { generateFeedId } from './feedId.js';
 
-// サーバー側 (reader-gas の FEED_ID_PATTERN) と完全一致させる:
-// アンダースコア不可、先頭含め最大64文字。
-const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
-
+// 新規追加フォームの初期値。扱うのは URL とジャンルだけ。
 export function createFeedForm() {
-  return { id: '', title: '', url: '', category: '' };
+  return { url: '', category: '' };
 }
 
-// 編集フォーム初期値。id は編集時そのまま (入力欄は無効化される)。
+// 編集フォーム初期値。ID / タイトル / URL は表示専用 (変更できない)、
+// ジャンルと有効/無効だけが編集対象。
 export function feedFormFromFeed(feed) {
   return {
     id: feed?.id || '',
     title: feed?.title || '',
     url: feed?.url || '',
     category: feed?.category || '',
+    enabled: feed ? feed.enabled !== false : true,
   };
 }
 
-// URL だけの検証 (自動入力では他の項目より先に URL を確かめる)。
+// URL だけの検証 (追加では他の項目より先に URL を確かめる)。
 export function validateFeedUrl(url) {
   let parsed;
   try {
@@ -37,62 +37,68 @@ export function validateFeedUrl(url) {
   return '';
 }
 
-// クライアント側の事前検証 (サーバー側でも同じ観点で検証される)。
-// 問題が無ければ ''、あれば画面に出す文言を返す。
-export function validateFeedForm(form, { isEdit = false } = {}) {
-  if (!isEdit && !SLUG_RE.test(String(form?.id || '').trim())) {
-    return 'IDは半角英小文字・数字・ハイフンで、先頭は英数字、64文字以内にしてください。';
+// YouTube 疑似フィード URL (youtube.com/feeds/videos.xml?channel_id=...)。
+// 公式 RSS は 404 のため追加時に直接は読めず、タイトルはサーバーが
+// 定期取得の際に Data API から補完する。追加時はタイトル '' で保存する。
+export function isYouTubeFeedUrl(url) {
+  let parsed;
+  try {
+    parsed = new URL(String(url || '').trim());
+  } catch {
+    return false;
   }
-  if (!String(form?.title || '').trim()) {
-    return 'タイトルを入力してください。';
-  }
-  return validateFeedUrl(form?.url);
+  const hosts = ['www.youtube.com', 'youtube.com', 'm.youtube.com'];
+  return (
+    hosts.includes(parsed.hostname) &&
+    parsed.pathname === '/feeds/videos.xml' &&
+    !!parsed.searchParams.get('channel_id')
+  );
 }
 
-// 新規追加で ID / タイトルのどちらかが空欄なら「URL だけの登録」に
-// なり、保存前にフィードの取得が要る。両方埋まっていれば従来どおり
-// 取得なしで保存する。
+// 新規追加の進め方を決める。YouTube 疑似フィードは取得を省いて
+// タイトル '' で保存し ('youtube')、それ以外は保存前にフィードを
+// 取得してタイトルを取る ('fetch')。
 export function planFeedAdd(form) {
-  const needTitle = !String(form?.title || '').trim();
-  const needId = !String(form?.id || '').trim();
-  return { auto: needTitle || needId, needTitle, needId };
+  return { mode: isYouTubeFeedUrl(form?.url) ? 'youtube' : 'fetch' };
 }
 
-// 取得したフィード XML から空欄を埋めたフォームを返す。タイトルが
-// フィードからも取れなければ ok:false で理由を返す (呼び出し側は
-// 保存せず、手入力を促す)。ID は URL から生成し、takenIds と
-// 重なる場合は連番で避ける。
-export function resolveFeedAddForm(form, { xml = '', takenIds = [] } = {}) {
+// 取得したフィード XML からタイトルを決めた保存用フォームを返す。
+// タイトルがフィードから取れなければ ok:false で理由を返す
+// (呼び出し側は保存しない)。ID は含めない (サーバーが URL から決める)。
+export function resolveFeedAddForm(form, { xml = '' } = {}) {
   const base = {
-    id: String(form?.id || '').trim(),
-    title: String(form?.title || '').trim(),
     url: String(form?.url || '').trim(),
     category: String(form?.category || '').trim(),
   };
-  const plan = planFeedAdd(base);
-  if (!plan.auto) return { ok: true, form: base };
-  let { id, title } = base;
-  if (plan.needTitle) {
-    title = parseFeedMeta(xml).title;
-    if (!title) {
-      return { ok: false, message: 'タイトルを自動で取得できませんでした。タイトルを入力してください。' };
-    }
+  const title = parseFeedMeta(xml).title;
+  if (!title) {
+    return { ok: false, message: 'タイトルを自動で取得できませんでした。このフィードは登録できません。' };
   }
-  if (plan.needId) id = generateFeedId(base.url, takenIds);
-  return { ok: true, form: { ...base, id, title } };
+  return { ok: true, form: { ...base, title } };
 }
 
 // saveFeed へ送る feed オブジェクトを組み立てる。
-// enabled / isPrivate はフォームに無いため、編集時は元のフィードから引き継ぎ、
-// 新規時は enabled=true / isPrivate=false (isPrivate はサーバーが URL から決める)。
+// 新規 (base なし): ID は送らない (サーバーが URL から決める)。
+// enabled=true / isPrivate=false (isPrivate はサーバーが URL から決める)。
+// 編集 (base あり): ID / タイトル / URL は元のフィードのまま、
+// ジャンルと enabled だけをフォームから反映する。
 export function buildSaveFeedPayload(form, base = null) {
+  if (base) {
+    return {
+      id: base.id,
+      title: base.title || '',
+      url: base.url || '',
+      category: String(form?.category || '').trim(),
+      enabled: form?.enabled !== undefined ? !!form.enabled : base.enabled !== false,
+      isPrivate: base.isPrivate === true,
+    };
+  }
   return {
-    id: String(form?.id || '').trim(),
     title: String(form?.title || '').trim(),
     url: String(form?.url || '').trim(),
     category: String(form?.category || '').trim(),
-    enabled: base ? base.enabled !== false : true,
-    isPrivate: base ? base.isPrivate === true : false,
+    enabled: true,
+    isPrivate: false,
   };
 }
 
