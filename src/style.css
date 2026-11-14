@@ -862,6 +862,70 @@ button.ghost.active {
   fill: currentColor;
 }
 
+/* スキップはテキストではなく、円形の巻き戻し/早送り矢印に
+   秒数を重ねたアイコンで出す (他のアイコンと同じ inline SVG)。 */
+.player-skip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.player-skip svg {
+  display: block;
+  width: 24px;
+  height: 24px;
+  fill: currentColor;
+}
+
+/* モード切替は blog の mp-repeat / mp-random と同じ扱い:
+   小さな地紋なしアイコンで、普段は控えめな色、オンのときだけ
+   full-strength。主題色は再生ボタン専用のままにする。 */
+.player-toggles {
+  display: flex;
+  justify-content: flex-end;
+  gap: 2px;
+  margin-top: 2px;
+}
+
+.player-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  color: var(--muted-2);
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.player-toggle:hover {
+  background: var(--surface-elevated);
+}
+
+.player-toggle svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+}
+
+.player-toggle.is-on {
+  color: var(--text);
+}
+
+.player-badge {
+  position: absolute;
+  top: 1px;
+  right: 0;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+}
+
 .more-row {
   text-align: center;
   margin: 4px 0 8px;
