@@ -54,11 +54,40 @@ export function isYouTubeFeedUrl(url) {
   );
 }
 
-// 新規追加の進め方を決める。YouTube 疑似フィードは取得を省いて
-// タイトル '' で保存し ('youtube')、それ以外は保存前にフィードを
-// 取得してタイトルを取る ('fetch')。
+// YouTube チャンネルページの URL (youtube.com/channel/UC... または
+// youtube.com/@handle)。末尾のパス (/@handle/videos など) も許す。
+// チャンネル ID の形はサーバー側の判定 (UC + 10文字以上) に合わせる。
+export function isYouTubeChannelUrl(url) {
+  let parsed;
+  try {
+    parsed = new URL(String(url || '').trim());
+  } catch {
+    return false;
+  }
+  const hosts = ['www.youtube.com', 'youtube.com', 'm.youtube.com'];
+  if (!hosts.includes(parsed.hostname)) return false;
+  return (
+    /^\/channel\/UC[\w-]{10,}(\/.*)?$/.test(parsed.pathname) ||
+    /^\/@[\w.-]+(\/.*)?$/.test(parsed.pathname)
+  );
+}
+
+// 追加時にプロキシ取得をせず、タイトル '' で保存する YouTube 入力の
+// 3形式 (疑似フィード / チャンネルページ / @ハンドル) のいずれか。
+// URL の正規形 (/channel/UC...) への解決とタイトル補完はサーバーが行う。
+export function isYouTubeFeedInput(url) {
+  // 移行期間中のみ: videos.xml 形式は既存フィードの互換用。データ移行の
+  // 完了後はこの分岐 (isYouTubeFeedUrl の判定) ごと外し、チャンネル
+  // ページと @ハンドルだけを対象にする。
+  if (isYouTubeFeedUrl(url)) return true;
+  return isYouTubeChannelUrl(url);
+}
+
+// 新規追加の進め方を決める。YouTube の入力 (疑似フィード・チャンネル
+// ページ・@ハンドル) は取得を省いてタイトル '' で保存し ('youtube')、
+// それ以外は保存前にフィードを取得してタイトルを取る ('fetch')。
 export function planFeedAdd(form) {
-  return { mode: isYouTubeFeedUrl(form?.url) ? 'youtube' : 'fetch' };
+  return { mode: isYouTubeFeedInput(form?.url) ? 'youtube' : 'fetch' };
 }
 
 // 取得したフィード XML からタイトルを決めた保存用フォームを返す。

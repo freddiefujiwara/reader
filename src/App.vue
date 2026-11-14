@@ -744,8 +744,9 @@ async function submitFeedForm() {
     formError.value = urlInvalid;
     return;
   }
-  // YouTube 疑似フィードは直接読めないため取得を省き、タイトル '' で
-  // 保存する (タイトルはサーバーが定期取得時に補完する)。
+  // YouTube (疑似フィード・チャンネルページ・@ハンドル) は直接読めない
+  // ため取得を省き、タイトル '' で保存する (URL の正規形への解決と
+  // タイトル補完はサーバーが行う)。
   if (planFeedAdd(form.value).mode === 'youtube') {
     await saveFeedForm(buildSaveFeedPayload({ ...form.value, title: '' }));
     return;
@@ -1046,7 +1047,7 @@ onMounted(async () => {
                 autocomplete="off"
                 placeholder="https://example.com/feed.xml"
               />
-              <p class="field-note">タイトルはフィードから自動で取得します。</p>
+              <p class="field-note">タイトルはフィードから自動で取得します。YouTube はチャンネルの URL でも登録できます。</p>
             </div>
             <div class="field">
               <label for="feed-category">ジャンル</label>
