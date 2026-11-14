@@ -231,3 +231,102 @@ describe('プレイヤーバーのボタン', () => {
     expect(errors).toEqual([]);
   });
 });
+
+// 任意のレコードで種まきしてマウントする (mountPlayer の差し替え版)。
+async function mountWithRecords(records) {
+  await saveLocalFeeds([FEED]);
+  await putLocalArticles(records);
+  el = document.createElement('div');
+  document.body.appendChild(el);
+  app = createApp(App);
+  app.config.errorHandler = (err) => { errors.push(err); };
+  app.mount(el);
+  await flush();
+  expect(el.querySelectorAll('.article-card').length, '記事カードが2件出る').toBe(2);
+}
+
+describe('合計時間の表示 (YouTube 音声の長さ補正)', () => {
+  it('要素が2倍の長さを報告しても、モデル実測前から合計時間は実尺で出る', async () => {
+    await mountPlayer();
+    await startCard(0); // EP1 の実尺は duration_sec = 1800
+    const audio = latestAudio();
+    audio.duration = 3600; // 要素は実尺の2倍を報告する
+    audio.dispatchEvent(new window.Event('loadedmetadata'));
+    await flush();
+    // モデル (direct / scaled) はまだ実測できていないが、合計時間は
+    // 実尺の 30:00 で出る (従来は要素の報告どおり 1:00:00 だった)。
+    expect(el.querySelector('.player-total').textContent).toBe('30:00');
+    expect(errors).toEqual([]);
+  });
+
+  it('要素の報告が実尺と一致すれば、そのまま要素の値を出す', async () => {
+    await mountPlayer();
+    await startCard(0);
+    const audio = latestAudio();
+    audio.duration = 1800;
+    audio.dispatchEvent(new window.Event('loadedmetadata'));
+    await flush();
+    expect(el.querySelector('.player-total').textContent).toBe('30:00');
+    expect(errors).toEqual([]);
+  });
+
+  it('実尺が不明な記事では、要素の報告をそのまま出す', async () => {
+    await mountWithRecords([{ ...EP1, duration_sec: null }, { ...EP2 }]);
+    await startCard(0);
+    const audio = latestAudio();
+    audio.duration = 3600;
+    audio.dispatchEvent(new window.Event('loadedmetadata'));
+    await flush();
+    expect(el.querySelector('.player-total').textContent).toBe('1:00:00');
+    expect(errors).toEqual([]);
+  });
+});
+
+describe('エピソード開始時の記事の引き直し', () => {
+  it('キュー固定後に更新で埋まった durationSec を、自動送りの開始時に拾う', async () => {
+    // EP2 の実尺がまだ不明な状態で種まきし、EP1 から再生を始める
+    // (キューはこの時点の記事オブジェクトで固定される)。
+    await mountWithRecords([{ ...EP1 }, { ...EP2, duration_sec: null }]);
+    await startCard(0);
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
+
+    // 背景更新で EP2 の実尺が埋まった状態を DB へ入れ、更新を回して
+    // state へ反映する。キュー内の EP2 は古い控えのまま残る。
+    await putLocalArticles([{ ...EP2, duration_sec: 104 }]);
+    await flush();
+    el.querySelector('.nav-refresh').click();
+    await flush();
+    await flush();
+
+    // EP1 が終わると EP2 が始まる。開始時に state から引き直すので、
+    // 実尺 104 が効き、要素が2倍 (208) を報告しても合計は 1:44。
+    await fireEnded();
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+    const audio = latestAudio();
+    audio.duration = 208;
+    audio.dispatchEvent(new window.Event('loadedmetadata'));
+    await flush();
+    expect(el.querySelector('.player-total').textContent).toBe('1:44');
+    expect(errors).toEqual([]);
+  });
+});
+
+describe('読み込み表示', () => {
+  it('読み込み中は再生ボタンが blog と同じ「…」になり、再生可能になるとアイコンへ戻る', async () => {
+    await mountPlayer();
+    const bar = await startCard(0);
+    const playBtn = bar.querySelector('.player-play');
+    // loadEpisode で読み込み中になり、ボタンはアイコンの代わりに
+    // 文字の「…」を出す (リングスピナーは出さない)。
+    expect(playBtn.getAttribute('aria-label')).toBe('読み込み中');
+    expect(playBtn.textContent).toContain('…');
+    expect(playBtn.querySelector('.player-spinner')).toBeNull();
+    expect(playBtn.querySelector('svg')).toBeNull();
+
+    latestAudio().dispatchEvent(new window.Event('canplay'));
+    await flush();
+    expect(playBtn.getAttribute('aria-label')).toBe('一時停止');
+    expect(playBtn.querySelector('svg')).toBeTruthy();
+    expect(errors).toEqual([]);
+  });
+});
