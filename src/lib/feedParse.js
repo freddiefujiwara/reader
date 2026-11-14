@@ -2,7 +2,10 @@
 // reader-gas の parseFeed とその補助関数をクライアント側へ移植したもの。
 // サーバー側と同じ規則でエントリを取り出すため、記事ID (feed_id と
 // guid/リンクから作る) がサーバー保存分と一致する。
-// エントリ: { guid, title, link, publishedAt, summary, author }
+// エントリ: { guid, title, link, publishedAt, summary, author,
+//              audioUrl, durationSec }
+// audioUrl / durationSec はポッドキャスト用 (enclosure と
+// itunes:duration) で、音声が無いエントリでは '' / null になる。
 
 const SUMMARY_MAX_CHARS = 500;
 
@@ -140,6 +143,43 @@ export function summarize(html, maxChars) {
   return text.length > limit ? text.slice(0, limit) : text;
 }
 
+// itunes:duration の表記ゆれ ("3723" / "34:53" / "2:34:53") を秒へ。
+// 解釈できない値は null。
+export function parseItunesDuration(value) {
+  const text = String(value || '').trim();
+  if (!text) return null;
+  if (/^\d+(\.\d+)?$/.test(text)) return Math.round(Number(text));
+  const parts = text.split(':');
+  if (parts.length < 2 || parts.length > 3) return null;
+  if (!parts.every((p) => /^\d+(\.\d+)?$/.test(p))) return null;
+  return Math.round(parts.map(Number).reduce((acc, n) => acc * 60 + n, 0));
+}
+
+const AUDIO_EXTENSIONS = ['.mp3', '.m4a', '.aac', '.ogg', '.opus'];
+
+// enclosure (RSS) や rel="enclosure" の link (Atom) が音声かどうか。
+// type が audio/* なら採用。type が無い場合は URL の拡張子で判断する
+// (画像などの非音声 enclosure は取り違えない)。
+function isAudioEnclosure(attrs) {
+  const url = String((attrs && (attrs.url || attrs.href)) || '').trim();
+  if (!url) return false;
+  const type = String((attrs && attrs.type) || '').trim().toLowerCase();
+  if (type) return type.startsWith('audio/');
+  const path = url.split(/[?#]/)[0].toLowerCase();
+  return AUDIO_EXTENSIONS.some((ext) => path.endsWith(ext));
+}
+
+function rssEnclosureAudioUrl(item) {
+  const enc = childNodes(item, 'enclosure').find((e) => isAudioEnclosure(e.attrs));
+  return enc ? String(enc.attrs.url || '').trim() : '';
+}
+
+function atomEnclosureAudioUrl(entry) {
+  const link = childNodes(entry, 'link')
+    .find((l) => l.attrs.rel === 'enclosure' && isAudioEnclosure(l.attrs));
+  return link ? String(link.attrs.href || '').trim() : '';
+}
+
 export function toIsoDate(value) {
   if (!value) return '';
   const t = Date.parse(String(value).trim());
@@ -154,7 +194,7 @@ export function parseFeedXml(xmlText, feed) {
   void feed;
   const root = parseXml(xmlText);
   const items = [];
-  const pushItem = (guid, title, link, publishedAt, summarySource, author) => {
+  const pushItem = (guid, title, link, publishedAt, summarySource, author, audioUrl, durationSec) => {
     const key = guid || link;
     if (!key || !link) return;
     items.push({
@@ -164,6 +204,8 @@ export function parseFeedXml(xmlText, feed) {
       publishedAt: toIsoDate(publishedAt),
       summary: summarize(summarySource || ''),
       author: String(author || '').trim(),
+      audioUrl: String(audioUrl || '').trim(),
+      durationSec: typeof durationSec === 'number' ? durationSec : null,
     });
   };
   // RSS 2.0: rss > channel > item
@@ -175,7 +217,9 @@ export function parseFeedXml(xmlText, feed) {
         childText(item, 'link'),
         childText(item, 'pubdate') || childText(item, 'date'),
         childText(item, 'description') || childText(item, 'encoded'),
-        childText(item, 'author') || childText(item, 'creator')
+        childText(item, 'author') || childText(item, 'creator'),
+        rssEnclosureAudioUrl(item),
+        parseItunesDuration(childText(item, 'duration'))
       );
     });
   });
@@ -189,7 +233,9 @@ export function parseFeedXml(xmlText, feed) {
         childText(item, 'link'),
         childText(item, 'date'),
         childText(item, 'description'),
-        childText(item, 'creator')
+        childText(item, 'creator'),
+        rssEnclosureAudioUrl(item),
+        parseItunesDuration(childText(item, 'duration'))
       );
     });
   }
@@ -208,7 +254,9 @@ export function parseFeedXml(xmlText, feed) {
       href,
       childText(entry, 'published') || childText(entry, 'updated'),
       childText(entry, 'summary') || childText(entry, 'content'),
-      authorNode ? childText(authorNode, 'name') : ''
+      authorNode ? childText(authorNode, 'name') : '',
+      atomEnclosureAudioUrl(entry),
+      parseItunesDuration(childText(entry, 'duration'))
     );
   });
   return items;

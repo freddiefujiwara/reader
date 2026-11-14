@@ -655,6 +655,213 @@ button.ghost.active {
   color: var(--link);
 }
 
+/* ---- ポッドキャストプレイヤー ----
+   部品の見た目は blog のプレイヤー (article .music-player の
+   mp-button / mp-play / mp-seek / mp-time) に揃える。色はこの
+   ファイルのトークン (blog と同期) をそのまま使う。 */
+
+/* カード上の再生ボタン: 円形で、再生中のエピソードだけ
+   blog の再生ボタンと同じく基調色を着ける。 */
+.play-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border-radius: 50%;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  touch-action: manipulation;
+  flex: none;
+}
+
+.play-btn:hover {
+  background: var(--surface-elevated);
+}
+
+.play-btn svg {
+  width: 20px;
+  height: 20px;
+  fill: currentColor;
+}
+
+.play-btn.is-current {
+  color: var(--surface);
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+.audio-duration {
+  color: var(--muted-2);
+  font-size: 0.85rem;
+}
+
+/* プレイヤーバー: .bottom-bar の上に重ねる固定バー。
+   横幅と余白の取り方は .bottom-bar に合わせる。 */
+.player-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: calc(61px + env(safe-area-inset-bottom));
+  z-index: 41;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  padding: 10px max(16px, calc(50% - 410px)) 12px;
+}
+
+/* プレイヤーが出ている間は、2本のバーに隠れないよう余白を足す。 */
+.layout.has-player {
+  padding-bottom: 250px;
+}
+
+.player-now {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 8px;
+}
+
+.player-title {
+  font-size: 15px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.player-feed {
+  color: var(--muted-2);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.player-close {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  color: var(--muted-2);
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  flex: none;
+}
+
+.player-close:hover {
+  background: var(--surface-elevated);
+}
+
+.player-close svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+}
+
+.player-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.player-time {
+  font-size: 12px;
+  color: var(--muted-2);
+  min-width: 42px;
+}
+
+.player-time.player-total {
+  text-align: right;
+}
+
+.player-seek {
+  flex: 1;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+  outline: none;
+  cursor: pointer;
+}
+
+.player-seek::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--primary);
+  border: none;
+}
+
+.player-seek::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--primary);
+  border: none;
+}
+
+.player-seek::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+}
+
+.player-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.player-button {
+  touch-action: manipulation;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.player-button:hover {
+  background: var(--surface-elevated);
+}
+
+.player-play {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  padding: 0;
+  border-radius: 50%;
+  color: var(--surface);
+  background: var(--primary);
+  border: 1px solid var(--primary);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.player-play svg {
+  width: 24px;
+  height: 24px;
+  fill: currentColor;
+}
+
 .more-row {
   text-align: center;
   margin: 4px 0 8px;

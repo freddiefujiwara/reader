@@ -28,6 +28,9 @@ describe('planUpserts', () => {
       fetched_at: FETCHED,
       summary: 'summary',
       author: 'author',
+      audio_url: '',
+      duration_sec: null,
+      play_pos: 0,
       is_read: false,
       read_at: '',
     });
@@ -53,6 +56,19 @@ describe('planUpserts', () => {
   it('同じ guid の重複は1件にまとめ、リンク無しは取り込まない', async () => {
     const records = await planUpserts({}, [entry('g1'), entry('g1'), { guid: 'g2', title: 't', link: '', publishedAt: '', summary: '', author: '' }], FEED, FETCHED);
     expect(records.map((r) => r.title)).toEqual(['title-g1']);
+  });
+  it('音声つきエントリは audio_url / duration_sec を持ち、更新で最新化され再生位置は保たれる', async () => {
+    const pod = entry('p1', { audioUrl: 'https://example.com/p1.mp3', durationSec: 3723 });
+    const [created] = await planUpserts({}, [pod], FEED, FETCHED);
+    expect(created.audio_url).toBe('https://example.com/p1.mp3');
+    expect(created.duration_sec).toBe(3723);
+    expect(created.play_pos).toBe(0);
+    const existing = { [created.id]: { ...created, play_pos: 120 } };
+    const moved = entry('p1', { audioUrl: 'https://cdn.example.com/p1.mp3', durationSec: 3700 });
+    const [updated] = await planUpserts(existing, [moved], FEED, FETCHED);
+    expect(updated.audio_url).toBe('https://cdn.example.com/p1.mp3');
+    expect(updated.duration_sec).toBe(3700);
+    expect(updated.play_pos).toBe(120);
   });
   it('guid が空ならリンクでIDを作る', async () => {
     const records = await planUpserts({}, [entry('', { link: 'https://example.com/only-link' })], FEED, FETCHED);
@@ -97,6 +113,17 @@ describe('planOrphanArticles / articleRecordToView', () => {
     const articles = [{ id: '1', feed_id: 'nhk' }, { id: '2', feed_id: 'gone' }];
     expect(planOrphanArticles(articles, ['nhk'])).toEqual(['2']);
   });
+  it('音声フィールドを持つレコードはそのまま表示用へ渡る', () => {
+    const view = articleRecordToView({
+      id: 'p', feed_id: 'pod', title: 'ep', link: 'https://example.com/ep',
+      published_at: '', fetched_at: '', summary: '', author: '',
+      audio_url: 'https://example.com/ep.mp3', duration_sec: 600, play_pos: 42,
+      is_read: false, read_at: '',
+    }, 'Pod');
+    expect(view.audioUrl).toBe('https://example.com/ep.mp3');
+    expect(view.durationSec).toBe(600);
+    expect(view.playPos).toBe(42);
+  });
   it('レコードを表示用へ変換する', () => {
     const view = articleRecordToView({
       id: 'x', feed_id: 'nhk', title: 't', link: 'https://example.com',
@@ -106,7 +133,7 @@ describe('planOrphanArticles / articleRecordToView', () => {
     expect(view).toEqual({
       id: 'x', feedId: 'nhk', feedTitle: 'NHK', title: 't', link: 'https://example.com',
       publishedAt: '2026-11-14T00:00:00.000Z', fetchedAt: '2026-11-14T01:00:00.000Z',
-      summary: 's', author: 'a', isRead: true,
+      summary: 's', author: 'a', audioUrl: '', durationSec: null, playPos: 0, isRead: true,
     });
   });
 });
