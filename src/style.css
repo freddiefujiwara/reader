@@ -472,6 +472,33 @@ button.ghost.active {
   margin-left: 4px;
 }
 
+/* カテゴリ行は上位の絞り込みとして控えめにする: 枠・影のない小さな文字タブにし、
+   選択中は朱の下線で示す (フィードのピルと見た目の階層を分ける)。 */
+.category-chips {
+  gap: 4px;
+  padding-bottom: 2px;
+  margin-bottom: 0;
+}
+
+.category-chips .chip {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  min-height: 32px;
+  padding: 4px 10px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.category-chips .chip.active {
+  background: transparent;
+  border-color: transparent;
+  color: var(--link-active);
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 5px;
+}
+
 .view-tabs {
   display: flex;
   gap: 4px;
