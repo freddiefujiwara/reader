@@ -1,16 +1,18 @@
 import { describe, it, expect } from 'vitest';
 import {
   createListState,
-  applyListResponse,
   visibleArticles,
   patchArticle,
   unreadTotal,
+  withUnreadCounts,
+  sortArticlesDesc,
   markAllReadInList,
+  markAllReadScope,
   visibleFeedChips,
   feedCategories,
 } from '../src/lib/listState.js';
 
-const A = (id, feedId, isRead = false, isStarred = false) => ({ id, feedId, isRead, isStarred });
+const A = (id, feedId, isRead = false) => ({ id, feedId, isRead });
 const FEEDS = [
   { id: 'nhk', title: 'NHK', unreadCount: 2 },
   { id: 'zenn', title: 'Zenn', unreadCount: 1 },
@@ -19,26 +21,10 @@ const FEEDS = [
 function baseState() {
   return {
     ...createListState(),
-    articles: [A('1', 'nhk'), A('2', 'nhk', true, true), A('3', 'zenn')],
+    articles: [A('1', 'nhk'), A('2', 'nhk', true), A('3', 'zenn')],
     feeds: FEEDS.map((f) => ({ ...f })),
-    total: 3,
   };
 }
-
-describe('applyListResponse', () => {
-  it('置き換え取り込みで total と generatedAt を反映する', () => {
-    const next = applyListResponse(createListState(), { articles: [A('9', 'nhk')], total: 42, feeds: FEEDS, generatedAt: 'T' });
-    expect(next.articles.map((a) => a.id)).toEqual(['9']);
-    expect(next.total).toBe(42);
-    expect(next.generatedAt).toBe('T');
-    expect(next.feeds).toEqual(FEEDS);
-  });
-  it('append では重複 id を追加しない', () => {
-    const s = baseState();
-    const next = applyListResponse(s, { articles: [A('3', 'zenn'), A('4', 'zenn')], total: 4 }, { append: true });
-    expect(next.articles.map((a) => a.id)).toEqual(['1', '2', '3', '4']);
-  });
-});
 
 describe('visibleArticles', () => {
   it('フィードで絞る', () => {
@@ -48,10 +34,6 @@ describe('visibleArticles', () => {
   it('未読フィルタ', () => {
     const s = { ...baseState(), filter: 'unread' };
     expect(visibleArticles(s).map((a) => a.id)).toEqual(['1', '3']);
-  });
-  it('スターフィルタ', () => {
-    const s = { ...baseState(), filter: 'starred' };
-    expect(visibleArticles(s).map((a) => a.id)).toEqual(['2']);
   });
 });
 
@@ -68,7 +50,30 @@ describe('patchArticle / unreadTotal', () => {
   });
 });
 
-describe('markAllReadInList', () => {
+describe('withUnreadCounts', () => {
+  it('ローカルの記事からフィード別未読数を付け直す', () => {
+    const feeds = [{ id: 'nhk', unreadCount: 99 }, { id: 'zenn' }, { id: 'none' }];
+    const articles = [A('1', 'nhk'), A('2', 'nhk', true), A('3', 'zenn'), A('4', 'zenn')];
+    const next = withUnreadCounts(feeds, articles);
+    expect(next.map((f) => f.unreadCount)).toEqual([1, 2, 0]);
+    // 元のフィードは壊さない。
+    expect(feeds[0].unreadCount).toBe(99);
+  });
+});
+
+describe('sortArticlesDesc', () => {
+  it('publishedAt の新しい順、無ければ fetchedAt で並べる', () => {
+    const articles = [
+      { id: 'a', publishedAt: '2026-11-10T00:00:00.000Z', fetchedAt: '2026-11-14T00:00:00.000Z' },
+      { id: 'b', publishedAt: '2026-11-12T00:00:00.000Z', fetchedAt: '2026-11-13T00:00:00.000Z' },
+      { id: 'c', publishedAt: '', fetchedAt: '2026-11-11T00:00:00.000Z' },
+    ];
+    expect(sortArticlesDesc(articles).map((x) => x.id)).toEqual(['b', 'c', 'a']);
+    expect(articles.map((x) => x.id)).toEqual(['a', 'b', 'c']);
+  });
+});
+
+describe('markAllReadInList / markAllReadScope', () => {
   it('フィード指定ではそのフィードだけ既読化し未読数を 0 にする', () => {
     const next = markAllReadInList(baseState(), 'nhk');
     expect(next.articles.map((a) => a.isRead)).toEqual([true, true, false]);
@@ -80,25 +85,31 @@ describe('markAllReadInList', () => {
     expect(next.articles.every((a) => a.isRead)).toBe(true);
     expect(next.feeds.every((f) => f.unreadCount === 0)).toBe(true);
   });
+  it('scope はフィード指定がカテゴリより優先される', () => {
+    const s = {
+      ...createListState(),
+      feeds: [
+        { id: 'a', category: '楽天' },
+        { id: 'b', category: '投資・FIRE' },
+      ],
+    };
+    expect(markAllReadScope(s, 'b', '楽天')).toEqual({ b: true });
+    expect(markAllReadScope(s, '', '楽天')).toEqual({ a: true });
+    expect(markAllReadScope(s, '', '')).toEqual({ a: true, b: true });
+  });
 });
 
 describe('visibleFeedChips', () => {
   const feeds = [
-    { id: 'a', unreadCount: 3, starredCount: 0 },
-    { id: 'b', unreadCount: 0, starredCount: 2 },
-    { id: 'c', unreadCount: 1, starredCount: 1 },
+    { id: 'a', unreadCount: 3 },
+    { id: 'b', unreadCount: 0 },
+    { id: 'c', unreadCount: 1 },
   ];
   it('すべてフィルタでは全フィード', () => {
     expect(visibleFeedChips({ feeds, filter: 'all', feedId: '' }).map((f) => f.id)).toEqual(['a', 'b', 'c']);
   });
   it('未読フィルタでは未読があるフィードだけ', () => {
     expect(visibleFeedChips({ feeds, filter: 'unread', feedId: '' }).map((f) => f.id)).toEqual(['a', 'c']);
-  });
-  it('スターフィルタではスターがあるフィードだけ', () => {
-    expect(visibleFeedChips({ feeds, filter: 'starred', feedId: '' }).map((f) => f.id)).toEqual(['b', 'c']);
-  });
-  it('選択中のフィードはスターゼロでも残す', () => {
-    expect(visibleFeedChips({ feeds, filter: 'starred', feedId: 'a' }).map((f) => f.id)).toEqual(['a', 'b', 'c']);
   });
   it('未読が全くなければ空 (チップは「すべて」だけになる)', () => {
     const zero = feeds.map((f) => ({ ...f, unreadCount: 0 }));
@@ -127,8 +138,8 @@ describe('feedCategories / カテゴリ絞り込み', () => {
     const state = {
       feeds, category: '楽天', feedId: '', filter: 'all',
       articles: [
-        { id: '1', feedId: 'a', isRead: false, isStarred: false },
-        { id: '2', feedId: 'b', isRead: false, isStarred: false },
+        { id: '1', feedId: 'a', isRead: false },
+        { id: '2', feedId: 'b', isRead: false },
       ],
     };
     expect(visibleArticles(state).map((x) => x.id)).toEqual(['1']);
@@ -137,8 +148,8 @@ describe('feedCategories / カテゴリ絞り込み', () => {
     const state = {
       feeds, category: '楽天', feedId: '', filter: 'unread',
       articles: [
-        { id: '1', feedId: 'a', isRead: false, isStarred: false },
-        { id: '2', feedId: 'b', isRead: false, isStarred: false },
+        { id: '1', feedId: 'a', isRead: false },
+        { id: '2', feedId: 'b', isRead: false },
       ],
     };
     const next = markAllReadInList(state, '', '楽天');

@@ -51,26 +51,11 @@ export function exchangeShare(shareToken, opts) {
   return postJson({ action: 'exchange_share', shareToken }, opts);
 }
 
-// 記事一覧 (状態マージ済み・新しい順) ＋フィード一覧 (未読数付き)。
+// 記事一覧 (状態マージ済み・新しい順) ＋フィード一覧。
+// v2 ではフィード一覧 (fetchUrl 付き) の取得と、既読状態の初回取り込みに使う。
 // -> { ok, articles, total, feeds, generatedAt }
 export function listArticles(sessionToken, { feedId = '', category = '', filter = 'all', limit = 50, offset = 0 } = {}, opts) {
   const body = { action: 'list', sessionToken, filter, limit, offset };
-  if (feedId) body.feedId = feedId;
-  if (category) body.category = category;
-  return postJson(body, opts);
-}
-
-// 既読・スターの付け外し (オーナーセッションのみ)。
-export function markArticle(sessionToken, articleId, patch = {}, opts) {
-  const body = { action: 'mark', sessionToken, articleId };
-  if (patch.isRead !== undefined) body.isRead = patch.isRead;
-  if (patch.isStarred !== undefined) body.isStarred = patch.isStarred;
-  return postJson(body, opts);
-}
-
-// まとめて既読化 (オーナーセッションのみ)。feedId / category 省略で全フィード。
-export function markAllRead(sessionToken, { feedId = '', category = '' } = {}, opts) {
-  const body = { action: 'markAllRead', sessionToken };
   if (feedId) body.feedId = feedId;
   if (category) body.category = category;
   return postJson(body, opts);
