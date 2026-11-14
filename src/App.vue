@@ -80,7 +80,20 @@ const FILTERS = [
   { key: 'starred', label: 'スター' },
 ];
 
+// 実行中の一覧取得。すべて既読の前に完了を待つため保持する。
+let listInFlight = null;
+
 async function fetchList({ append = false } = {}) {
+  const run = fetchListOnce({ append });
+  listInFlight = run;
+  try {
+    await run;
+  } finally {
+    if (listInFlight === run) listInFlight = null;
+  }
+}
+
+async function fetchListOnce({ append = false } = {}) {
   if (!session.value) return;
   if (append) loadingMore.value = true;
   else loading.value = true;
@@ -160,6 +173,9 @@ function onOpenArticle(article) {
 async function onMarkAllRead() {
   if (!isOwner.value || savingAll.value) return;
   savingAll.value = true;
+  // 一覧の読み込み中でも押せるよう、終わるのを待ってから既読化する
+  // (読み込み結果が既読化を上書きしないようにするため)。
+  if (listInFlight) await listInFlight.catch(() => {});
   const before = state.value;
   state.value = markAllReadInList(state.value, state.value.feedId, state.value.category);
   try {
@@ -558,7 +574,7 @@ onMounted(async () => {
             v-if="isOwner"
             class="primary mark-all-btn"
             type="button"
-            :disabled="savingAll || loading"
+            :disabled="savingAll"
             @click="onMarkAllRead"
           >すべて既読</button>
           <div class="view-tabs" role="tablist" aria-label="表示切替">
