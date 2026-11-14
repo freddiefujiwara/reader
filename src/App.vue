@@ -61,14 +61,22 @@ import { formatPublishedAt } from './lib/format.js';
 import {
   buildQueue,
   clampSeek,
+  classifyRate,
+  durationMismatch,
   formatTime,
+  interpretStoredPlayPos,
   loadPlayMode,
+  loadTimeModel,
   nextEpisodePlan,
   nextRepeat,
   nextSpeed,
   progressRatio,
+  reachedTrueEnd,
   REPEAT_LABELS,
   savePlayMode,
+  saveTimeModel,
+  toDisplayPosition,
+  toElementPosition,
 } from './lib/player.js';
 
 // 画面に出す件数の初期値と「もっと見る」の増分 (v2 は全件ローカルにあるため、
@@ -351,6 +359,8 @@ const audio = new Audio();
 audio.preload = 'metadata';
 const currentEpisode = ref(null);
 const isPlaying = ref(false);
+// 音声データ待ち (初回再生前・シーク中) の読み込み表示。
+const isLoading = ref(false);
 const currentTime = ref(0);
 const duration = ref(0);
 const speed = ref(1);
@@ -372,14 +382,63 @@ const playPosMemory = new Map();
 let pendingSeek = 0;
 let lastPosSaveAt = 0;
 
+/* ---- YouTube 音声の長さ二重化の補正 (player.js の純粋関数を使う) ----
+   currentTime / duration は Audio 要素のスケールのまま保持し、表示と
+   保存 (play_pos) は正しい長さ (durationSec) 基準へ変換して扱う。
+   要素の currentTime の進み方 (モデル) は再生中に実測し、端末に
+   保存した前回分を既定にする。補正が効かない通常のポッドキャスト
+   では変換は恒等になり、従来どおりの動きになる。 */
+const learnedTimeModel = ref(loadTimeModel());
+let measuredModel = null;
+let rateSample = null;
+let endFlowDone = false;
+
+const trueDuration = computed(() => {
+  const sec = currentEpisode.value?.durationSec;
+  return Number.isFinite(sec) && sec > 0 ? sec : 0;
+});
+const mappingCtx = computed(() => ({
+  trueSec: trueDuration.value,
+  elementDuration: duration.value,
+  model: measuredModel || learnedTimeModel.value,
+}));
+const mappingOn = computed(() => durationMismatch(trueDuration.value, duration.value)
+  && (mappingCtx.value.model === 'direct' || mappingCtx.value.model === 'scaled'));
+
 const displayDuration = computed(() => {
+  if (mappingOn.value) return trueDuration.value;
   if (Number.isFinite(duration.value) && duration.value > 0) return duration.value;
   return currentEpisode.value?.durationSec || 0;
 });
+const displayTime = computed(() => toDisplayPosition(currentTime.value, mappingCtx.value));
 const seekStyle = computed(() => {
-  const pct = Math.round(progressRatio(currentTime.value, displayDuration.value) * 1000) / 10;
+  const pct = Math.round(progressRatio(displayTime.value, displayDuration.value) * 1000) / 10;
   return { background: `linear-gradient(to right, var(--primary) ${pct}%, var(--border) ${pct}%)` };
 });
+
+// 再生中の要素の進みを実時間と比べてモデルを実測する。シークや
+// 一時停止を挟んだ窓は捨てる。既定 (保存済み) と違う結果が出たら
+// そちらへ乗り換えて保存し直す。
+function samplePlaybackRate() {
+  if (!currentEpisode.value || audio.paused || seeking.value) { rateSample = null; return; }
+  if (!durationMismatch(trueDuration.value, audio.duration)) { rateSample = null; return; }
+  const now = performance.now();
+  if (!rateSample) {
+    rateSample = { ct: audio.currentTime || 0, wall: now };
+    return;
+  }
+  const dWall = (now - rateSample.wall) / 1000;
+  if (dWall < 3) return;
+  const dCt = (audio.currentTime || 0) - rateSample.ct;
+  rateSample = null;
+  if (dCt < 0) return;
+  const model = classifyRate(dCt / (dWall * (audio.playbackRate || 1)));
+  if (model && model !== mappingCtx.value.model) {
+    measuredModel = model;
+    learnedTimeModel.value = model;
+    saveTimeModel(model);
+  }
+}
 const speedLabel = computed(() => `${speed.value}×`);
 
 function isCurrentEpisode(article) {
@@ -405,7 +464,8 @@ function savePlayPos() {
     playPosMemory.set(ep.id, 0);
     return;
   }
-  const pos = Math.floor(audio.currentTime || 0);
+  // 再開位置は正しい長さ基準 (表示スケール) で保存する。
+  const pos = Math.floor(toDisplayPosition(audio.currentTime || 0, mappingCtx.value));
   playPosMemory.set(ep.id, pos);
   if (pos > 0) setLocalArticlePlayPos(ep.id, pos).catch(() => {});
 }
@@ -437,6 +497,10 @@ function loadEpisode(article) {
   currentEpisode.value = article;
   duration.value = 0;
   currentTime.value = 0;
+  measuredModel = null;
+  rateSample = null;
+  endFlowDone = false;
+  isLoading.value = true;
   pendingSeek = playPosMemory.has(article.id) ? playPosMemory.get(article.id) : (article.playPos || 0);
   audio.src = article.audioUrl;
   audio.playbackRate = speed.value;
@@ -469,7 +533,10 @@ function cycleRepeat() {
 function togglePlay() {
   if (!currentEpisode.value) return;
   if (audio.paused) {
-    if (audio.ended) audio.currentTime = 0;
+    if (audio.ended) {
+      audio.currentTime = 0;
+      endFlowDone = false;
+    }
     tryPlayAudio();
   } else {
     audio.pause();
@@ -483,6 +550,14 @@ function toggleEpisode(article) {
 
 function skipBy(delta) {
   if (!currentEpisode.value) return;
+  if (mappingOn.value) {
+    // スキップ量は表示 (正しい長さ) 基準で解釈し、要素へ戻して渡す。
+    const target = clampSeek(displayTime.value + delta, displayDuration.value);
+    audio.currentTime = toElementPosition(target, mappingCtx.value);
+    currentTime.value = audio.currentTime;
+    rateSample = null;
+    return;
+  }
   audio.currentTime = clampSeek((audio.currentTime || 0) + delta, audio.duration);
   currentTime.value = audio.currentTime;
 }
@@ -494,6 +569,13 @@ function cycleSpeed() {
 
 function onSeekInput(event) {
   const value = Number(event.target.value);
+  if (mappingOn.value) {
+    // バーの値は表示スケール。要素のスケールへ変換してから渡す。
+    audio.currentTime = toElementPosition(value, mappingCtx.value);
+    currentTime.value = audio.currentTime;
+    rateSample = null;
+    return;
+  }
   currentTime.value = value;
   audio.currentTime = clampSeek(value, Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : displayDuration.value);
 }
@@ -505,6 +587,9 @@ function stopPlayer() {
   audio.load();
   currentEpisode.value = null;
   isPlaying.value = false;
+  isLoading.value = false;
+  endFlowDone = false;
+  rateSample = null;
   currentTime.value = 0;
   duration.value = 0;
   if ('mediaSession' in navigator) {
@@ -520,16 +605,27 @@ audio.addEventListener('loadedmetadata', () => {
   duration.value = audio.duration;
   audio.playbackRate = speed.value;
   if (pendingSeek > 0) {
-    audio.currentTime = clampSeek(pendingSeek, audio.duration);
+    // 保存値は正しい長さ基準。旧バージョンが要素スケールで保存した
+    // 値は interpretStoredPlayPos で割り戻してから要素へ渡す。
+    const ctx = mappingCtx.value;
+    const restored = interpretStoredPlayPos(pendingSeek, ctx);
+    audio.currentTime = clampSeek(toElementPosition(restored, ctx), audio.duration);
     currentTime.value = audio.currentTime;
   }
   pendingSeek = 0;
 });
 audio.addEventListener('timeupdate', () => {
   if (!seeking.value) currentTime.value = audio.currentTime || 0;
+  samplePlaybackRate();
   if (Date.now() - lastPosSaveAt > 10_000) {
     lastPosSaveAt = Date.now();
     savePlayPos();
+  }
+  // 二重化した時間軸では、実メディアの終わりで要素が止まって
+  // 'ended' が来ないことがある。表示位置が実質の終端に達したら
+  // 終了フローへ進める ('ended' と二重には走らない)。
+  if (!endFlowDone && mappingOn.value && reachedTrueEnd(displayTime.value, trueDuration.value)) {
+    handleEpisodeEnded();
   }
 });
 audio.addEventListener('play', () => { isPlaying.value = true; });
@@ -537,8 +633,24 @@ audio.addEventListener('pause', () => {
   isPlaying.value = false;
   savePlayPos();
 });
-audio.addEventListener('ended', () => {
+// 読み込み表示: データ待ちの間だけ出し、再生可能になったら消す。
+audio.addEventListener('waiting', () => { isLoading.value = true; });
+audio.addEventListener('seeking', () => {
+  rateSample = null;
+  if (audio.readyState < 3) isLoading.value = true;
+});
+audio.addEventListener('seeked', () => {
+  if (audio.readyState >= 3) isLoading.value = false;
+});
+audio.addEventListener('playing', () => { isLoading.value = false; });
+audio.addEventListener('canplay', () => { isLoading.value = false; });
+audio.addEventListener('error', () => { isLoading.value = false; });
+
+function handleEpisodeEnded() {
+  if (endFlowDone) return;
+  endFlowDone = true;
   isPlaying.value = false;
+  isLoading.value = false;
   const ep = currentEpisode.value;
   if (!ep) return;
   // 聴き終えたら、記事を開いたときと同じ経路で既読にする
@@ -551,6 +663,7 @@ audio.addEventListener('ended', () => {
     // 単曲リピート: src は差し替えず先頭から再生し直す。再開位置
     // (pendingSeek は metadata 読み込み時だけ効く) とは競合しない。
     audio.currentTime = 0;
+    endFlowDone = false;
     tryPlayAudio();
     return;
   }
@@ -567,7 +680,8 @@ audio.addEventListener('ended', () => {
   if (plan.resetPlayed) playedInRound = new Set();
   playedInRound.add(next.id);
   loadEpisode(next);
-});
+}
+audio.addEventListener('ended', handleEpisodeEnded);
 
 // セッション失効時の共通処理。保存分を消してサインイン画面に戻す。
 function expireSession() {
@@ -1168,14 +1282,14 @@ onMounted(async () => {
           </button>
         </div>
         <div class="player-progress">
-          <span class="player-time">{{ formatTime(currentTime) }}</span>
+          <span class="player-time">{{ formatTime(displayTime) }}</span>
           <input
             class="player-seek"
             type="range"
             min="0"
             :max="displayDuration || 0"
             step="0.1"
-            :value="currentTime"
+            :value="displayTime"
             :style="seekStyle"
             aria-label="再生位置"
             @input="onSeekInput"
@@ -1191,10 +1305,11 @@ onMounted(async () => {
           <button
             type="button"
             class="player-play"
-            :aria-label="isPlaying ? '一時停止' : '再生'"
+            :aria-label="isLoading ? '読み込み中' : (isPlaying ? '一時停止' : '再生')"
             @click="togglePlay"
           >
-            <svg v-if="isPlaying" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h4v14H6zM14 5h4v14h-4z" /></svg>
+            <span v-if="isLoading" class="player-spinner" aria-hidden="true"></span>
+            <svg v-else-if="isPlaying" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h4v14H6zM14 5h4v14h-4z" /></svg>
             <svg v-else viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>
           </button>
           <button type="button" class="player-button player-skip" aria-label="30秒進む" title="30秒進む" @click="skipBy(30)">

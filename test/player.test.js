@@ -11,6 +11,15 @@ import {
   loadPlayMode,
   savePlayMode,
   playModeKey,
+  durationMismatch,
+  classifyRate,
+  toDisplayPosition,
+  toElementPosition,
+  interpretStoredPlayPos,
+  reachedTrueEnd,
+  loadTimeModel,
+  saveTimeModel,
+  timeModelKey,
 } from '../src/lib/player.js';
 
 describe('formatTime', () => {
@@ -174,6 +183,141 @@ describe('nextEpisodePlan (ランダム再生)', () => {
       queue: ['a'], currentId: 'a', repeat: 'all', shuffle: true, playedIds: new Set(['a']), randomPick: lastPick,
     });
     expect(plan).toEqual({ type: 'advance', id: 'a', resetPlayed: true });
+  });
+});
+
+describe('durationMismatch', () => {
+  it('20% 超のずれだけを不一致とする', () => {
+    expect(durationMismatch(104, 208)).toBe(true);
+    expect(durationMismatch(100, 121)).toBe(true);
+    expect(durationMismatch(100, 119)).toBe(false);
+    expect(durationMismatch(100, 100)).toBe(false);
+  });
+  it('どちらか不明なら不一致にしない', () => {
+    expect(durationMismatch(0, 208)).toBe(false);
+    expect(durationMismatch(null, 208)).toBe(false);
+    expect(durationMismatch(104, Number.NaN)).toBe(false);
+    expect(durationMismatch(104, 0)).toBe(false);
+    expect(durationMismatch(104, Infinity)).toBe(false);
+  });
+});
+
+describe('classifyRate', () => {
+  it('1.5 超は scaled、0.5〜1.5 は direct', () => {
+    expect(classifyRate(2)).toBe('scaled');
+    expect(classifyRate(1.51)).toBe('scaled');
+    expect(classifyRate(1.5)).toBe('direct');
+    expect(classifyRate(1)).toBe('direct');
+    expect(classifyRate(0.5)).toBe('direct');
+  });
+  it('ほぼ止まっている・解釈不能なら null', () => {
+    expect(classifyRate(0.2)).toBeNull();
+    expect(classifyRate(0)).toBeNull();
+    expect(classifyRate(Number.NaN)).toBeNull();
+  });
+});
+
+describe('時間マッピング (モデルA: direct)', () => {
+  const ctx = { trueSec: 104, elementDuration: 208, model: 'direct' };
+  it('表示位置はそのまま、正しい長さで頭打ち', () => {
+    expect(toDisplayPosition(0, ctx)).toBe(0);
+    expect(toDisplayPosition(52, ctx)).toBe(52);
+    expect(toDisplayPosition(150, ctx)).toBe(104);
+  });
+  it('シークはそのまま要素へ渡る', () => {
+    expect(toElementPosition(52, ctx)).toBe(52);
+    expect(toElementPosition(150, ctx)).toBe(104);
+  });
+});
+
+describe('時間マッピング (モデルB: scaled)', () => {
+  const ctx = { trueSec: 104, elementDuration: 208, model: 'scaled' };
+  it('表示位置は比率で圧縮される', () => {
+    expect(toDisplayPosition(0, ctx)).toBe(0);
+    expect(toDisplayPosition(104, ctx)).toBe(52);
+    expect(toDisplayPosition(208, ctx)).toBe(104);
+    expect(toDisplayPosition(300, ctx)).toBe(104);
+  });
+  it('シークは比率で伸ばして要素へ渡り、往復が一致する', () => {
+    expect(toElementPosition(52, ctx)).toBe(104);
+    expect(toElementPosition(104, ctx)).toBe(208);
+    expect(toElementPosition(200, ctx)).toBe(208);
+    for (const t of [0, 10, 52.5, 104]) {
+      expect(toDisplayPosition(toElementPosition(t, ctx), ctx)).toBeCloseTo(Math.min(t, 104));
+    }
+  });
+});
+
+describe('時間マッピング (補正なし)', () => {
+  it('モデル未確定・長さ一致なら恒等', () => {
+    const unknown = { trueSec: 104, elementDuration: 208, model: null };
+    expect(toDisplayPosition(150, unknown)).toBe(150);
+    expect(toElementPosition(150, unknown)).toBe(150);
+    const matched = { trueSec: 104, elementDuration: 104, model: 'scaled' };
+    expect(toDisplayPosition(50, matched)).toBe(50);
+    expect(toElementPosition(50, matched)).toBe(50);
+    expect(toDisplayPosition(50, null)).toBe(50);
+  });
+});
+
+describe('interpretStoredPlayPos', () => {
+  const ctx = { trueSec: 104, elementDuration: 208, model: 'scaled' };
+  it('正しい長さ以下の保存値はそのまま', () => {
+    expect(interpretStoredPlayPos(0, ctx)).toBe(0);
+    expect(interpretStoredPlayPos(60, ctx)).toBe(60);
+    expect(interpretStoredPlayPos(104, ctx)).toBe(104);
+  });
+  it('正しい長さを超える旧保存値は要素スケールとみなして割り戻す', () => {
+    expect(interpretStoredPlayPos(160, ctx)).toBe(80);
+    expect(interpretStoredPlayPos(208, ctx)).toBe(104);
+  });
+  it('補正が効かない場合はそのまま', () => {
+    expect(interpretStoredPlayPos(160, { trueSec: 104, elementDuration: 104, model: 'scaled' })).toBe(160);
+    expect(interpretStoredPlayPos(160, null)).toBe(160);
+    expect(interpretStoredPlayPos(-5, ctx)).toBe(0);
+  });
+});
+
+describe('reachedTrueEnd', () => {
+  it('残り0.3秒以内を終端とする', () => {
+    expect(reachedTrueEnd(104, 104)).toBe(true);
+    expect(reachedTrueEnd(103.7, 104)).toBe(true);
+    expect(reachedTrueEnd(103.6, 104)).toBe(false);
+    expect(reachedTrueEnd(50, 104)).toBe(false);
+  });
+  it('長さ不明なら終端にしない', () => {
+    expect(reachedTrueEnd(10, 0)).toBe(false);
+    expect(reachedTrueEnd(10, null)).toBe(false);
+  });
+});
+
+describe('時間モデルの保存', () => {
+  const fakeStorage = () => {
+    const map = new Map();
+    return {
+      getItem: (k) => (map.has(k) ? map.get(k) : null),
+      setItem: (k, v) => { map.set(k, String(v)); },
+      map,
+    };
+  };
+  it('保存して読み直すと往復する', () => {
+    const storage = fakeStorage();
+    expect(loadTimeModel(storage, {})).toBeNull();
+    saveTimeModel('scaled', storage, {});
+    expect(loadTimeModel(storage, {})).toBe('scaled');
+    saveTimeModel('direct', storage, {});
+    expect(loadTimeModel(storage, {})).toBe('direct');
+  });
+  it('不正なモデルは保存せず、壊れた値は null に倒す', () => {
+    const storage = fakeStorage();
+    saveTimeModel('bogus', storage, {});
+    expect(loadTimeModel(storage, {})).toBeNull();
+    storage.map.set(timeModelKey({}), 'weird');
+    expect(loadTimeModel(storage, {})).toBeNull();
+  });
+  it('本番とステージングでキーを分ける', () => {
+    expect(timeModelKey({})).toBe('reader:player-timemodel:v1');
+    expect(timeModelKey({ VITE_STAGING: '1' })).toBe('reader:player-timemodel:v1:staging');
   });
 });
 
