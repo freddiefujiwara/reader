@@ -107,6 +107,14 @@ function setFilter(filter) {
   fetchList();
 }
 
+// ヘッダーの未読ピル: 全フィードの未読一覧へ移動する。
+function goUnreadAll() {
+  if (view.value !== 'timeline') view.value = 'timeline';
+  if (state.value.feedId === '' && state.value.filter === 'unread') return;
+  state.value = { ...state.value, feedId: '', filter: 'unread', articles: [], total: 0 };
+  fetchList();
+}
+
 // 楽観的更新つきの mark。失敗したら元の状態へ戻す。
 async function applyMark(article, patch) {
   if (!isOwner.value) return;
@@ -366,7 +374,12 @@ onMounted(async () => {
       </a>
       <span></span>
       <span class="session-note">
-        <span v-if="session && unreadTotalCount > 0" class="unread-pill">未読 {{ unreadTotalCount }}</span>
+        <button
+          v-if="session && unreadTotalCount > 0"
+          class="unread-pill"
+          type="button"
+          @click="goUnreadAll"
+        >未読 {{ unreadTotalCount }}</button>
         <span v-if="isReadonly" class="meta">閲覧のみ</span>
         <button v-if="session" class="ghost" type="button" @click="signOut">ログアウト</button>
       </span>

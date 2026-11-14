@@ -64,6 +64,8 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
+  /* ダブルタップでの自動拡大を止める（ピンチ操作は妨げない） */
+  touch-action: manipulation;
   -webkit-text-size-adjust: 100%;
   -webkit-font-smoothing: antialiased;
   transition: background 0.2s, color 0.2s;
@@ -393,11 +395,14 @@ button.ghost.active {
   gap: 5px;
   background: var(--surface-elevated);
   color: var(--link-active);
+  font: inherit;
   font-weight: 900;
   font-size: 13px;
   padding: 7px 12px;
+  border: 0;
   border-radius: 999px;
   white-space: nowrap;
+  cursor: pointer;
 }
 
 .session-note {
@@ -700,6 +705,8 @@ button.ghost.danger {
 .field input {
   width: 100%;
   font: inherit;
+  /* iOS Safari は16px未満の入力欄にフォーカスすると自動拡大するため固定する */
+  font-size: 16px;
   color: var(--text);
   background: var(--bg);
   border: 1px solid var(--border);
