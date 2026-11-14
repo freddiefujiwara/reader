@@ -17,9 +17,11 @@ import {
   planUpserts,
   applyTransferredState,
   migrateFeedHashIds,
+  migrateYouTubeChannelUrlIds,
   transferKey,
   FEED_HASH_MIGRATED_KEY,
   FEED_HASH_TRANSFER_KEY,
+  YT_CHANNEL_URL_MIGRATED_KEY,
 } from '../src/lib/localDb.js';
 import { articleId } from '../src/lib/articleId.js';
 import { feedIdFromUrl } from '../src/lib/feedHash.js';
@@ -300,5 +302,101 @@ describe('フィードIDのハッシュ化の移行 (migrateFeedHashIds)', () =>
     await saveLocalFeeds([]);
     await setLocalMeta(FEED_HASH_MIGRATED_KEY, undefined);
     await setLocalMeta(FEED_HASH_TRANSFER_KEY, undefined);
+  });
+});
+
+describe('YouTube URL 形式変更の移行 (migrateYouTubeChannelUrlIds)', () => {
+  const UC = 'UCxNfaRC6MbAnwSR1Dqqv69A';
+  const LEGACY_URL = `https://www.youtube.com/feeds/videos.xml?channel_id=${UC}`;
+  const CHANNEL_URL = `https://www.youtube.com/channel/${UC}`;
+  const NHK_URL = 'https://www3.nhk.or.jp/rss/news/cat0.xml';
+  const WATCH = 'https://www.youtube.com/watch?v=vid1';
+  const WEIRD = 'https://example.com/not-a-video';
+
+  it('サーバーが新形式を返してから付け替え、完了後は二度走らない', async () => {
+    const oldId = await feedIdFromUrl(LEGACY_URL);
+    const newId = await feedIdFromUrl(CHANNEL_URL);
+    const nhkId = await feedIdFromUrl(NHK_URL);
+    const videoArticleId = await articleId(oldId, 'vid1');
+    const weirdArticleId = await articleId(oldId, 'mystery');
+    const nhkArticleId = await articleId(nhkId, 'n1');
+    await saveLocalFeeds([
+      { id: oldId, title: 'YT', url: LEGACY_URL },
+      { id: nhkId, title: 'NHK', url: NHK_URL },
+    ]);
+    await putLocalArticles([
+      rec(videoArticleId, {
+        feed_id: oldId, link: WATCH, is_read: true,
+        read_at: '2026-11-12T00:00:00.000Z', play_pos: 77,
+        audio_url: 'https://example.com/vid1.mp3', duration_sec: 321,
+        fetched_at: '2026-11-10T00:00:00.000Z',
+      }),
+      rec(weirdArticleId, {
+        feed_id: oldId, link: WEIRD, is_read: true,
+        read_at: '2026-11-12T00:00:00.000Z', play_pos: 5,
+        fetched_at: '2026-11-10T00:00:00.000Z',
+      }),
+      rec(nhkArticleId, { feed_id: nhkId, link: 'https://example.com/n1' }),
+    ]);
+    const nhkFeed = { id: nhkId, title: 'NHK', url: NHK_URL };
+
+    // サーバー側がまだ旧形式の間は、付け替えもフラグも起きない。
+    const before = await migrateYouTubeChannelUrlIds([
+      { id: oldId, title: 'YT', url: LEGACY_URL }, nhkFeed,
+    ]);
+    expect(before.complete).toBe(false);
+    await expect(getLocalMeta(YT_CHANNEL_URL_MIGRATED_KEY)).resolves.toBeUndefined();
+    let all = await loadLocalArticles();
+    expect(all.some((a) => a.id === videoArticleId)).toBe(true);
+
+    // サーバーが新形式を返し始めたら付け替える。
+    const result = await migrateYouTubeChannelUrlIds([
+      { id: newId, title: 'YT', url: CHANNEL_URL }, nhkFeed,
+    ]);
+    expect(result).toEqual({ migrated: true, complete: true, rekeyed: 1, staged: 1 });
+    await expect(getLocalMeta(YT_CHANNEL_URL_MIGRATED_KEY)).resolves.toBe(true);
+
+    all = await loadLocalArticles();
+    // 動画 ID が取れる記事は、その場で新しい ID へ。状態と音声情報も保つ。
+    const moved = all.find((a) => a.feed_id === newId);
+    expect(moved).toBeTruthy();
+    expect(moved.id).toBe(await articleId(newId, 'vid1'));
+    expect(moved.is_read).toBe(true);
+    expect(moved.read_at).toBe('2026-11-12T00:00:00.000Z');
+    expect(moved.play_pos).toBe(77);
+    expect(moved.audio_url).toBe('https://example.com/vid1.mp3');
+    expect(moved.duration_sec).toBe(321);
+    expect(all.some((a) => a.id === videoArticleId)).toBe(false);
+    // 動画 ID が取れない記事は旧レコードが消え、状態が付け替えマップへ。
+    expect(all.some((a) => a.id === weirdArticleId)).toBe(false);
+    const transfer = await getLocalMeta(FEED_HASH_TRANSFER_KEY);
+    expect(transfer).toEqual({
+      [transferKey(newId, WEIRD)]: {
+        is_read: true, read_at: '2026-11-12T00:00:00.000Z',
+        play_pos: 5, fetched_at: '2026-11-10T00:00:00.000Z',
+      },
+    });
+    // YouTube 以外のフィードの記事には触らない。
+    expect(all.some((a) => a.id === nhkArticleId && a.feed_id === nhkId)).toBe(true);
+
+    // フラグがあるので二度目は走らない。
+    await expect(migrateYouTubeChannelUrlIds([
+      { id: newId, title: 'YT', url: CHANNEL_URL }, nhkFeed,
+    ])).resolves.toEqual({ migrated: false });
+
+    // 後片付け (このファイルの他テストへ影響を残さない)。
+    await deleteLocalArticles((await loadLocalArticles()).map((a) => a.id));
+    await saveLocalFeeds([]);
+    await setLocalMeta(YT_CHANNEL_URL_MIGRATED_KEY, undefined);
+    await setLocalMeta(FEED_HASH_TRANSFER_KEY, undefined);
+  });
+
+  it('旧形式のフィードが無ければ何もせず完了する', async () => {
+    await saveLocalFeeds([{ id: 'nhk', title: 'NHK', url: NHK_URL }]);
+    const result = await migrateYouTubeChannelUrlIds([{ id: 'nhk', title: 'NHK', url: NHK_URL }]);
+    expect(result).toEqual({ migrated: true, complete: true, rekeyed: 0, staged: 0 });
+    await expect(getLocalMeta(YT_CHANNEL_URL_MIGRATED_KEY)).resolves.toBe(true);
+    await saveLocalFeeds([]);
+    await setLocalMeta(YT_CHANNEL_URL_MIGRATED_KEY, undefined);
   });
 });

@@ -72,6 +72,51 @@ export function isYouTubeChannelUrl(url) {
   );
 }
 
+// YouTube のチャンネル ID を URL から取り出す。疑似フィード形式
+// (videos.xml?channel_id=...) とチャンネルページ形式 (/channel/UC...)
+// の両方に対応し、どちらでもなければ '' を返す。ID の形は
+// isYouTubeChannelUrl と同じ (UC + 10文字以上) にそろえる。
+export function youtubeChannelIdFromUrl(url) {
+  let parsed;
+  try {
+    parsed = new URL(String(url || '').trim());
+  } catch {
+    return '';
+  }
+  const hosts = ['www.youtube.com', 'youtube.com', 'm.youtube.com'];
+  if (!hosts.includes(parsed.hostname)) return '';
+  if (parsed.pathname === '/feeds/videos.xml') {
+    const id = parsed.searchParams.get('channel_id') || '';
+    return /^UC[\w-]{10,}$/.test(id) ? id : '';
+  }
+  const m = parsed.pathname.match(/^\/channel\/(UC[\w-]{10,})(\/.*)?$/);
+  return m ? m[1] : '';
+}
+
+// YouTube の動画 ID を記事リンクから取り出す。watch?v= と youtu.be/ と
+// /shorts/ に対応し、取り出せなければ '' を返す。記事 ID の付け替え
+// (ID = ハッシュ(フィードID + 動画ID)) に使う。
+export function youtubeVideoIdFromLink(link) {
+  let parsed;
+  try {
+    parsed = new URL(String(link || '').trim());
+  } catch {
+    return '';
+  }
+  const hosts = ['www.youtube.com', 'youtube.com', 'm.youtube.com', 'music.youtube.com'];
+  if (parsed.hostname === 'youtu.be') {
+    const id = parsed.pathname.slice(1).split('/')[0];
+    return /^[\w-]+$/.test(id) ? id : '';
+  }
+  if (!hosts.includes(parsed.hostname)) return '';
+  if (parsed.pathname === '/watch') {
+    const id = parsed.searchParams.get('v') || '';
+    return /^[\w-]+$/.test(id) ? id : '';
+  }
+  const m = parsed.pathname.match(/^\/shorts\/([\w-]+)(\/.*)?$/);
+  return m ? m[1] : '';
+}
+
 // 追加時にプロキシ取得をせず、タイトル '' で保存する YouTube 入力の
 // 3形式 (疑似フィード / チャンネルページ / @ハンドル) のいずれか。
 // URL の正規形 (/channel/UC...) への解決とタイトル補完はサーバーが行う。

@@ -5,6 +5,8 @@ import {
   planOrphanArticles,
   articleRecordToView,
   planFeedRekey,
+  planYouTubeChannelPairs,
+  planYouTubeArticleRekey,
   transferKey,
   mergeTransferredState,
   applyTransferredState,
@@ -209,6 +211,115 @@ describe('planFeedRekey (フィードIDのハッシュ化の付け替え計画)'
     const other = { id: 'keep-1', feed_id: 'other', link: 'https://example.com/x' };
     const done = { id: 'keep-2', feed_id: 'already-new', link: 'https://example.com/y' };
     const plan = await planFeedRekey([other, done], { nhk: 'new-id' });
+    expect(plan).toEqual({ puts: [], deletes: [], staged: [] });
+  });
+});
+
+describe('planYouTubeChannelPairs (YouTube URL 形式変更の対応付け)', () => {
+  const UC_A = 'UCxNfaRC6MbAnwSR1Dqqv69A';
+  const UC_B = 'UCgM7BYX7KYMEYfBnZ60OIcw';
+  const legacy = (uc) => `https://www.youtube.com/feeds/videos.xml?channel_id=${uc}`;
+  const channel = (uc) => `https://www.youtube.com/channel/${uc}`;
+  const feed = async (url) => ({ id: await feedIdFromUrl(url), url });
+
+  it('同じチャンネルの旧形式と新形式を対応付ける', async () => {
+    const cached = [await feed(legacy(UC_A)), await feed('https://example.com/rss')];
+    const server = [await feed(channel(UC_A)), await feed('https://example.com/rss')];
+    const plan = planYouTubeChannelPairs(cached, server);
+    expect(plan.complete).toBe(true);
+    expect(plan.idMap).toEqual({ [cached[0].id]: server[0].id });
+  });
+
+  it('チャンネルが違えば対応付けない', async () => {
+    const cached = [await feed(legacy(UC_A))];
+    const server = [await feed(channel(UC_B))];
+    const plan = planYouTubeChannelPairs(cached, server);
+    expect(plan.idMap).toEqual({});
+    // サーバー一覧にそのチャンネル自体が無いので、完了は妨げない。
+    expect(plan.complete).toBe(true);
+  });
+
+  it('サーバー側がまだ旧形式の間は対応付けず、完了にもしない', async () => {
+    const cached = [await feed(legacy(UC_A))];
+    const server = [await feed(legacy(UC_A))];
+    const plan = planYouTubeChannelPairs(cached, server);
+    expect(plan.idMap).toEqual({});
+    expect(plan.complete).toBe(false);
+  });
+
+  it('キャッシュが既に新形式なら対象外で、完了を妨げない', async () => {
+    const cached = [await feed(channel(UC_A))];
+    const server = [await feed(channel(UC_A))];
+    const plan = planYouTubeChannelPairs(cached, server);
+    expect(plan).toEqual({ idMap: {}, complete: true });
+  });
+
+  it('旧形式が無ければ何もしない (complete)', async () => {
+    const plan = planYouTubeChannelPairs(
+      [{ id: 'nhk', url: 'https://example.com/rss' }],
+      [{ id: 'nhk', url: 'https://example.com/rss' }]
+    );
+    expect(plan).toEqual({ idMap: {}, complete: true });
+    expect(planYouTubeChannelPairs([], [])).toEqual({ idMap: {}, complete: true });
+  });
+
+  it('一部だけ新形式でも、旧形式が残るチャンネルがある間は完了にしない', async () => {
+    const cached = [await feed(legacy(UC_A)), await feed(legacy(UC_B))];
+    const server = [await feed(channel(UC_A)), await feed(legacy(UC_B))];
+    const plan = planYouTubeChannelPairs(cached, server);
+    expect(plan.idMap).toEqual({ [cached[0].id]: server[0].id });
+    expect(plan.complete).toBe(false);
+  });
+});
+
+describe('planYouTubeArticleRekey (YouTube 記事の付け替え計画)', () => {
+  const OLD = 'old-feed-id';
+  const NEW = 'new-feed-id';
+  const WATCH = 'https://www.youtube.com/watch?v=vid1';
+
+  it('リンクから動画 ID が取れる記事は ID を計算し直して付け替え、状態と音声情報を保つ', async () => {
+    const record = {
+      id: await articleId(OLD, 'vid1'), feed_id: OLD, title: 'v', link: WATCH,
+      published_at: '2026-11-13T00:00:00.000Z', fetched_at: '2026-11-10T00:00:00.000Z',
+      summary: 's', author: 'a', audio_url: 'https://example.com/v.mp3', duration_sec: 321,
+      is_read: true, read_at: '2026-11-12T00:00:00.000Z', play_pos: 77,
+    };
+    const plan = await planYouTubeArticleRekey([record], { [OLD]: NEW });
+    expect(plan.deletes).toEqual([record.id]);
+    expect(plan.staged).toEqual([]);
+    expect(plan.puts).toEqual([{ ...record, id: await articleId(NEW, 'vid1'), feed_id: NEW }]);
+    expect(plan.puts[0].is_read).toBe(true);
+    expect(plan.puts[0].play_pos).toBe(77);
+    expect(plan.puts[0].audio_url).toBe('https://example.com/v.mp3');
+    expect(plan.puts[0].duration_sec).toBe(321);
+  });
+
+  it('動画 ID が取れないリンクの記事は状態だけを退避し、旧レコードは消す', async () => {
+    const link = 'https://example.com/not-a-video';
+    const record = {
+      id: await articleId(OLD, 'whatever'), feed_id: OLD, title: 'x', link,
+      published_at: '2026-11-13T00:00:00.000Z', fetched_at: '2026-11-10T00:00:00.000Z',
+      summary: '', author: '', is_read: true, read_at: '2026-11-12T00:00:00.000Z', play_pos: 5,
+    };
+    const plan = await planYouTubeArticleRekey([record], { [OLD]: NEW });
+    expect(plan.puts).toEqual([]);
+    expect(plan.deletes).toEqual([record.id]);
+    expect(plan.staged).toEqual([{
+      feedId: NEW,
+      link,
+      state: {
+        is_read: true,
+        read_at: '2026-11-12T00:00:00.000Z',
+        play_pos: 5,
+        fetched_at: '2026-11-10T00:00:00.000Z',
+      },
+    }]);
+  });
+
+  it('対応表に無いフィードと付け替え済みのレコードには触らない', async () => {
+    const other = { id: 'keep-1', feed_id: 'other', link: WATCH };
+    const done = { id: 'keep-2', feed_id: NEW, link: WATCH };
+    const plan = await planYouTubeArticleRekey([other, done], { [OLD]: NEW });
     expect(plan).toEqual({ puts: [], deletes: [], staged: [] });
   });
 });

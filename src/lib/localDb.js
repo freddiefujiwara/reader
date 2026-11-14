@@ -6,6 +6,11 @@
 import { isStagingBuild } from '../staging-banner.js';
 import { articleId } from './articleId.js';
 import { feedIdFromUrl } from './feedHash.js';
+import {
+  isYouTubeFeedUrl,
+  youtubeChannelIdFromUrl,
+  youtubeVideoIdFromLink,
+} from './feedAdmin.js';
 
 export const RETENTION_DAYS = 60;
 export const MAX_ARTICLES = 5000;
@@ -423,4 +428,97 @@ export async function migrateFeedHashIds() {
   if (plan.deletes.length) await deleteLocalArticles(plan.deletes);
   await setLocalMeta(FEED_HASH_MIGRATED_KEY, true);
   return { migrated: true, rekeyed: plan.puts.length, staged: plan.staged.length };
+}
+
+/* ---- YouTube 保存 URL の形式変更 (videos.xml → /channel/) に伴う移行 ---- */
+
+// 移行済みフラグ (meta ストアのキー)。退避状態の置き場は V3 と同じ
+// FEED_HASH_TRANSFER_KEY を使う (取り込み時の復元は既存の仕組みが担う)。
+export const YT_CHANNEL_URL_MIGRATED_KEY = 'ytChannelUrlMigratedV4';
+
+// キャッシュ済みフィード (旧形式) とサーバーの新鮮なフィード一覧
+// (新形式) を、チャンネル ID で対応付ける計画を立てる。
+// 対応付けは「キャッシュ側が videos.xml 形式」かつ「サーバー側に
+// 同じチャンネルの /channel/ 形式がある」場合だけ成立する。
+// complete は「キャッシュ側の旧形式フィードがすべて処理可能」なこと:
+// サーバー側がまだ旧形式のままのチャンネルが残っている間は false で、
+// その間は完了フラグを立てず、次回の更新で付け替えを試し直す。
+// サーバー一覧からチャンネル自体が消えたフィードは移行対象外
+// (残った記事は孤児掃除が落とす) として complete を妨げない。
+export function planYouTubeChannelPairs(cachedFeeds, serverFeeds) {
+  const channelFormByChannel = new Map();
+  const serverChannels = new Set();
+  for (const feed of serverFeeds || []) {
+    const channelId = youtubeChannelIdFromUrl(feed?.url);
+    if (!channelId) continue;
+    serverChannels.add(channelId);
+    if (!isYouTubeFeedUrl(feed.url)) channelFormByChannel.set(channelId, feed);
+  }
+  const idMap = {};
+  let blocked = false;
+  for (const feed of cachedFeeds || []) {
+    if (!feed?.id || !isYouTubeFeedUrl(feed?.url)) continue;
+    const channelId = youtubeChannelIdFromUrl(feed.url);
+    if (!channelId) continue;
+    const target = channelFormByChannel.get(channelId);
+    if (target) {
+      if (target.id && target.id !== feed.id) idMap[feed.id] = target.id;
+    } else if (serverChannels.has(channelId)) {
+      blocked = true;
+    }
+  }
+  return { idMap, complete: !blocked };
+}
+
+// YouTube 記事レコードを旧フィードIDから新フィードIDへ付け替える計画。
+// 記事 ID は (新フィードID + 動画ID) で計算し直せるため、リンクから
+// 動画 ID が取れるレコードは状態 (既読・再生位置・音声情報) を保った
+// まま、その場で付け替える (puts)。動画 ID が取れないレコードは
+// planFeedRekey と同様に状態だけを staged へ退避し、旧レコードは消す。
+export async function planYouTubeArticleRekey(records, idMap) {
+  const puts = [];
+  const deletes = [];
+  const staged = [];
+  for (const record of records || []) {
+    const newId = idMap ? idMap[record.feed_id] : '';
+    if (!newId || newId === record.feed_id) continue;
+    deletes.push(record.id);
+    const videoId = youtubeVideoIdFromLink(record.link);
+    if (videoId) {
+      puts.push({ ...record, id: await articleId(newId, videoId), feed_id: newId });
+    } else {
+      staged.push({
+        feedId: newId,
+        link: record.link,
+        state: {
+          is_read: !!record.is_read,
+          read_at: record.read_at || '',
+          play_pos: record.play_pos || 0,
+          fetched_at: record.fetched_at || '',
+        },
+      });
+    }
+  }
+  return { puts, deletes, staged };
+}
+
+// YouTube の保存 URL 形式変更に伴う移行。サーバー側のシート移行が
+// 済むまではサーバーが旧形式を返し続けるため、完了条件 (計画の
+// complete) を満たすまではフラグを立てず、更新のたびに試し直す。
+// キャッシュが新しい一覧で上書きされる前に呼ぶこと (付け替えの素材は
+// キャッシュ済みの旧形式一覧のため)。付け替え済みレコードは対応表の
+// 対象から外れるので、途中で落ちても二重に付け替えたりはしない。
+export async function migrateYouTubeChannelUrlIds(serverFeeds) {
+  if (await getLocalMeta(YT_CHANNEL_URL_MIGRATED_KEY)) return { migrated: false };
+  const cached = await loadLocalFeeds();
+  const { idMap, complete } = planYouTubeChannelPairs(cached, serverFeeds);
+  const plan = await planYouTubeArticleRekey(await loadLocalArticles(), idMap);
+  if (plan.staged.length) {
+    const current = await getLocalMeta(FEED_HASH_TRANSFER_KEY);
+    await setLocalMeta(FEED_HASH_TRANSFER_KEY, mergeTransferredState(current, plan.staged));
+  }
+  if (plan.puts.length) await putLocalArticles(plan.puts);
+  if (plan.deletes.length) await deleteLocalArticles(plan.deletes);
+  if (complete) await setLocalMeta(YT_CHANNEL_URL_MIGRATED_KEY, true);
+  return { migrated: true, complete, rekeyed: plan.puts.length, staged: plan.staged.length };
 }

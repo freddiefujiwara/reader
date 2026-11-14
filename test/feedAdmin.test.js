@@ -6,6 +6,8 @@ import {
   isYouTubeFeedUrl,
   isYouTubeChannelUrl,
   isYouTubeFeedInput,
+  youtubeChannelIdFromUrl,
+  youtubeVideoIdFromLink,
   planFeedAdd,
   resolveFeedAddForm,
   buildSaveFeedPayload,
@@ -111,6 +113,50 @@ describe('isYouTubeFeedInput (取得を省く YouTube 入力の3形式)', () => 
   it('通常フィードは該当しない', () => {
     expect(isYouTubeFeedInput('https://feeds.rebuild.fm/rebuildfm')).toBe(false);
     expect(isYouTubeFeedInput('')).toBe(false);
+  });
+});
+
+describe('youtubeChannelIdFromUrl (チャンネル ID の抽出)', () => {
+  const UC = 'UCxNfaRC6MbAnwSR1Dqqv69A';
+  it('疑似フィード形式 (videos.xml) から取り出す', () => {
+    expect(youtubeChannelIdFromUrl(`https://www.youtube.com/feeds/videos.xml?channel_id=${UC}`)).toBe(UC);
+    expect(youtubeChannelIdFromUrl(`https://youtube.com/feeds/videos.xml?channel_id=${UC}`)).toBe(UC);
+    expect(youtubeChannelIdFromUrl(`https://m.youtube.com/feeds/videos.xml?channel_id=${UC}`)).toBe(UC);
+  });
+  it('チャンネルページ形式 (/channel/) から取り出す (末尾のパスも許す)', () => {
+    expect(youtubeChannelIdFromUrl(`https://www.youtube.com/channel/${UC}`)).toBe(UC);
+    expect(youtubeChannelIdFromUrl(`https://www.youtube.com/channel/${UC}/videos`)).toBe(UC);
+    expect(youtubeChannelIdFromUrl(`https://www.youtube.com/channel/${UC}/`)).toBe(UC);
+  });
+  it('どちらの形式でもなければ空文字', () => {
+    expect(youtubeChannelIdFromUrl('https://www.youtube.com/@rakutentech')).toBe('');
+    expect(youtubeChannelIdFromUrl('https://www.youtube.com/feeds/videos.xml')).toBe('');
+    expect(youtubeChannelIdFromUrl('https://www.youtube.com/feeds/videos.xml?channel_id=UCx')).toBe('');
+    expect(youtubeChannelIdFromUrl('https://www.youtube.com/channel/UCx')).toBe('');
+    expect(youtubeChannelIdFromUrl(`https://example.com/channel/${UC}`)).toBe('');
+    expect(youtubeChannelIdFromUrl('https://feeds.rebuild.fm/rebuildfm')).toBe('');
+    expect(youtubeChannelIdFromUrl('not-a-url')).toBe('');
+    expect(youtubeChannelIdFromUrl('')).toBe('');
+  });
+});
+
+describe('youtubeVideoIdFromLink (動画 ID の抽出)', () => {
+  it('watch?v= から取り出す (追加パラメータがあってもよい)', () => {
+    expect(youtubeVideoIdFromLink('https://www.youtube.com/watch?v=dQw4w9WgXcQ')).toBe('dQw4w9WgXcQ');
+    expect(youtubeVideoIdFromLink('https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42s')).toBe('dQw4w9WgXcQ');
+    expect(youtubeVideoIdFromLink('https://m.youtube.com/watch?v=dQw4w9WgXcQ')).toBe('dQw4w9WgXcQ');
+  });
+  it('youtu.be と /shorts/ からも取り出す', () => {
+    expect(youtubeVideoIdFromLink('https://youtu.be/dQw4w9WgXcQ')).toBe('dQw4w9WgXcQ');
+    expect(youtubeVideoIdFromLink('https://www.youtube.com/shorts/dQw4w9WgXcQ')).toBe('dQw4w9WgXcQ');
+  });
+  it('動画リンクでなければ空文字', () => {
+    expect(youtubeVideoIdFromLink('https://www.youtube.com/watch')).toBe('');
+    expect(youtubeVideoIdFromLink('https://www.youtube.com/channel/UCxNfaRC6MbAnwSR1Dqqv69A')).toBe('');
+    expect(youtubeVideoIdFromLink('https://example.com/watch?v=dQw4w9WgXcQ')).toBe('');
+    expect(youtubeVideoIdFromLink('https://example.com/some/article')).toBe('');
+    expect(youtubeVideoIdFromLink('not-a-url')).toBe('');
+    expect(youtubeVideoIdFromLink('')).toBe('');
   });
 });
 
