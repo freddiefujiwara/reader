@@ -406,7 +406,11 @@ const mappingOn = computed(() => durationMismatch(trueDuration.value, duration.v
   && (mappingCtx.value.model === 'direct' || mappingCtx.value.model === 'scaled'));
 
 const displayDuration = computed(() => {
-  if (mappingOn.value) return trueDuration.value;
+  // 正しい長さが分かっていて要素の報告とずれているなら、モデルの
+  // 実測を待たずに合計時間だけは最初から正しい長さを表示する。
+  // 位置とシークの変換は従来どおり、モデルが決まるまでは要素
+  // スケールのまま (mappingOn / mappingCtx が担う)。
+  if (durationMismatch(trueDuration.value, duration.value)) return trueDuration.value;
   if (Number.isFinite(duration.value) && duration.value > 0) return duration.value;
   return currentEpisode.value?.durationSec || 0;
 });
@@ -494,17 +498,22 @@ function updateMediaSession(article) {
 // エピソードを Audio 要素へ載せて再生する共通処理。キューは触らない。
 function loadEpisode(article) {
   savePlayPos();
-  currentEpisode.value = article;
+  // 渡された記事は描画時点 (またはキュー固定時点) の控えで、その後の
+  // 更新で durationSec / audioUrl が埋まっても古いままのことがある。
+  // 開始時に状態側の最新を id で引き直し、見つからなければ渡された
+  // ものをそのまま使う。
+  const ep = state.value.articles.find((a) => a.id === article.id) || article;
+  currentEpisode.value = ep;
   duration.value = 0;
   currentTime.value = 0;
   measuredModel = null;
   rateSample = null;
   endFlowDone = false;
   isLoading.value = true;
-  pendingSeek = playPosMemory.has(article.id) ? playPosMemory.get(article.id) : (article.playPos || 0);
-  audio.src = article.audioUrl;
+  pendingSeek = playPosMemory.has(ep.id) ? playPosMemory.get(ep.id) : (ep.playPos || 0);
+  audio.src = ep.audioUrl;
   audio.playbackRate = speed.value;
-  updateMediaSession(article);
+  updateMediaSession(ep);
   tryPlayAudio();
 }
 
@@ -1308,7 +1317,7 @@ onMounted(async () => {
             :aria-label="isLoading ? '読み込み中' : (isPlaying ? '一時停止' : '再生')"
             @click="togglePlay"
           >
-            <span v-if="isLoading" class="player-spinner" aria-hidden="true"></span>
+            <span v-if="isLoading" class="player-loading" aria-hidden="true">…</span>
             <svg v-else-if="isPlaying" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h4v14H6zM14 5h4v14h-4z" /></svg>
             <svg v-else viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>
           </button>
