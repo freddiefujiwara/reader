@@ -11,6 +11,7 @@ import {
   setLocalArticlePlayPos,
   clearLocalArticlePlayPos,
   markLocalArticlesRead,
+  ingestFeedArticles,
   getLocalMeta,
   setLocalMeta,
   planUpserts,
@@ -106,6 +107,105 @@ describe('再生位置の保存', () => {
     await setLocalArticlePlayPos('no-such-episode', 60);
     const all = await loadLocalArticles();
     expect(all.some((a) => a.id === 'no-such-episode')).toBe(false);
+  });
+});
+
+describe('ingestFeedArticles (取り込みは書き込み時点で最新状態とマージする)', () => {
+  const FEED = { id: 'ingest-feed', title: 'Ingest' };
+  const FETCHED1 = '2026-11-14T01:00:00.000Z';
+  const FETCHED2 = '2026-11-14T06:00:00.000Z';
+  const READ_AT = '2026-11-14T02:00:00.000Z';
+  const makeEntries = (titlePrefix = 'title') => ['a1', 'a2', 'a3'].map((g) => ({
+    guid: g,
+    title: `${titlePrefix}-${g}`,
+    link: `https://example.com/${g}`,
+    publishedAt: '2026-11-13T00:00:00.000Z',
+    summary: '',
+    author: '',
+    audioUrl: `https://example.com/${g}.mp3`,
+    durationSec: 600,
+  }));
+  const idOf = (g) => articleId(FEED.id, g);
+  const rowsOfFeed = async () =>
+    (await loadLocalArticles()).filter((a) => a.feed_id === FEED.id);
+  const cleanup = async () => {
+    const rows = await rowsOfFeed();
+    await deleteLocalArticles(rows.map((a) => a.id));
+  };
+
+  it('取り込み後に付けた既読は、次の取り込みで巻き戻らない', async () => {
+    await cleanup();
+    await ingestFeedArticles(FEED, makeEntries(), FETCHED1, null);
+    let rows = await rowsOfFeed();
+    expect(rows.length).toBe(3);
+    expect(rows.every((a) => !a.is_read)).toBe(true);
+
+    // 取得の合間に「すべて既読」が走った状況を再現する。
+    await markLocalArticlesRead(rows.map((a) => a.id), READ_AT);
+
+    await ingestFeedArticles(FEED, makeEntries(), FETCHED2, null);
+    rows = await rowsOfFeed();
+    expect(rows.length).toBe(3);
+    expect(rows.every((a) => a.is_read)).toBe(true);
+    expect(rows.every((a) => a.read_at === READ_AT)).toBe(true);
+    await cleanup();
+  });
+
+  it('取り込み後に保存した再生位置は、次の取り込みで巻き戻らない', async () => {
+    await cleanup();
+    await ingestFeedArticles(FEED, makeEntries(), FETCHED1, null);
+    const target = await idOf('a1');
+    await setLocalArticlePlayPos(target, 321);
+
+    // メタデータが変わったエントリで取り込み直しても、状態は保たれる。
+    await ingestFeedArticles(FEED, makeEntries('renamed'), FETCHED2, null);
+    const rows = await rowsOfFeed();
+    const row = rows.find((a) => a.id === target);
+    expect(row.play_pos).toBe(321);
+    expect(row.title).toBe('renamed-a1');
+    expect(rows.filter((a) => a.id !== target).every((a) => a.play_pos === 0)).toBe(true);
+    await cleanup();
+  });
+
+  it('既読化→取り込み→既読化の順でも、既読は既読のまま保たれる', async () => {
+    await cleanup();
+    await ingestFeedArticles(FEED, makeEntries(), FETCHED1, null);
+    const first = await idOf('a1');
+    const second = await idOf('a2');
+    await markLocalArticlesRead([first], READ_AT);
+    await ingestFeedArticles(FEED, makeEntries(), FETCHED2, null);
+    await markLocalArticlesRead([second], READ_AT);
+    await ingestFeedArticles(FEED, makeEntries(), FETCHED2, null);
+    const rows = await rowsOfFeed();
+    expect(rows.find((a) => a.id === first).is_read).toBe(true);
+    expect(rows.find((a) => a.id === second).is_read).toBe(true);
+    expect(rows.find((a) => a.id !== first && a.id !== second).is_read).toBe(false);
+    await cleanup();
+  });
+
+  it('付け替え状態は新規レコードへだけ戻り、既存レコードは上書きしない', async () => {
+    await cleanup();
+    const transfer = {
+      [transferKey(FEED.id, 'https://example.com/a1')]: {
+        is_read: true, read_at: '2026-11-12T00:00:00.000Z',
+        play_pos: 77, fetched_at: '2026-11-10T00:00:00.000Z',
+      },
+    };
+    const { consumedKeys } = await ingestFeedArticles(FEED, makeEntries(), FETCHED1, transfer);
+    expect(consumedKeys).toEqual([transferKey(FEED.id, 'https://example.com/a1')]);
+    let rows = await rowsOfFeed();
+    const restored = rows.find((a) => a.link === 'https://example.com/a1');
+    expect(restored.is_read).toBe(true);
+    expect(restored.play_pos).toBe(77);
+    expect(restored.fetched_at).toBe('2026-11-10T00:00:00.000Z');
+
+    // 同じマップが残っていても、既存レコードの新しい状態は守られる。
+    await setLocalArticleRead(restored.id, false, '');
+    const again = await ingestFeedArticles(FEED, makeEntries(), FETCHED2, transfer);
+    expect(again.consumedKeys).toEqual([]);
+    rows = await rowsOfFeed();
+    expect(rows.find((a) => a.id === restored.id).is_read).toBe(false);
+    await cleanup();
   });
 });
 

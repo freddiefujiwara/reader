@@ -81,6 +81,21 @@ describe('planUpserts', () => {
     expect(updated.duration_sec).toBe(3700);
     expect(updated.play_pos).toBe(120);
   });
+  it('不変条件: 新鮮な既存レコードに対しては既読を未読へ戻さず、再生位置も減らさない', async () => {
+    const id = await articleId('nhk', 'g1');
+    const existing = {
+      [id]: {
+        id, feed_id: 'nhk', title: 'old', link: 'https://example.com/g1',
+        published_at: '2026-11-01T00:00:00.000Z', fetched_at: '2026-11-05T00:00:00.000Z',
+        summary: '', author: '', audio_url: 'https://example.com/g1.mp3', duration_sec: 100,
+        play_pos: 55, is_read: true, read_at: '2026-11-06T00:00:00.000Z',
+      },
+    };
+    const [record] = await planUpserts(existing, [entry('g1')], FEED, FETCHED);
+    expect(record.is_read).toBe(true);
+    expect(record.read_at).toBe('2026-11-06T00:00:00.000Z');
+    expect(record.play_pos).toBe(55);
+  });
   it('guid が空ならリンクでIDを作る', async () => {
     const records = await planUpserts({}, [entry('', { link: 'https://example.com/only-link' })], FEED, FETCHED);
     expect(records[0].id).toBe(await articleId('nhk', 'https://example.com/only-link'));
