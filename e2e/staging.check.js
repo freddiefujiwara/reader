@@ -25,6 +25,11 @@ test("reader staging page loads with banner and sign-in gate", async ({ page }) 
   await expect(page.getByText("スター", { exact: true })).toHaveCount(0);
   await expect(page.locator(".star-btn")).toHaveCount(0);
   await expect(page.locator(".view-tabs")).toHaveCount(0);
+  // The feed-management form (incl. URL-only add) is owner-only, so the
+  // signed-out shell must not render it. Its behavior is pinned by unit
+  // tests (feedAdmin/feedId/feedParse); the real add flow is verified on
+  // production after merge by registering a feed by URL only.
+  await expect(page.locator(".feed-form")).toHaveCount(0);
   expect(errors).toEqual([]);
 });
 
