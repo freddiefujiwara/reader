@@ -29,6 +29,7 @@ import {
   markAllReadInList,
   patchArticle,
   visibleArticles,
+  visibleFeedChips,
 } from './lib/listState.js';
 import { formatPublishedAt } from './lib/format.js';
 
@@ -68,6 +69,7 @@ const visible = computed(() => visibleArticles(state.value));
 const unreadTotalCount = computed(() =>
   state.value.feeds.reduce((n, f) => n + (f.unreadCount || 0), 0)
 );
+const chipFeeds = computed(() => visibleFeedChips(state.value));
 const hasMore = computed(() => state.value.articles.length < state.value.total);
 
 const FILTERS = [
@@ -462,7 +464,7 @@ onMounted(async () => {
             @click="setFeed('')"
           >すべて</button>
           <button
-            v-for="f in state.feeds"
+            v-for="f in chipFeeds"
             :key="f.id"
             type="button"
             class="chip"

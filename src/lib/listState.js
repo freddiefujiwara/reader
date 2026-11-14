@@ -61,3 +61,12 @@ export function markAllReadInList(state, feedId = '') {
   });
   return { ...state, articles, feeds };
 }
+
+// フィードチップの表示対象。未読フィルタのときは未読があるフィードだけに
+// 絞る (未読ゼロなら「すべて」だけが残る)。ただし選択中のフィードは、
+// 未読がゼロでも行き場が無くならないよう残す。
+export function visibleFeedChips(state) {
+  const feeds = Array.isArray(state?.feeds) ? state.feeds : [];
+  if (state?.filter !== 'unread') return feeds;
+  return feeds.filter((f) => (f.unreadCount || 0) > 0 || f.id === state.feedId);
+}
