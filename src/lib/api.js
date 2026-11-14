@@ -62,7 +62,7 @@ export function listArticles(sessionToken, { feedId = '', category = '', filter 
 }
 
 // フィード管理の一覧 (オーナーセッションのみ)。
-// -> { ok, feeds: [{id, title, url, category, enabled, isPrivate,
+// -> { ok, feeds: [{id, title, url, category, isPrivate,
 //     lastStatus, lastError, lastFetchedAt, unreadCount}] }
 export function listFeeds(sessionToken, opts) {
   return postJson({ action: 'listFeeds', sessionToken }, opts);

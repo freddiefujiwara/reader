@@ -7,7 +7,6 @@ import {
   planFeedAdd,
   resolveFeedAddForm,
   buildSaveFeedPayload,
-  toggleEnabledPayload,
   formatFeedStatus,
   moveFeedOrder,
   createOrderSender,
@@ -17,7 +16,7 @@ describe('createFeedForm / feedFormFromFeed', () => {
   it('追加フォームは URL とジャンルだけ', () => {
     expect(createFeedForm()).toEqual({ url: '', category: '' });
   });
-  it('編集フォームは表示用の ID / タイトル / URL と、編集用のジャンル・有効を持つ', () => {
+  it('編集フォームは表示用の ID / タイトル / URL と、編集用のジャンルだけを持つ', () => {
     const feed = {
       id: 'nhk',
       title: 'NHK',
@@ -32,15 +31,14 @@ describe('createFeedForm / feedFormFromFeed', () => {
       title: 'NHK',
       url: 'https://example.com/rss',
       category: 'news',
-      enabled: false,
     });
   });
-  it('enabled が未定義のフィードは有効として扱う', () => {
-    const form = feedFormFromFeed({ id: 'x', title: 'X', url: 'https://example.com/f', category: '' });
-    expect(form.enabled).toBe(true);
+  it('フィードに enabled があってもフォームには持ち込まない', () => {
+    const form = feedFormFromFeed({ id: 'x', title: 'X', url: 'https://example.com/f', category: '', enabled: false });
+    expect('enabled' in form).toBe(false);
   });
-  it('null フィードでも空フォームになる (enabled は有効)', () => {
-    expect(feedFormFromFeed(null)).toEqual({ id: '', title: '', url: '', category: '', enabled: true });
+  it('null フィードでも空フォームになる', () => {
+    expect(feedFormFromFeed(null)).toEqual({ id: '', title: '', url: '', category: '' });
   });
 });
 
@@ -110,7 +108,7 @@ describe('resolveFeedAddForm (取得結果でタイトルを決める)', () => {
 });
 
 describe('buildSaveFeedPayload', () => {
-  it('新規は ID を送らず、enabled=true / isPrivate=false (空白は落とす)', () => {
+  it('新規は ID を送らず、isPrivate=false (空白は落とす)', () => {
     const payload = buildSaveFeedPayload({
       title: ' Rebuild ',
       url: ' https://feeds.rebuild.fm/rebuildfm ',
@@ -120,7 +118,6 @@ describe('buildSaveFeedPayload', () => {
       title: 'Rebuild',
       url: 'https://feeds.rebuild.fm/rebuildfm',
       category: 'tech',
-      enabled: true,
       isPrivate: false,
     });
     expect('id' in payload).toBe(false);
@@ -134,7 +131,7 @@ describe('buildSaveFeedPayload', () => {
     expect(payload.title).toBe('');
     expect('id' in payload).toBe(false);
   });
-  it('編集時は ID / タイトル / URL / isPrivate は元を引き継ぎ、ジャンルと enabled をフォームから取る', () => {
+  it('編集時は ID / タイトル / URL / isPrivate は元を引き継ぎ、ジャンルだけをフォームから取る', () => {
     const base = {
       id: 'b81e59da11f890d2',
       title: 'Rebuild',
@@ -152,32 +149,14 @@ describe('buildSaveFeedPayload', () => {
       title: 'Rebuild',
       url: 'https://feeds.rebuild.fm/rebuildfm',
       category: 'new',
-      enabled: false,
       isPrivate: true,
     });
   });
-  it('編集で enabled がフォームに無ければ元の値を保つ', () => {
-    const base = { id: 'x', title: 'X', url: 'https://example.com/f', enabled: false, isPrivate: false };
-    const payload = buildSaveFeedPayload({ category: 'news' }, base);
-    expect(payload.enabled).toBe(false);
-  });
-});
-
-describe('toggleEnabledPayload', () => {
-  it('有効→無効、他のフィールドはそのまま', () => {
-    const feed = {
-      id: 'nhk',
-      title: 'NHK',
-      url: 'https://example.com/rss',
-      category: 'news',
-      enabled: true,
-      isPrivate: false,
-    };
-    expect(toggleEnabledPayload(feed)).toEqual({ ...feed, enabled: false });
-  });
-  it('無効→有効', () => {
-    const feed = { id: 'x', title: 'X', url: 'https://example.com/f', category: '', enabled: false, isPrivate: true };
-    expect(toggleEnabledPayload(feed)).toEqual({ ...feed, enabled: true });
+  it('編集でフォームに enabled があってもペイロードには含めない', () => {
+    const base = { id: 'x', title: 'X', url: 'https://example.com/f', category: 'old', isPrivate: false };
+    const payload = buildSaveFeedPayload({ category: 'news', enabled: false }, base);
+    expect('enabled' in payload).toBe(false);
+    expect(payload.category).toBe('news');
   });
 });
 

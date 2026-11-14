@@ -12,14 +12,13 @@ export function createFeedForm() {
 }
 
 // 編集フォーム初期値。ID / タイトル / URL は表示専用 (変更できない)、
-// ジャンルと有効/無効だけが編集対象。
+// ジャンルだけが編集対象。
 export function feedFormFromFeed(feed) {
   return {
     id: feed?.id || '',
     title: feed?.title || '',
     url: feed?.url || '',
     category: feed?.category || '',
-    enabled: feed ? feed.enabled !== false : true,
   };
 }
 
@@ -79,9 +78,9 @@ export function resolveFeedAddForm(form, { xml = '' } = {}) {
 
 // saveFeed へ送る feed オブジェクトを組み立てる。
 // 新規 (base なし): ID は送らない (サーバーが URL から決める)。
-// enabled=true / isPrivate=false (isPrivate はサーバーが URL から決める)。
+// isPrivate=false (isPrivate はサーバーが URL から決める)。
 // 編集 (base あり): ID / タイトル / URL は元のフィードのまま、
-// ジャンルと enabled だけをフォームから反映する。
+// ジャンルだけをフォームから反映する。
 export function buildSaveFeedPayload(form, base = null) {
   if (base) {
     return {
@@ -89,7 +88,6 @@ export function buildSaveFeedPayload(form, base = null) {
       title: base.title || '',
       url: base.url || '',
       category: String(form?.category || '').trim(),
-      enabled: form?.enabled !== undefined ? !!form.enabled : base.enabled !== false,
       isPrivate: base.isPrivate === true,
     };
   }
@@ -97,20 +95,7 @@ export function buildSaveFeedPayload(form, base = null) {
     title: String(form?.title || '').trim(),
     url: String(form?.url || '').trim(),
     category: String(form?.category || '').trim(),
-    enabled: true,
     isPrivate: false,
-  };
-}
-
-// 有効/無効トグルの保存ペイロード (他フィールドはそのまま、enabled だけ反転)。
-export function toggleEnabledPayload(feed) {
-  return {
-    id: feed.id,
-    title: feed.title || '',
-    url: feed.url || '',
-    category: feed.category || '',
-    enabled: feed.enabled === false,
-    isPrivate: feed.isPrivate === true,
   };
 }
 
