@@ -4,23 +4,39 @@
 // JSON 文字列を送る (サーバー側は postData.contents を JSON.parse する)。
 import { API_URL } from '../config.js';
 
-export async function postJson(body, { fetcher = fetch, apiUrl = API_URL } = {}) {
+// fetch のネットワーク失敗 (Safari の "Load failed" など) は TypeError で来る。
+// 端末がスリープから復帰した直後の最初のリクエストがこれで落ちやすい。
+function isRetryable(err) {
+  if (err instanceof TypeError) return true;
+  return /^HTTP 5\d\d$/.test(String((err && err.message) || ''));
+}
+
+export async function postJson(body, { fetcher = fetch, apiUrl = API_URL, retries = 1, retryDelayMs = 900 } = {}) {
   if (!apiUrl) throw new Error('api_not_configured');
-  const res = await fetcher(apiUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const data = await res.json();
-  if (!data || data.ok !== true) {
-    const err = new Error((data && data.error) || 'api_error');
-    // 検証エラー (invalid) など、サーバーが人間向けの理由を返す場合は
-    // message を別途持たせておき、画面側でそのまま出せるようにする。
-    if (data && typeof data.message === 'string') err.serverMessage = data.message;
-    throw err;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const res = await fetcher(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (!data || data.ok !== true) {
+        const err = new Error((data && data.error) || 'api_error');
+        // 検証エラー (invalid) など、サーバーが人間向けの理由を返す場合は
+        // message を別途持たせておき、画面側でそのまま出せるようにする。
+        if (data && typeof data.message === 'string') err.serverMessage = data.message;
+        throw err;
+      }
+      return data;
+    } catch (err) {
+      // 全 action は冪等 (既読化・保存・削除・並び替え) なので、
+      // ネットワーク失敗と 5xx のときだけ1回だけ送り直す。
+      if (!isRetryable(err) || attempt >= retries) throw err;
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    }
   }
-  return data;
 }
 
 // Google IDトークンをオーナーセッションに交換する。
