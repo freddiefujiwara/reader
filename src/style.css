@@ -862,6 +862,20 @@ button.ghost.active {
   fill: currentColor;
 }
 
+/* データ待ちの間、再生/一時停止アイコンの代わりに出す読み込み表示。 */
+.player-spinner {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 3px solid rgba(255, 255, 255, 0.35);
+  border-top-color: var(--surface);
+  animation: player-spin 0.8s linear infinite;
+}
+
+@keyframes player-spin {
+  to { transform: rotate(360deg); }
+}
+
 /* スキップはテキストではなく、円形の巻き戻し/早送り矢印に
    秒数を重ねたアイコンで出す (他のアイコンと同じ inline SVG)。 */
 .player-skip {

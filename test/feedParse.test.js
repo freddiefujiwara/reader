@@ -238,6 +238,25 @@ describe('parseFeedXml (ポッドキャスト: enclosure と duration)', () => {
     const [entry] = parseFeedXml(xml, { id: 'pod' });
     expect(entry.durationSec).toBe(3723);
   });
+  it('itunes:duration の整数秒 (reader-gas が出す形) も変換する', () => {
+    const xml = `<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"><channel><item>
+      <title>整数秒</title><link>https://example.com/e</link>
+      <enclosure url="https://example.com/e.m4a" type="audio/x-m4a" />
+      <itunes:duration>104</itunes:duration>
+    </item></channel></rss>`;
+    const [entry] = parseFeedXml(xml, { id: 'pod' });
+    expect(entry.durationSec).toBe(104);
+    expect(entry.audioUrl).toBe('https://example.com/e.m4a');
+  });
+  it('itunes:duration の MM:SS 形式も変換する', () => {
+    const xml = `<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"><channel><item>
+      <title>分秒</title><link>https://example.com/f</link>
+      <enclosure url="https://example.com/f.mp3" type="audio/mpeg" />
+      <itunes:duration>34:53</itunes:duration>
+    </item></channel></rss>`;
+    const [entry] = parseFeedXml(xml, { id: 'pod' });
+    expect(entry.durationSec).toBe(2093);
+  });
   it('Atom の rel="enclosure" リンクを音声にする', () => {
     const xml = `<?xml version="1.0" encoding="utf-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">

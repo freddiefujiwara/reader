@@ -95,6 +95,77 @@ export function nextEpisodePlan({ queue, currentId, repeat = 'none', shuffle = f
   return { type: 'stop' };
 }
 
+/* ---- YouTube 音声の再生時間の二重化への対処 ----
+   itag 140 の fMP4 は、長さの情報が init セグメントの mvhd と断片側の
+   両方に入っており、iOS のプレイヤーが合算して実長の2倍を duration と
+   して返すことがある (実測: 104秒の曲が 208秒と報告された)。RSS の
+   itunes:duration (durationSec) が正しい長さなので、要素の報告と
+   20% 超ずれたら durationSec を正として表示・シークを補正する。
+   要素の currentTime の進み方は端末で測るまで分からないため2モデル:
+     'direct' … currentTime は実メディアの速さで進む (duration だけ二重)
+     'scaled' … currentTime も二重化した時間軸の上を進む (半分の速さ)
+   実測したモデルは端末に保存し、次のエピソードの既定にする。 */
+
+// 要素の duration が、既知の正しい長さ (durationSec) と 20% 超ずれて
+// いるか。どちらか不明なら false (従来どおり要素を信じる)。
+export function durationMismatch(trueSec, elementDuration) {
+  if (!Number.isFinite(trueSec) || trueSec <= 0) return false;
+  if (!Number.isFinite(elementDuration) || elementDuration <= 0) return false;
+  return Math.abs(elementDuration - trueSec) / trueSec > 0.2;
+}
+
+// 実測レート (ΔcurrentTime ÷ (Δ実時間 × 再生速度)) からモデルを判定。
+// 1.5 超なら時間軸ごと伸びている 'scaled'、0.5〜1.5 なら 'direct'。
+// それ以外 (ほぼ止まっている等) は判定不能として null。
+export function classifyRate(rate) {
+  if (!Number.isFinite(rate)) return null;
+  if (rate > 1.5) return 'scaled';
+  if (rate >= 0.5) return 'direct';
+  return null;
+}
+
+// 補正の文脈: { trueSec, elementDuration, model }。model が無ければ
+// 補正しない (恒等) ので、通常のポッドキャストは従来どおりになる。
+function mappingActive(ctx) {
+  return !!ctx && (ctx.model === 'direct' || ctx.model === 'scaled')
+    && durationMismatch(ctx.trueSec, ctx.elementDuration);
+}
+
+// 要素の currentTime → 表示 (正しい長さ基準) の位置。
+export function toDisplayPosition(elementPos, ctx) {
+  const pos = Number.isFinite(elementPos) ? elementPos : 0;
+  if (!mappingActive(ctx)) return pos;
+  if (ctx.model === 'direct') return Math.min(Math.max(0, pos), ctx.trueSec);
+  return Math.min(Math.max(0, pos * (ctx.trueSec / ctx.elementDuration)), ctx.trueSec);
+}
+
+// 表示位置 (シークバーの値・保存する再開位置) → 要素の currentTime。
+export function toElementPosition(displayPos, ctx) {
+  const pos = Number.isFinite(displayPos) ? displayPos : 0;
+  if (!mappingActive(ctx)) return pos;
+  if (ctx.model === 'direct') return Math.min(Math.max(0, pos), ctx.trueSec);
+  return Math.min(Math.max(0, pos * (ctx.elementDuration / ctx.trueSec)), ctx.elementDuration);
+}
+
+// 保存済み再開位置の解釈。旧バージョンは要素スケールで保存していた
+// ため、補正が効いているエピソードで正しい長さを超える値は、要素
+// スケールの値とみなして比率で割り戻す。新しく保存する値は正しい
+// 長さ基準なので trueSec 以下に収まり、そのまま通る。
+export function interpretStoredPlayPos(stored, ctx) {
+  const pos = Number.isFinite(stored) && stored > 0 ? stored : 0;
+  if (!ctx || !durationMismatch(ctx.trueSec, ctx.elementDuration)) return pos;
+  if (pos <= ctx.trueSec) return pos;
+  return pos * (ctx.trueSec / ctx.elementDuration);
+}
+
+// 表示位置が実質の終端 (残り0.3秒以内) に達したか。要素の 'ended' が
+// 来ないケースで終了フローへ進めるための判定。
+export function reachedTrueEnd(displayPos, trueSec) {
+  if (!Number.isFinite(trueSec) || trueSec <= 0) return false;
+  if (!Number.isFinite(displayPos)) return false;
+  return displayPos >= trueSec - 0.3;
+}
+
 /* ---- 再生モードの端末保存 (セッションキーと同じ環境分け) ---- */
 
 export function playModeKey(env) {
@@ -125,5 +196,30 @@ export function savePlayMode(mode, storage = localStorage, env) {
     storage.setItem(playModeKey(env), JSON.stringify(sanePlayMode(mode)));
   } catch {
     // 保存できなくても、その場の再生モード自体は使える。
+  }
+}
+
+/* ---- 実測した時間モデル ('direct' | 'scaled') の端末保存 ---- */
+
+export function timeModelKey(env) {
+  return isStagingBuild(env) ? 'reader:player-timemodel:v1:staging' : 'reader:player-timemodel:v1';
+}
+
+// 保存済みのモデル。未測定・壊れた値は null (その場で測り直す)。
+export function loadTimeModel(storage = localStorage, env) {
+  try {
+    const value = storage.getItem(timeModelKey(env));
+    return value === 'direct' || value === 'scaled' ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveTimeModel(model, storage = localStorage, env) {
+  if (model !== 'direct' && model !== 'scaled') return;
+  try {
+    storage.setItem(timeModelKey(env), model);
+  } catch {
+    // 保存できなくても、その場の補正自体は使える。
   }
 }
