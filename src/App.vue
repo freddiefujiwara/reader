@@ -554,6 +554,13 @@ onMounted(async () => {
         </template>
 
         <div class="bottom-bar">
+          <button
+            v-if="isOwner"
+            class="primary mark-all-btn"
+            type="button"
+            :disabled="savingAll || loading"
+            @click="onMarkAllRead"
+          >すべて既読</button>
           <div class="view-tabs" role="tablist" aria-label="表示切替">
             <button
               v-for="f in FILTERS"
@@ -563,13 +570,6 @@ onMounted(async () => {
               @click="setFilter(f.key)"
             >{{ f.label }}</button>
           </div>
-          <button
-            v-if="isOwner"
-            class="primary mark-all-btn"
-            type="button"
-            :disabled="savingAll || loading"
-            @click="onMarkAllRead"
-          >すべて既読</button>
         </div>
         </template>
 
