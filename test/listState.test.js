@@ -9,6 +9,7 @@ import {
   markAllReadScope,
   visibleFeedChips,
   feedCategories,
+  feedDisplayName,
 } from '../src/lib/listState.js';
 
 const A = (id, feedId, isRead = false) => ({ id, feedId, isRead });
@@ -185,5 +186,21 @@ describe('feedCategories / カテゴリ絞り込み', () => {
     const next = markAllReadInList(state, '', '楽天');
     expect(next.articles.map((x) => x.isRead)).toEqual([true, false]);
     expect(next.feeds.map((f) => f.unreadCount)).toEqual([0, 0, 0, 5]);
+  });
+});
+
+describe('feedDisplayName', () => {
+  it('タイトルがあればそれを出す (前後の空白は落とす)', () => {
+    expect(feedDisplayName({ id: 'x', title: ' NHK ', url: 'https://example.com/rss' })).toBe('NHK');
+  });
+  it('タイトル未取得なら URL のホスト名で代替する', () => {
+    expect(feedDisplayName({ id: 'x', title: '', url: 'https://www.youtube.com/feeds/videos.xml?channel_id=UCx' }))
+      .toBe('www.youtube.com');
+    expect(feedDisplayName({ id: 'x', title: '  ', url: 'https://anchor.fm/s/8c2088c/podcast/rss' }))
+      .toBe('anchor.fm');
+  });
+  it('URL も解釈できなければ ID を出す', () => {
+    expect(feedDisplayName({ id: 'abc123', title: '', url: 'not-a-url' })).toBe('abc123');
+    expect(feedDisplayName(null)).toBe('');
   });
 });

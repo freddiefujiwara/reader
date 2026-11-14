@@ -1,6 +1,17 @@
 import { describe, it, expect } from 'vitest';
-import { planUpserts, planLocalPrune, planOrphanArticles, articleRecordToView } from '../src/lib/localDb.js';
+import {
+  planUpserts,
+  planLocalPrune,
+  planOrphanArticles,
+  articleRecordToView,
+  planFeedRekey,
+  transferKey,
+  mergeTransferredState,
+  applyTransferredState,
+  pruneTransferredState,
+} from '../src/lib/localDb.js';
 import { articleId } from '../src/lib/articleId.js';
+import { feedIdFromUrl } from '../src/lib/feedHash.js';
 
 const FEED = { id: 'nhk', title: 'NHK' };
 const FETCHED = '2026-11-14T01:00:00.000Z';
@@ -135,5 +146,91 @@ describe('planOrphanArticles / articleRecordToView', () => {
       publishedAt: '2026-11-14T00:00:00.000Z', fetchedAt: '2026-11-14T01:00:00.000Z',
       summary: 's', author: 'a', audioUrl: '', durationSec: null, playPos: 0, isRead: true,
     });
+  });
+});
+
+describe('planFeedRekey (フィードIDのハッシュ化の付け替え計画)', () => {
+  const OLD = 'nhk';
+  const URL = 'https://www3.nhk.or.jp/rss/news/cat0.xml';
+
+  it('guid がリンクと同じ記事は ID を計算し直して付け替え、状態を保つ', async () => {
+    const newId = await feedIdFromUrl(URL);
+    const link = 'https://example.com/a/1';
+    const record = {
+      id: await articleId(OLD, link), feed_id: OLD, title: 't', link,
+      published_at: '2026-11-13T00:00:00.000Z', fetched_at: '2026-11-14T00:00:00.000Z',
+      summary: '', author: '', is_read: true, read_at: '2026-11-14T01:00:00.000Z', play_pos: 0,
+    };
+    const plan = await planFeedRekey([record], { [OLD]: newId });
+    expect(plan.deletes).toEqual([record.id]);
+    expect(plan.staged).toEqual([]);
+    expect(plan.puts).toEqual([{ ...record, id: await articleId(newId, link), feed_id: newId }]);
+  });
+
+  it('guid がリンクと違う記事 (YouTube) は状態だけを退避し、旧レコードは消す', async () => {
+    const newId = await feedIdFromUrl('https://www.youtube.com/feeds/videos.xml?channel_id=UCx');
+    const link = 'https://www.youtube.com/watch?v=vid1';
+    const record = {
+      id: await articleId('yt-x', 'vid1'), feed_id: 'yt-x', title: 'v', link,
+      published_at: '2026-11-13T00:00:00.000Z', fetched_at: '2026-11-10T00:00:00.000Z',
+      summary: '', author: '', is_read: true, read_at: '2026-11-12T00:00:00.000Z', play_pos: 77,
+    };
+    const plan = await planFeedRekey([record], { 'yt-x': newId });
+    expect(plan.puts).toEqual([]);
+    expect(plan.deletes).toEqual([record.id]);
+    expect(plan.staged).toEqual([{
+      feedId: newId,
+      link,
+      state: {
+        is_read: true,
+        read_at: '2026-11-12T00:00:00.000Z',
+        play_pos: 77,
+        fetched_at: '2026-11-10T00:00:00.000Z',
+      },
+    }]);
+  });
+
+  it('対応表に無いフィードと付け替え済みのレコードには触らない', async () => {
+    const other = { id: 'keep-1', feed_id: 'other', link: 'https://example.com/x' };
+    const done = { id: 'keep-2', feed_id: 'already-new', link: 'https://example.com/y' };
+    const plan = await planFeedRekey([other, done], { nhk: 'new-id' });
+    expect(plan).toEqual({ puts: [], deletes: [], staged: [] });
+  });
+});
+
+describe('付け替え状態のマップ操作', () => {
+  const state = { is_read: true, read_at: '2026-11-12T00:00:00.000Z', play_pos: 5, fetched_at: '2026-11-10T00:00:00.000Z' };
+
+  it('mergeTransferredState はキー (新ID＋リンク) で合体し、同じキーは上書きする', () => {
+    const merged = mergeTransferredState(null, [{ feedId: 'f1', link: 'https://e/1', state }]);
+    expect(merged).toEqual({ [transferKey('f1', 'https://e/1')]: state });
+    const again = mergeTransferredState(merged, [{ feedId: 'f1', link: 'https://e/1', state: { ...state, play_pos: 9 } }]);
+    expect(again[transferKey('f1', 'https://e/1')].play_pos).toBe(9);
+  });
+
+  it('applyTransferredState は新規レコードへだけ状態を戻し、消費したキーを返す', () => {
+    const transfer = { [transferKey('f1', 'https://e/1')]: state };
+    const fresh = { id: 'new-1', feed_id: 'f1', link: 'https://e/1', is_read: false, read_at: '', play_pos: 0, fetched_at: '2026-11-14T00:00:00.000Z' };
+    const existing = { id: 'new-2', feed_id: 'f1', link: 'https://e/1', is_read: false, read_at: '', play_pos: 0, fetched_at: '2026-11-14T00:00:00.000Z' };
+    const { records, consumedKeys } = applyTransferredState(
+      [fresh, existing], transfer, 'f1', { 'new-2': existing }
+    );
+    expect(records[0]).toEqual({
+      ...fresh, is_read: true, read_at: state.read_at, play_pos: 5, fetched_at: state.fetched_at,
+    });
+    // 既にローカルにあるレコードは退避状態で上書きしない。
+    expect(records[1]).toBe(existing);
+    expect(consumedKeys).toEqual([transferKey('f1', 'https://e/1')]);
+  });
+
+  it('pruneTransferredState は残すフィード分だけを返す', () => {
+    const transfer = {
+      [transferKey('f1', 'https://e/1')]: state,
+      [transferKey('f2', 'https://e/2')]: state,
+    };
+    expect(Object.keys(pruneTransferredState(transfer, new Set(['f2']))))
+      .toEqual([transferKey('f2', 'https://e/2')]);
+    expect(pruneTransferredState(transfer, new Set())).toEqual({});
+    expect(pruneTransferredState(null, new Set(['f1']))).toEqual({});
   });
 });

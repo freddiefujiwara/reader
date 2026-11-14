@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   createFeedForm,
   feedFormFromFeed,
-  validateFeedForm,
   validateFeedUrl,
+  isYouTubeFeedUrl,
   planFeedAdd,
   resolveFeedAddForm,
   buildSaveFeedPayload,
@@ -14,10 +14,10 @@ import {
 } from '../src/lib/feedAdmin.js';
 
 describe('createFeedForm / feedFormFromFeed', () => {
-  it('空フォームは全フィールド空文字', () => {
-    expect(createFeedForm()).toEqual({ id: '', title: '', url: '', category: '' });
+  it('追加フォームは URL とジャンルだけ', () => {
+    expect(createFeedForm()).toEqual({ url: '', category: '' });
   });
-  it('フィードから編集フォームを作る (状態系フィールドは含めない)', () => {
+  it('編集フォームは表示用の ID / タイトル / URL と、編集用のジャンル・有効を持つ', () => {
     const feed = {
       id: 'nhk',
       title: 'NHK',
@@ -32,62 +32,15 @@ describe('createFeedForm / feedFormFromFeed', () => {
       title: 'NHK',
       url: 'https://example.com/rss',
       category: 'news',
+      enabled: false,
     });
   });
-  it('null フィードでも空フォームになる', () => {
-    expect(feedFormFromFeed(null)).toEqual({ id: '', title: '', url: '', category: '' });
+  it('enabled が未定義のフィードは有効として扱う', () => {
+    const form = feedFormFromFeed({ id: 'x', title: 'X', url: 'https://example.com/f', category: '' });
+    expect(form.enabled).toBe(true);
   });
-});
-
-describe('validateFeedForm', () => {
-  const ok = { id: 'nhk-news1', title: 'NHK', url: 'https://example.com/rss', category: 'news' };
-  it('正しい入力は空文字 (問題なし)', () => {
-    expect(validateFeedForm(ok)).toBe('');
-  });
-  it('ID がスラッグでないとエラー (大文字・空白・日本語・先頭ハイフン)', () => {
-    expect(validateFeedForm({ ...ok, id: 'NHK' })).not.toBe('');
-    expect(validateFeedForm({ ...ok, id: 'nhk news' })).not.toBe('');
-    expect(validateFeedForm({ ...ok, id: 'ニュース' })).not.toBe('');
-    expect(validateFeedForm({ ...ok, id: '-nhk' })).not.toBe('');
-    expect(validateFeedForm({ ...ok, id: '' })).not.toBe('');
-  });
-  it('編集時は ID の検証をしない (変更不可のため)', () => {
-    expect(validateFeedForm({ ...ok, id: '何か' }, { isEdit: true })).toBe('');
-  });
-  it('タイトル空はエラー', () => {
-    expect(validateFeedForm({ ...ok, title: '  ' })).not.toBe('');
-  });
-  it('http URL はエラー、https は通る', () => {
-    expect(validateFeedForm({ ...ok, url: 'http://example.com/rss' })).not.toBe('');
-    expect(validateFeedForm({ ...ok, url: 'https://example.com/rss' })).toBe('');
-  });
-  it('URL として解釈できない文字列はエラー', () => {
-    expect(validateFeedForm({ ...ok, url: 'example.com/rss' })).not.toBe('');
-    expect(validateFeedForm({ ...ok, url: '' })).not.toBe('');
-  });
-  it('カテゴリ空は許容する', () => {
-    expect(validateFeedForm({ ...ok, category: '' })).toBe('');
-  });
-});
-
-// ID ルールはサーバー側 (reader-gas の FEED_ID_PATTERN
-// /^[a-z0-9][a-z0-9-]{0,63}$/) と完全一致させる。境界を固定する。
-describe('validateFeedForm ID ルール (サーバーと一致)', () => {
-  const base = { title: 'NHK', url: 'https://example.com/rss', category: 'news' };
-  it('アンダースコアはエラー', () => {
-    expect(validateFeedForm({ ...base, id: 'nhk_news' })).not.toBe('');
-  });
-  it('64文字ちょうどは通る', () => {
-    expect(validateFeedForm({ ...base, id: `a${'b'.repeat(63)}` })).toBe('');
-  });
-  it('65文字はエラー', () => {
-    expect(validateFeedForm({ ...base, id: `a${'b'.repeat(64)}` })).not.toBe('');
-  });
-  it('先頭ハイフンはエラー', () => {
-    expect(validateFeedForm({ ...base, id: '-nhk' })).not.toBe('');
-  });
-  it('大文字はエラー', () => {
-    expect(validateFeedForm({ ...base, id: 'NHK' })).not.toBe('');
+  it('null フィードでも空フォームになる (enabled は有効)', () => {
+    expect(feedFormFromFeed(null)).toEqual({ id: '', title: '', url: '', category: '', enabled: true });
   });
 });
 
@@ -103,24 +56,36 @@ describe('validateFeedUrl', () => {
   });
 });
 
-describe('planFeedAdd (URL だけの登録の要否)', () => {
-  const base = { id: 'nhk', title: 'NHK', url: 'https://example.com/rss', category: '' };
-  it('ID もタイトルも埋まっていれば取得は要らない', () => {
-    expect(planFeedAdd(base)).toEqual({ auto: false, needTitle: false, needId: false });
+describe('isYouTubeFeedUrl (YouTube 疑似フィードの判定)', () => {
+  it('channel_id つきの videos.xml は該当する', () => {
+    expect(isYouTubeFeedUrl('https://www.youtube.com/feeds/videos.xml?channel_id=UCxxxx')).toBe(true);
+    expect(isYouTubeFeedUrl('https://youtube.com/feeds/videos.xml?channel_id=UCxxxx')).toBe(true);
+    expect(isYouTubeFeedUrl('https://m.youtube.com/feeds/videos.xml?channel_id=UCxxxx')).toBe(true);
   });
-  it('タイトルが空 (空白だけも) なら取得が要る', () => {
-    expect(planFeedAdd({ ...base, title: '' })).toEqual({ auto: true, needTitle: true, needId: false });
-    expect(planFeedAdd({ ...base, title: '  ' }).needTitle).toBe(true);
+  it('channel_id が無ければ該当しない', () => {
+    expect(isYouTubeFeedUrl('https://www.youtube.com/feeds/videos.xml')).toBe(false);
+    expect(isYouTubeFeedUrl('https://www.youtube.com/feeds/videos.xml?channel_id=')).toBe(false);
   });
-  it('ID が空なら取得が要る', () => {
-    expect(planFeedAdd({ ...base, id: '' })).toEqual({ auto: true, needTitle: false, needId: true });
-  });
-  it('両方空なら両方要る', () => {
-    expect(planFeedAdd({ ...base, id: '', title: '' })).toEqual({ auto: true, needTitle: true, needId: true });
+  it('通常フィードやチャンネルページは該当しない', () => {
+    expect(isYouTubeFeedUrl('https://feeds.rebuild.fm/rebuildfm')).toBe(false);
+    expect(isYouTubeFeedUrl('https://www.youtube.com/@example')).toBe(false);
+    expect(isYouTubeFeedUrl('not-a-url')).toBe(false);
+    expect(isYouTubeFeedUrl('')).toBe(false);
   });
 });
 
-describe('resolveFeedAddForm (取得結果で空欄を埋める)', () => {
+describe('planFeedAdd (追加の進め方)', () => {
+  it('YouTube 疑似フィードは取得を省く', () => {
+    expect(planFeedAdd({ url: 'https://www.youtube.com/feeds/videos.xml?channel_id=UCx' }))
+      .toEqual({ mode: 'youtube' });
+  });
+  it('それ以外は保存前に取得する', () => {
+    expect(planFeedAdd({ url: 'https://feeds.rebuild.fm/rebuildfm' })).toEqual({ mode: 'fetch' });
+    expect(planFeedAdd({ url: '' })).toEqual({ mode: 'fetch' });
+  });
+});
+
+describe('resolveFeedAddForm (取得結果でタイトルを決める)', () => {
   const RSS = `<rss version="2.0"><channel><title>Rebuild</title>
     <item><title>ep1</title><link>https://feeds.rebuild.fm/ep1</link></item>
   </channel></rss>`;
@@ -129,86 +94,72 @@ describe('resolveFeedAddForm (取得結果で空欄を埋める)', () => {
   </channel></rss>`;
   const url = 'https://feeds.rebuild.fm/rebuildfm';
 
-  it('手入力が揃っていれば XML は見ず、そのまま (空白は落とす)', () => {
-    const resolved = resolveFeedAddForm(
-      { id: ' my-id ', title: ' 手入力 ', url: ` ${url} `, category: ' tech ' },
-      { xml: RSS, takenIds: [] }
-    );
+  it('タイトルはフィードから取り、ID は含めない (空白は落とす)', () => {
+    const resolved = resolveFeedAddForm({ url: ` ${url} `, category: ' tech ' }, { xml: RSS });
     expect(resolved).toEqual({
       ok: true,
-      form: { id: 'my-id', title: '手入力', url, category: 'tech' },
+      form: { url, category: 'tech', title: 'Rebuild' },
     });
+    expect('id' in resolved.form).toBe(false);
   });
-  it('タイトル空はフィードから取り、ID 空は URL から生成する', () => {
-    const resolved = resolveFeedAddForm(
-      { id: '', title: '', url, category: '' },
-      { xml: RSS, takenIds: [] }
-    );
-    expect(resolved.ok).toBe(true);
-    expect(resolved.form.title).toBe('Rebuild');
-    expect(resolved.form.id).toBe('rebuild');
-  });
-  it('タイトルがフィードからも取れなければ ok:false で保存させない', () => {
-    const resolved = resolveFeedAddForm(
-      { id: '', title: '', url, category: '' },
-      { xml: NO_TITLE, takenIds: [] }
-    );
+  it('タイトルがフィードから取れなければ ok:false で保存させない', () => {
+    const resolved = resolveFeedAddForm({ url, category: '' }, { xml: NO_TITLE });
     expect(resolved.ok).toBe(false);
     expect(resolved.message).toContain('タイトル');
-  });
-  it('ID が手入力されていればそれを保ち、タイトルだけ自動で取る', () => {
-    const resolved = resolveFeedAddForm(
-      { id: 'rebuild-fm', title: '', url, category: '' },
-      { xml: RSS, takenIds: [] }
-    );
-    expect(resolved.ok).toBe(true);
-    expect(resolved.form.id).toBe('rebuild-fm');
-    expect(resolved.form.title).toBe('Rebuild');
-  });
-  it('タイトルが手入力されていればフィードのタイトルで上書きしない', () => {
-    const resolved = resolveFeedAddForm(
-      { id: '', title: '自分の題名', url, category: '' },
-      { xml: RSS, takenIds: [] }
-    );
-    expect(resolved.ok).toBe(true);
-    expect(resolved.form.title).toBe('自分の題名');
-    expect(resolved.form.id).toBe('rebuild');
-  });
-  it('生成 ID が既存と重なれば連番で避ける', () => {
-    const resolved = resolveFeedAddForm(
-      { id: '', title: '', url, category: '' },
-      { xml: RSS, takenIds: ['rebuild'] }
-    );
-    expect(resolved.ok).toBe(true);
-    expect(resolved.form.id).toBe('rebuild-2');
   });
 });
 
 describe('buildSaveFeedPayload', () => {
-  it('新規は enabled=true / isPrivate=false で、前後の空白を落とす', () => {
+  it('新規は ID を送らず、enabled=true / isPrivate=false (空白は落とす)', () => {
     const payload = buildSaveFeedPayload({
-      id: ' nhk ',
-      title: ' NHK ',
-      url: ' https://example.com/rss ',
-      category: ' news ',
+      title: ' Rebuild ',
+      url: ' https://feeds.rebuild.fm/rebuildfm ',
+      category: ' tech ',
     });
     expect(payload).toEqual({
-      id: 'nhk',
-      title: 'NHK',
-      url: 'https://example.com/rss',
-      category: 'news',
+      title: 'Rebuild',
+      url: 'https://feeds.rebuild.fm/rebuildfm',
+      category: 'tech',
       enabled: true,
       isPrivate: false,
     });
+    expect('id' in payload).toBe(false);
   });
-  it('編集時は元の enabled / isPrivate を引き継ぐ', () => {
-    const base = { id: 'mf', enabled: false, isPrivate: true };
+  it('新規 (YouTube) はタイトル空でもそのまま送る', () => {
+    const payload = buildSaveFeedPayload({
+      title: '',
+      url: 'https://www.youtube.com/feeds/videos.xml?channel_id=UCx',
+      category: '',
+    });
+    expect(payload.title).toBe('');
+    expect('id' in payload).toBe(false);
+  });
+  it('編集時は ID / タイトル / URL / isPrivate は元を引き継ぎ、ジャンルと enabled をフォームから取る', () => {
+    const base = {
+      id: 'b81e59da11f890d2',
+      title: 'Rebuild',
+      url: 'https://feeds.rebuild.fm/rebuildfm',
+      category: 'old',
+      enabled: true,
+      isPrivate: true,
+    };
     const payload = buildSaveFeedPayload(
-      { id: 'mf', title: '家計', url: 'https://a.ze.gs/mfcf.xml', category: 'private' },
+      { id: '書き換えたふり', title: '書き換えたふり', url: 'https://evil.example/', category: ' new ', enabled: false },
       base
     );
+    expect(payload).toEqual({
+      id: 'b81e59da11f890d2',
+      title: 'Rebuild',
+      url: 'https://feeds.rebuild.fm/rebuildfm',
+      category: 'new',
+      enabled: false,
+      isPrivate: true,
+    });
+  });
+  it('編集で enabled がフォームに無ければ元の値を保つ', () => {
+    const base = { id: 'x', title: 'X', url: 'https://example.com/f', enabled: false, isPrivate: false };
+    const payload = buildSaveFeedPayload({ category: 'news' }, base);
     expect(payload.enabled).toBe(false);
-    expect(payload.isPrivate).toBe(true);
   });
 });
 

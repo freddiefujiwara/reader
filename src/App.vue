@@ -20,13 +20,13 @@ import {
   planFeedAdd,
   resolveFeedAddForm,
   toggleEnabledPayload,
-  validateFeedForm,
   validateFeedUrl,
 } from './lib/feedAdmin.js';
 import { clearSession, loadSession, saveSession } from './lib/session.js';
 import {
   createListState,
   feedCategories,
+  feedDisplayName,
   markAllReadInList,
   markAllReadScope,
   patchArticle,
@@ -36,6 +36,8 @@ import {
   withUnreadCounts,
 } from './lib/listState.js';
 import {
+  FEED_HASH_TRANSFER_KEY,
+  applyTransferredState,
   articleRecordToView,
   clearLocalArticlePlayPos,
   deleteLocalArticles,
@@ -43,15 +45,18 @@ import {
   loadLocalArticles,
   loadLocalFeeds,
   markLocalArticlesRead,
+  migrateFeedHashIds,
   planLocalPrune,
   planOrphanArticles,
   planUpserts,
+  pruneTransferredState,
   putLocalArticles,
   saveLocalFeeds,
   setLocalArticlePlayPos,
   setLocalArticleRead,
   setLocalMeta,
 } from './lib/localDb.js';
+import { normalizeFeedIds } from './lib/feedHash.js';
 import { fetchAllFeeds, fetchFeedXml } from './lib/feedFetch.js';
 import { formatPublishedAt } from './lib/format.js';
 import { clampSeek, formatTime, nextSpeed, progressRatio } from './lib/player.js';
@@ -100,6 +105,8 @@ const unreadTotalCount = computed(() =>
 );
 const chipFeeds = computed(() => visibleFeedChips(state.value));
 const categoryList = computed(() => feedCategories(state.value.feeds));
+// 管理フォームのジャンル候補: 現在のフィード一覧にあるものを出現順に。
+const genreOptions = computed(() => feedCategories(mgmtFeeds.value));
 const hasMore = computed(() => visible.value.length > displayLimit.value);
 
 const FILTERS = [
@@ -113,7 +120,7 @@ const FILTERS = [
 async function reloadLocal() {
   const [feeds, records] = await Promise.all([loadLocalFeeds(), loadLocalArticles()]);
   const titles = {};
-  feeds.forEach((f) => { titles[f.id] = f.title; });
+  feeds.forEach((f) => { titles[f.id] = feedDisplayName(f); });
   const views = sortArticlesDesc(records.map((r) => articleRecordToView(r, titles[r.feed_id])));
   state.value = { ...state.value, feeds: withUnreadCounts(feeds, views), articles: views };
 }
@@ -154,11 +161,15 @@ async function refreshOnce() {
       }
       // サーバーに届かなくても、ローカルのフィード一覧で取得は続ける。
     }
-    if (listOk) {
-      await saveLocalFeeds(feeds);
-    } else {
-      feeds = await loadLocalFeeds();
-    }
+    if (!listOk) feeds = await loadLocalFeeds();
+    // ローカルでの同一性は URL ハッシュに統一する。サーバー側の移行が
+    // 済むまでは旧IDが返ることがあるが、記事・絞り込み・未読数は
+    // ハッシュ側で揃える (fetchUrl はサーバーのものをそのまま使う)。
+    feeds = await normalizeFeedIds(feeds);
+    // フィードID移行 (初回のみ)。キャッシュを新しい一覧で上書きする
+    // 前に済ませる (移行の素材はキャッシュ済みの旧ID一覧のため)。
+    await migrateFeedHashIds();
+    if (listOk) await saveLocalFeeds(feeds);
 
     // サーバー側で消えたフィードの記事はローカルからも落とす。
     let records = await loadLocalArticles();
@@ -174,11 +185,27 @@ async function refreshOnce() {
     const results = await fetchAllFeeds(feeds.filter((f) => f.enabled !== false));
     const byId = {};
     records.forEach((r) => { byId[r.id] = r; });
+    // ID 移行で退避した状態 (既読・再生位置) を、再取得した記事へ戻す。
+    let transfer = await getLocalMeta(FEED_HASH_TRANSFER_KEY);
+    const hasTransfer = !!transfer && Object.keys(transfer).length > 0;
     for (const result of results) {
       if (!result.ok) continue;
-      const puts = await planUpserts(byId, result.entries, result.feed, fetchedAt);
+      let puts = await planUpserts(byId, result.entries, result.feed, fetchedAt);
+      if (hasTransfer) {
+        const applied = applyTransferredState(puts, transfer, result.feed.id, byId);
+        puts = applied.records;
+        applied.consumedKeys.forEach((key) => { delete transfer[key]; });
+      }
       puts.forEach((r) => { byId[r.id] = r; });
       await putLocalArticles(puts);
+    }
+    if (hasTransfer) {
+      // 取得できたフィード分は付け替え終了。一致しなかった記事は
+      // フィードから外れているので落とす。取得に失敗した分と、
+      // 無効化されていて取得対象外だった分は次回へ残す。
+      const fetchedOkIds = new Set(results.filter((r) => r.ok).map((r) => r.feed.id));
+      const keepIds = new Set(feeds.map((f) => f.id).filter((id) => !fetchedOkIds.has(id)));
+      await setLocalMeta(FEED_HASH_TRANSFER_KEY, pruneTransferredState(transfer, keepIds));
     }
 
     // 既読の初回取り込み (この端末で初回だけ)。取り込めた記事だけ既読にする。
@@ -611,53 +638,12 @@ function closeForm() {
   formError.value = '';
 }
 
-// URL だけの登録 (ID / タイトルが空欄): 通常の取得経路でフィードを
-// 先に読み、タイトルを取り、ID を URL から生成してフォームへ戻す。
-// 取得できない・タイトルが取れない場合は保存せず、手入力を促す
-// (勝手な登録はしない)。成功したら true。
-async function autoFillFeedForm() {
-  const urlInvalid = validateFeedUrl(form.value.url);
-  if (urlInvalid) {
-    formError.value = urlInvalid;
-    return false;
-  }
-  formFetching.value = true;
-  try {
-    const xml = await fetchFeedXml(String(form.value.url || '').trim());
-    const resolved = resolveFeedAddForm(form.value, {
-      xml,
-      takenIds: mgmtFeeds.value.map((f) => f.id),
-    });
-    if (!resolved.ok) {
-      formError.value = resolved.message;
-      return false;
-    }
-    form.value = resolved.form;
-    formError.value = '';
-    return true;
-  } catch (e) {
-    formError.value = `フィードを取得できなかったため、自動で入力できませんでした（${e.message}）。IDとタイトルを入力してください。`;
-    return false;
-  } finally {
-    formFetching.value = false;
-  }
-}
-
-async function submitFeedForm() {
-  if (formSaving.value || formFetching.value) return;
-  const isEdit = formMode.value === 'edit';
-  if (!isEdit && planFeedAdd(form.value).auto) {
-    const filled = await autoFillFeedForm();
-    if (!filled) return;
-  }
-  const invalid = validateFeedForm(form.value, { isEdit });
-  if (invalid) {
-    formError.value = invalid;
-    return;
-  }
+// フォームの保存本体 (追加・編集共通)。成功したらフォームを閉じて
+// 一覧を取り直す。
+async function saveFeedForm(payload) {
   formSaving.value = true;
   try {
-    await saveFeed(session.value.token, buildSaveFeedPayload(form.value, formBase.value));
+    await saveFeed(session.value.token, payload);
     closeForm();
     await loadFeeds();
   } catch (e) {
@@ -667,6 +653,45 @@ async function submitFeedForm() {
   } finally {
     formSaving.value = false;
   }
+}
+
+async function submitFeedForm() {
+  if (formSaving.value || formFetching.value) return;
+  // 編集はジャンルと有効/無効だけ (ID・タイトル・URL は変更できない)。
+  if (formMode.value === 'edit') {
+    await saveFeedForm(buildSaveFeedPayload(form.value, formBase.value));
+    return;
+  }
+  // 追加は URL とジャンルだけ。ID はサーバーが URL から決める。
+  const urlInvalid = validateFeedUrl(form.value.url);
+  if (urlInvalid) {
+    formError.value = urlInvalid;
+    return;
+  }
+  // YouTube 疑似フィードは直接読めないため取得を省き、タイトル '' で
+  // 保存する (タイトルはサーバーが定期取得時に補完する)。
+  if (planFeedAdd(form.value).mode === 'youtube') {
+    await saveFeedForm(buildSaveFeedPayload({ ...form.value, title: '' }));
+    return;
+  }
+  // それ以外は保存前にフィードを取得し、タイトルを自動で決める。
+  // 取得できない・タイトルが取れない場合は保存しない。
+  formFetching.value = true;
+  let resolved;
+  try {
+    const xml = await fetchFeedXml(String(form.value.url || '').trim());
+    resolved = resolveFeedAddForm(form.value, { xml });
+  } catch (e) {
+    formError.value = `フィードを取得できなかったため登録できませんでした（${e.message}）。`;
+    return;
+  } finally {
+    formFetching.value = false;
+  }
+  if (!resolved.ok) {
+    formError.value = resolved.message;
+    return;
+  }
+  await saveFeedForm(buildSaveFeedPayload(resolved.form));
 }
 
 function adoptSession(data) {
@@ -845,7 +870,7 @@ onMounted(async () => {
             class="chip"
             :class="{ active: state.feedId === f.id }"
             @click="setFeed(f.id)"
-          >{{ f.title }}<span v-if="f.unreadCount > 0" class="chip-count">{{ f.unreadCount }}</span></button>
+          >{{ feedDisplayName(f) }}<span v-if="f.unreadCount > 0" class="chip-count">{{ f.unreadCount }}</span></button>
         </div>
 
         </div>
@@ -925,25 +950,18 @@ onMounted(async () => {
 
           <form v-if="formMode" class="panel feed-form" @submit.prevent="submitFeedForm">
             <h2 class="feed-form-title">{{ formMode === 'edit' ? 'フィードを編集' : 'フィードを追加' }}</h2>
-            <div class="field">
-              <label for="feed-id">ID</label>
-              <input
-                id="feed-id"
-                v-model="form.id"
-                type="text"
-                :disabled="formMode === 'edit'"
-                autocomplete="off"
-                placeholder="例: nhk-news"
-              />
-              <p v-if="formMode === 'edit'" class="field-note">IDは変更できません。</p>
-              <p v-else class="field-note">空欄にすると URL から自動で決めます。</p>
-            </div>
-            <div class="field">
-              <label for="feed-title">タイトル</label>
-              <input id="feed-title" v-model="form.title" type="text" autocomplete="off" />
-              <p v-if="formMode === 'add'" class="field-note">空欄にするとフィードから自動で取得します。</p>
-            </div>
-            <div class="field">
+            <template v-if="formMode === 'edit'">
+              <div class="field">
+                <span class="field-label">タイトル</span>
+                <p class="field-static">{{ form.title || '（未取得）' }}</p>
+              </div>
+              <div class="field">
+                <span class="field-label">URL</span>
+                <p class="field-static">{{ form.url }}</p>
+                <p class="field-note">URLは変更できません。変える場合は削除してから追加し直してください。</p>
+              </div>
+            </template>
+            <div v-else class="field">
               <label for="feed-url">URL</label>
               <input
                 id="feed-url"
@@ -952,11 +970,27 @@ onMounted(async () => {
                 autocomplete="off"
                 placeholder="https://example.com/feed.xml"
               />
-              <p class="field-note">a.ze.gs のフィードは自動で「プライベート」扱いになります（切り替えはできません）。</p>
+              <p class="field-note">タイトルはフィードから自動で取得します。a.ze.gs のフィードは自動で「プライベート」扱いになります（切り替えはできません）。</p>
             </div>
             <div class="field">
-              <label for="feed-category">カテゴリ</label>
-              <input id="feed-category" v-model="form.category" type="text" autocomplete="off" placeholder="例: news" />
+              <label for="feed-category">ジャンル</label>
+              <input
+                id="feed-category"
+                v-model="form.category"
+                type="text"
+                autocomplete="off"
+                list="feed-genre-options"
+                placeholder="例: ニュース"
+              />
+              <datalist id="feed-genre-options">
+                <option v-for="c in genreOptions" :key="c" :value="c"></option>
+              </datalist>
+            </div>
+            <div v-if="formMode === 'edit'" class="field">
+              <label class="field-check">
+                <input v-model="form.enabled" type="checkbox" />
+                有効にする
+              </label>
             </div>
             <p v-if="formError" class="error">{{ formError }}</p>
             <div class="form-actions">
@@ -980,7 +1014,7 @@ onMounted(async () => {
               :class="{ 'is-disabled': f.enabled === false }"
             >
               <p class="article-meta">
-                <span class="feed-name">{{ f.title }}</span>
+                <span class="feed-name">{{ feedDisplayName(f) }}</span>
                 <span v-if="f.category">{{ f.category }}</span>
                 <span>未読 {{ f.unreadCount || 0 }}件</span>
                 <span v-if="f.isPrivate" class="private-badge">プライベート</span>

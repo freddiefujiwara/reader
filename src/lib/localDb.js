@@ -5,6 +5,7 @@
 // DB 名はセッションキー (reader:session:v1 / :staging) と同じ環境分けにする。
 import { isStagingBuild } from '../staging-banner.js';
 import { articleId } from './articleId.js';
+import { feedIdFromUrl } from './feedHash.js';
 
 export const RETENTION_DAYS = 60;
 export const MAX_ARTICLES = 5000;
@@ -87,6 +88,97 @@ function articleTime(a) {
 export function planOrphanArticles(articles, feedIds) {
   const live = new Set(feedIds || []);
   return (articles || []).filter((a) => !live.has(a.feed_id)).map((a) => a.id);
+}
+
+/* ---- フィードIDのハッシュ化に伴う移行 ---- */
+
+// 移行済みフラグと、付け替え待ちの状態の置き場 (meta ストアのキー)。
+export const FEED_HASH_MIGRATED_KEY = 'feedHashMigratedV3';
+export const FEED_HASH_TRANSFER_KEY = 'feedHashTransferV3';
+
+// 付け替え状態のキー: 新フィードID＋リンク。記事レコードには guid が
+// 残っていないため、付け替えは (フィード, リンク) で対応付ける。
+export function transferKey(feedId, link) {
+  return `${feedId}\n${link}`;
+}
+
+// 記事レコードを旧フィードIDから新フィードID (idMap: 旧ID -> 新ID) へ
+// 付け替える計画を立てる。記事IDが「旧ID＋リンク」から再現できる
+// レコード (guid がリンクと同一だったもの) は ID を計算し直して
+// そのまま付け替え (puts)、再現できないもの (YouTube のように
+// guid ≠ リンク) は状態だけを staged に退避し、再取得時の取り込みで
+// (フィード, リンク) が一致した記事へ戻す。旧レコードはどちらも消す。
+export async function planFeedRekey(records, idMap) {
+  const puts = [];
+  const deletes = [];
+  const staged = [];
+  for (const record of records || []) {
+    const newId = idMap ? idMap[record.feed_id] : '';
+    if (!newId || newId === record.feed_id) continue;
+    deletes.push(record.id);
+    const fromLink = await articleId(record.feed_id, record.link);
+    if (fromLink === record.id) {
+      puts.push({ ...record, id: await articleId(newId, record.link), feed_id: newId });
+    } else {
+      staged.push({
+        feedId: newId,
+        link: record.link,
+        state: {
+          is_read: !!record.is_read,
+          read_at: record.read_at || '',
+          play_pos: record.play_pos || 0,
+          fetched_at: record.fetched_at || '',
+        },
+      });
+    }
+  }
+  return { puts, deletes, staged };
+}
+
+// staged な付け替え状態を meta のマップへ合体させる (同じキーは上書き)。
+export function mergeTransferredState(map, staged) {
+  const out = { ...(map || {}) };
+  (staged || []).forEach((s) => {
+    out[transferKey(s.feedId, s.link)] = s.state;
+  });
+  return out;
+}
+
+// 取り込み直後のレコードへ、付け替え状態を戻す。既にローカルにある
+// レコード (existingById に居るもの) には触らない。戻せたキーは
+// consumedKeys に返し、呼び出し側がマップから消す。
+export function applyTransferredState(records, transfer, feedId, existingById) {
+  if (!transfer) return { records, consumedKeys: [] };
+  const consumedKeys = [];
+  const out = (records || []).map((record) => {
+    if (existingById && existingById[record.id]) return record;
+    const key = transferKey(feedId, record.link);
+    const state = transfer[key];
+    if (!state) return record;
+    consumedKeys.push(key);
+    return {
+      ...record,
+      is_read: !!state.is_read,
+      read_at: state.read_at || '',
+      play_pos: state.play_pos || 0,
+      fetched_at: state.fetched_at || record.fetched_at,
+    };
+  });
+  return { records: out, consumedKeys };
+}
+
+// 付け替えマップの掃除: keepFeedIds に残すフィード分だけを返す。
+// 取得に成功したフィードは付け替えの機会を終えた (一致しなかった
+// 記事はフィードから外れた) ので落とし、失敗したフィード分は
+// 次回の取得で戻せるよう残す。
+export function pruneTransferredState(transfer, keepFeedIds) {
+  const keep = keepFeedIds instanceof Set ? keepFeedIds : new Set(keepFeedIds || []);
+  const out = {};
+  Object.entries(transfer || {}).forEach(([key, value]) => {
+    const feedId = key.split('\n')[0];
+    if (keep.has(feedId)) out[key] = value;
+  });
+  return out;
 }
 
 // DB レコードを表示用 (listState が扱う camelCase 形) へ変換する。
@@ -262,4 +354,29 @@ export async function setLocalMeta(key, value) {
   const tx = db.transaction('meta', 'readwrite');
   tx.objectStore('meta').put({ key, value });
   await txDone(tx);
+}
+
+// フィードIDのハッシュ化の移行 (新ビルドの初回だけ)。キャッシュ済みの
+// フィード一覧 (旧ID＋URL) から旧ID→新IDの対応を作り、記事を付け替える。
+// フィード一覧のキャッシュが新しい一覧で上書きされる前に呼ぶこと。
+// フラグで守られているので、途中で落ちても次回に安全にやり直せる
+// (付け替え済みレコードは対応表の対象から外れ、二度付け替えしない)。
+export async function migrateFeedHashIds() {
+  if (await getLocalMeta(FEED_HASH_MIGRATED_KEY)) return { migrated: false };
+  const cached = await loadLocalFeeds();
+  const idMap = {};
+  for (const feed of cached) {
+    if (!feed?.id || !feed?.url) continue;
+    const newId = await feedIdFromUrl(feed.url);
+    if (newId && newId !== feed.id) idMap[feed.id] = newId;
+  }
+  const plan = await planFeedRekey(await loadLocalArticles(), idMap);
+  if (plan.staged.length) {
+    const current = await getLocalMeta(FEED_HASH_TRANSFER_KEY);
+    await setLocalMeta(FEED_HASH_TRANSFER_KEY, mergeTransferredState(current, plan.staged));
+  }
+  if (plan.puts.length) await putLocalArticles(plan.puts);
+  if (plan.deletes.length) await deleteLocalArticles(plan.deletes);
+  await setLocalMeta(FEED_HASH_MIGRATED_KEY, true);
+  return { migrated: true, rekeyed: plan.puts.length, staged: plan.staged.length };
 }
