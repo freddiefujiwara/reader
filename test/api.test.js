@@ -58,6 +58,22 @@ describe('postJson', () => {
   it('API URL 未設定なら api_not_configured', async () => {
     await expect(postJson({ action: 'list' }, { fetcher: okFetcher({}), apiUrl: '' })).rejects.toThrow('api_not_configured');
   });
+  it('503 の後に成功したら2回目で回復する', async () => {
+    let calls = 0;
+    const fetcher = vi.fn(async () => {
+      calls++;
+      if (calls === 1) return { ok: false, status: 503, json: async () => ({}) };
+      return { ok: true, status: 200, json: async () => ({ ok: true, value: 3 }) };
+    });
+    const data = await postJson({ action: 'list' }, { fetcher, apiUrl: API, retryDelayMs: 0 });
+    expect(data).toEqual({ ok: true, value: 3 });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+  it('500 が続く場合は2回で諦めて投げる', async () => {
+    const fetcher = vi.fn(async () => ({ ok: false, status: 500, json: async () => ({}) }));
+    await expect(postJson({ action: 'list' }, { fetcher, apiUrl: API, retryDelayMs: 0 })).rejects.toThrow('HTTP 500');
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('action の組み立て', () => {

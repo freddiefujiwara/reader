@@ -49,3 +49,24 @@ describe('save/load/clear', () => {
     expect(loadSession(s, {})).toBeNull();
   });
 });
+
+describe('loadSession / saveSession の境界', () => {
+  it('解釈できない expiresAt は期限切れ扱いにせず読み込む', () => {
+    const s = fakeStorage();
+    s.setItem('reader:session:v1', JSON.stringify({ token: 'tok', role: 'owner', expiresAt: 'not-a-date' }));
+    const loaded = loadSession(s, {});
+    expect(loaded.token).toBe('tok');
+    expect(loaded.expiresAt).toBe('not-a-date');
+  });
+  it('token の無い JSON は null', () => {
+    const s = fakeStorage();
+    s.setItem('reader:session:v1', JSON.stringify({ role: 'owner', expiresAt: null }));
+    expect(loadSession(s, {})).toBeNull();
+  });
+  it('token の無い saveSession は何も書き込まない', () => {
+    const s = fakeStorage();
+    saveSession({ role: 'owner', expiresAt: '2999-01-01T00:00:00.000Z' }, s, {});
+    saveSession(null, s, {});
+    expect(s._map.size).toBe(0);
+  });
+});

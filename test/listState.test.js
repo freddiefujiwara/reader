@@ -140,6 +140,40 @@ describe('feedCategories / カテゴリ絞り込み', () => {
     };
     expect(visibleArticles(state).map((x) => x.id)).toEqual(['1']);
   });
+  it('フィード×未読の重なりで絞る', () => {
+    const state = {
+      feeds, category: '', feedId: 'a', filter: 'unread',
+      articles: [
+        { id: '1', feedId: 'a', isRead: false },
+        { id: '2', feedId: 'a', isRead: true },
+        { id: '3', feedId: 'b', isRead: false },
+      ],
+    };
+    expect(visibleArticles(state).map((x) => x.id)).toEqual(['1']);
+  });
+  it('カテゴリ×フィードの重なり (選択フィードがカテゴリ外なら出ない)', () => {
+    const mk = (category, feedId) => ({
+      feeds, category, feedId, filter: 'all',
+      articles: [
+        { id: '1', feedId: 'a', isRead: false },
+        { id: '2', feedId: 'b', isRead: false },
+      ],
+    });
+    // b は「投資・FIRE」なので、カテゴリ「楽天」とフィード b の両立はしない。
+    expect(visibleArticles(mk('楽天', 'b'))).toEqual([]);
+    expect(visibleArticles(mk('投資・FIRE', 'b')).map((x) => x.id)).toEqual(['2']);
+  });
+  it('カテゴリ×未読の重なりで絞る', () => {
+    const state = {
+      feeds, category: '楽天', feedId: '', filter: 'unread',
+      articles: [
+        { id: '1', feedId: 'a', isRead: false },
+        { id: '2', feedId: 'c', isRead: true },
+        { id: '3', feedId: 'b', isRead: false },
+      ],
+    };
+    expect(visibleArticles(state).map((x) => x.id)).toEqual(['1']);
+  });
   it('markAllReadInList はカテゴリ範囲だけ既読化する', () => {
     const state = {
       feeds, category: '楽天', feedId: '', filter: 'unread',

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseFeedXml, decodeXmlEntities, stripTags, toIsoDate } from '../src/lib/feedParse.js';
+import { parseFeedXml, decodeXmlEntities, stripTags, toIsoDate, summarize } from '../src/lib/feedParse.js';
 
 const RSS2 = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
@@ -92,6 +92,126 @@ describe('parseFeedXml (RSS 1.0 / RDF)', () => {
     expect(entries[0].guid).toBe('https://example.com/rdf/1');
     expect(entries[0].publishedAt).toBe('2026-11-12T00:00:00.000Z');
     expect(entries[0].author).toBe('RDF記者');
+  });
+});
+
+describe('parseFeedXml (変形・壊れた入力への耐性)', () => {
+  it('閉じられていない item からもエントリを取り出す', () => {
+    const xml = `<?xml version="1.0"?>
+<rss version="2.0"><channel>
+  <item><title>閉じ忘れ</title><link>https://example.com/unclosed</link><pubDate>Fri, 14 Nov 2026 00:00:00 GMT</pubDate>
+</channel></rss>`;
+    const entries = parseFeedXml(xml, { id: 'x' });
+    expect(entries.length).toBe(1);
+    expect(entries[0].title).toBe('閉じ忘れ');
+    expect(entries[0].link).toBe('https://example.com/unclosed');
+  });
+  it('入れ子の崩れた要素でもテキストを取り出す', () => {
+    const xml = `<rss version="2.0"><channel><item>
+      <title>壊れた<b>入れ子</title>
+      <link>https://example.com/broken</link>
+    </item></channel></rss>`;
+    const entries = parseFeedXml(xml, { id: 'x' });
+    expect(entries.length).toBe(1);
+    expect(entries[0].title).toBe('壊れた入れ子');
+  });
+  it('コメント・処理命令・DOCTYPE が混ざっても実 item だけを取り出す', () => {
+    const xml = `<?xml version="1.0"?>
+<!DOCTYPE rss>
+<rss version="2.0"><channel>
+  <!-- <item><title>偽物</title><link>https://example.com/fake</link></item> -->
+  <?xml-stylesheet type="text/xsl" href="style.xsl"?>
+  <item><title>本物</title><link>https://example.com/real</link></item>
+</channel></rss>`;
+    const entries = parseFeedXml(xml, { id: 'x' });
+    expect(entries.map((e) => e.title)).toEqual(['本物']);
+  });
+  it('pubDate が無く dc:date だけの item はその日付を使う', () => {
+    const xml = `<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/"><channel><item>
+      <title>dc日付</title><link>https://example.com/dc</link>
+      <dc:date>2026-11-10T05:00:00+09:00</dc:date>
+    </item></channel></rss>`;
+    const [entry] = parseFeedXml(xml, { id: 'x' });
+    expect(entry.publishedAt).toBe('2026-11-09T20:00:00.000Z');
+  });
+  it('RSS の素の author 要素を著者にする', () => {
+    const xml = `<rss version="2.0"><channel><item>
+      <title>著者つき</title><link>https://example.com/a</link>
+      <author>tanaka@example.com (田中)</author>
+    </item></channel></rss>`;
+    const [entry] = parseFeedXml(xml, { id: 'x' });
+    expect(entry.author).toBe('tanaka@example.com (田中)');
+  });
+  it('description が無く content:encoded だけの item はそちらを概要にする', () => {
+    const xml = `<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/"><channel><item>
+      <title>本文のみ</title><link>https://example.com/enc</link>
+      <content:encoded>&lt;p&gt;エンコードされた本文&lt;/p&gt;</content:encoded>
+    </item></channel></rss>`;
+    const [entry] = parseFeedXml(xml, { id: 'x' });
+    expect(entry.summary).toBe('エンコードされた本文');
+  });
+  it('guid があってもリンクの無い item は捨てる', () => {
+    const xml = `<rss version="2.0"><channel>
+      <item><title>リンク無し</title><guid>urn:example:nolink</guid></item>
+      <item><title>リンク有り</title><link>https://example.com/ok</link></item>
+    </channel></rss>`;
+    const entries = parseFeedXml(xml, { id: 'x' });
+    expect(entries.map((e) => e.title)).toEqual(['リンク有り']);
+  });
+  it('タイトルが無い item は (no title) になる', () => {
+    const xml = `<rss version="2.0"><channel><item><link>https://example.com/notitle</link></item></channel></rss>`;
+    const [entry] = parseFeedXml(xml, { id: 'x' });
+    expect(entry.title).toBe('(no title)');
+  });
+});
+
+describe('parseFeedXml (Atom のフォールバック)', () => {
+  const xml = `<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>tag:example.com,2026:norel</id>
+    <title>rel無しリンク</title>
+    <link href="https://example.com/norel" />
+    <published>2026-11-14T00:00:00Z</published>
+  </entry>
+  <entry>
+    <id>tag:example.com,2026:selfonly</id>
+    <title>selfだけ</title>
+    <link rel="self" href="https://example.com/feed.atom" />
+    <updated>2026-11-13T00:00:00Z</updated>
+    <content type="html">&lt;p&gt;内容だけ&lt;/p&gt;</content>
+  </entry>
+  <entry>
+    <id>tag:example.com,2026:single</id>
+    <title>シングルクォート</title>
+    <link rel='alternate' href='https://example.com/single' />
+    <published>2026-11-12T00:00:00Z</published>
+  </entry>
+</feed>`;
+  const entries = parseFeedXml(xml, { id: 'atom2' });
+  it('rel の無い link (自己終了タグ) を採用する', () => {
+    expect(entries.length).toBe(3);
+    expect(entries[0].link).toBe('https://example.com/norel');
+  });
+  it('rel=self だけなら先頭の link へ寄せ、updated と content を使う', () => {
+    expect(entries[1].link).toBe('https://example.com/feed.atom');
+    expect(entries[1].publishedAt).toBe('2026-11-13T00:00:00.000Z');
+    expect(entries[1].summary).toBe('内容だけ');
+  });
+  it('シングルクォートの属性も読める', () => {
+    expect(entries[2].link).toBe('https://example.com/single');
+  });
+});
+
+describe('summarize', () => {
+  it('既定では500文字で切り詰める', () => {
+    expect(summarize('あ'.repeat(600)).length).toBe(500);
+  });
+  it('maxChars を渡すとその長さで切り詰める', () => {
+    expect(summarize('<p>' + 'x'.repeat(100) + '</p>', 10)).toBe('x'.repeat(10));
+  });
+  it('短い文はそのまま返す', () => {
+    expect(summarize('短い')).toBe('短い');
   });
 });
 
