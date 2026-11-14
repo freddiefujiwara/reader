@@ -430,6 +430,20 @@ async function tryShareFromHash() {
   }
 }
 
+// しばらく離れて戻ってきたら、裏で一覧を取り直す (復帰直後の
+// ネットワーク失敗をユーザーの操作ではなく背景更新側で受けるため)。
+let hiddenAt = 0;
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') {
+    hiddenAt = Date.now();
+    return;
+  }
+  if (session.value && view.value === 'timeline' && hiddenAt && Date.now() - hiddenAt > 60_000) {
+    hiddenAt = 0;
+    fetchList();
+  }
+});
+
 onMounted(async () => {
   if (!API_URL) {
     bootError.value = 'データAPIのURLが未設定です（ビルド時の設定待ち）。';
