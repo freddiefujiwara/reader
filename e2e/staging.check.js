@@ -6,6 +6,10 @@ import { test, expect } from "@playwright/test";
 // called; until reader-gas-staging exists the staging preview may read
 // the production API. Login is not performed here (read-only check):
 // with no session the sign-in gate is the expected first screen.
+// v2 note: the timeline UI (view tabs すべて/未読 only, no スター tab,
+// and the header 更新 button) only exists after login, so its shape is
+// pinned by unit tests; here we only assert the signed-out shell has no
+// star affordance left.
 test("reader staging page loads with banner and sign-in gate", async ({ page }) => {
   const errors = [];
   page.on("console", (msg) => {
@@ -18,5 +22,8 @@ test("reader staging page loads with banner and sign-in gate", async ({ page }) 
   await expect(page.getByText("STAGING")).toBeVisible();
   await expect(page.locator(".brand-name")).toHaveText("リーダー");
   await expect(page.getByText("Googleログインが必要です")).toBeVisible();
+  await expect(page.getByText("スター", { exact: true })).toHaveCount(0);
+  await expect(page.locator(".star-btn")).toHaveCount(0);
+  await expect(page.locator(".view-tabs")).toHaveCount(0);
   expect(errors).toEqual([]);
 });

@@ -4,8 +4,6 @@ import {
   exchangeSession,
   exchangeShare,
   listArticles,
-  markArticle,
-  markAllRead,
   listFeeds,
   saveFeed,
   deleteFeed,
@@ -81,24 +79,10 @@ describe('action の組み立て', () => {
     await listArticles('tok', { feedId: 'nhk', filter: 'unread', limit: 50, offset: 50 }, { fetcher: fetcher2, apiUrl: API });
     expect(lastBody(fetcher2)).toEqual({ action: 'list', sessionToken: 'tok', filter: 'unread', limit: 50, offset: 50, feedId: 'nhk' });
   });
-  it('markArticle は指定したパッチだけ送る', async () => {
-    const fetcher = okFetcher({ ok: true });
-    await markArticle('tok', 'a1', { isStarred: true }, { fetcher, apiUrl: API });
-    expect(lastBody(fetcher)).toEqual({ action: 'mark', sessionToken: 'tok', articleId: 'a1', isStarred: true });
-  });
-  it('listArticles / markAllRead は category を送れる', async () => {
+  it('listArticles は category を送れる', async () => {
     const fetcher = okFetcher({ ok: true, articles: [], feeds: [], total: 0 });
     await listArticles('tok', { category: '楽天' }, { fetcher, apiUrl: API });
     expect(lastBody(fetcher)).toEqual({ action: 'list', sessionToken: 'tok', filter: 'all', limit: 50, offset: 0, category: '楽天' });
-    const fetcher2 = okFetcher({ ok: true, marked: 1 });
-    await markAllRead('tok', { category: '楽天' }, { fetcher: fetcher2, apiUrl: API });
-    expect(lastBody(fetcher2)).toEqual({ action: 'markAllRead', sessionToken: 'tok', category: '楽天' });
-  });
-
-  it('markAllRead は feedId 省略で送らない', async () => {
-    const fetcher = okFetcher({ ok: true, marked: 3 });
-    await markAllRead('tok', {}, { fetcher, apiUrl: API });
-    expect(lastBody(fetcher)).toEqual({ action: 'markAllRead', sessionToken: 'tok' });
   });
 });
 

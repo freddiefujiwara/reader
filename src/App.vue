@@ -7,8 +7,6 @@ import {
   exchangeShare,
   listArticles,
   listFeeds,
-  markAllRead,
-  markArticle,
   reorderFeeds,
   saveFeed,
 } from './lib/api.js';
@@ -24,17 +22,39 @@ import {
 } from './lib/feedAdmin.js';
 import { clearSession, loadSession, saveSession } from './lib/session.js';
 import {
-  applyListResponse,
   createListState,
+  feedCategories,
   markAllReadInList,
+  markAllReadScope,
   patchArticle,
+  sortArticlesDesc,
   visibleArticles,
   visibleFeedChips,
-  feedCategories,
+  withUnreadCounts,
 } from './lib/listState.js';
+import {
+  articleRecordToView,
+  deleteLocalArticles,
+  getLocalMeta,
+  loadLocalArticles,
+  loadLocalFeeds,
+  markLocalArticlesRead,
+  planLocalPrune,
+  planOrphanArticles,
+  planUpserts,
+  putLocalArticles,
+  saveLocalFeeds,
+  setLocalArticleRead,
+  setLocalMeta,
+} from './lib/localDb.js';
+import { fetchAllFeeds } from './lib/feedFetch.js';
 import { formatPublishedAt } from './lib/format.js';
 
-const PAGE_SIZE = 50;
+// 画面に出す件数の初期値と「もっと見る」の増分 (v2 は全件ローカルにあるため、
+// サーバー取得ではなく表示ウィンドウを広げるだけ)。
+const DISPLAY_LIMIT = 50;
+// 既読の初回取り込みでサーバーから受け取る上限 (保持上限と同じ)。
+const IMPORT_LIMIT = 5000;
 const year = new Date().getFullYear();
 
 const session = ref(loadSession());
@@ -45,9 +65,9 @@ const bootError = ref('');
 const booting = ref(true);
 const signingIn = ref(false);
 const loading = ref(true);
-const loadingMore = ref(false);
-const savingAll = ref(false);
+const refreshing = ref(false);
 const listError = ref('');
+const displayLimit = ref(DISPLAY_LIMIT);
 const state = ref(createListState());
 const signinEl = ref(null);
 
@@ -67,129 +87,206 @@ const formSaving = ref(false);
 const isReadonly = computed(() => session.value?.role === 'readonly');
 const isOwner = computed(() => session.value?.role === 'owner');
 const visible = computed(() => visibleArticles(state.value));
+const displayArticles = computed(() => visible.value.slice(0, displayLimit.value));
 const unreadTotalCount = computed(() =>
   state.value.feeds.reduce((n, f) => n + (f.unreadCount || 0), 0)
 );
 const chipFeeds = computed(() => visibleFeedChips(state.value));
 const categoryList = computed(() => feedCategories(state.value.feeds));
-const hasMore = computed(() => state.value.articles.length < state.value.total);
+const hasMore = computed(() => visible.value.length > displayLimit.value);
 
 const FILTERS = [
   { key: 'all', label: 'すべて' },
   { key: 'unread', label: '未読' },
-  { key: 'starred', label: 'スター' },
 ];
 
-// 実行中の一覧取得。すべて既読の前に完了を待つため保持する。
-let listInFlight = null;
+/* ---- ローカル (IndexedDB) が表示の正本 ---- */
 
-async function fetchList({ append = false } = {}) {
-  const run = fetchListOnce({ append });
-  listInFlight = run;
-  try {
-    await run;
-  } finally {
-    if (listInFlight === run) listInFlight = null;
-  }
+// DB の中身を state へ読み直す。未読数はローカルの記事から数える。
+async function reloadLocal() {
+  const [feeds, records] = await Promise.all([loadLocalFeeds(), loadLocalArticles()]);
+  const titles = {};
+  feeds.forEach((f) => { titles[f.id] = f.title; });
+  const views = sortArticlesDesc(records.map((r) => articleRecordToView(r, titles[r.feed_id])));
+  state.value = { ...state.value, feeds: withUnreadCounts(feeds, views), articles: views };
 }
 
-async function fetchListOnce({ append = false } = {}) {
+// 背景更新: (a) フィード一覧をサーバーから取り直し、(b) 全フィードを
+// クライアントから取得して取り込む。失敗したフィードは前回の記事を残す。
+// 実行中にもう一度呼ばれたら同じ Promise を返す (多重実行防止)。
+let refreshInFlight = null;
+
+function refreshInBackground() {
+  if (refreshInFlight) return refreshInFlight;
+  const run = refreshOnce();
+  refreshInFlight = run;
+  const clear = () => { if (refreshInFlight === run) refreshInFlight = null; };
+  run.then(clear, clear);
+  return run;
+}
+
+async function refreshOnce() {
   if (!session.value) return;
-  if (append) loadingMore.value = true;
-  else loading.value = true;
+  refreshing.value = true;
   try {
-    const payload = await listArticles(session.value.token, {
-      feedId: state.value.feedId,
-      category: state.value.category,
-      filter: state.value.filter,
-      limit: PAGE_SIZE,
-      offset: append ? state.value.articles.length : 0,
-    });
-    state.value = applyListResponse(state.value, payload, { append });
+    // (a) フィード一覧。既読の初回取り込みがまだなら、その素材も兼ねて
+    // 大きめに取る (取り込みは v1 のサーバー状態を1回だけ引き継ぐため)。
+    let feeds = [];
+    let importPayload = null;
+    let listOk = false;
+    const needImport = !(await getLocalMeta('statesImportedV2'));
+    try {
+      const payload = await listArticles(session.value.token, { limit: needImport ? IMPORT_LIMIT : 1 });
+      if (Array.isArray(payload.feeds)) feeds = payload.feeds;
+      if (needImport) importPayload = payload;
+      listOk = true;
+    } catch (e) {
+      if (e.message === 'unauthorized') {
+        expireSession();
+        return;
+      }
+      // サーバーに届かなくても、ローカルのフィード一覧で取得は続ける。
+    }
+    if (listOk) {
+      await saveLocalFeeds(feeds);
+    } else {
+      feeds = await loadLocalFeeds();
+    }
+
+    // サーバー側で消えたフィードの記事はローカルからも落とす。
+    let records = await loadLocalArticles();
+    const orphanIds = planOrphanArticles(records, feeds.map((f) => f.id));
+    if (orphanIds.length) {
+      await deleteLocalArticles(orphanIds);
+      const dropped = new Set(orphanIds);
+      records = records.filter((r) => !dropped.has(r.id));
+    }
+
+    // (b) 全フィード取得 → 取り込み。無効化されたフィードは取得しない。
+    const fetchedAt = new Date().toISOString();
+    const results = await fetchAllFeeds(feeds.filter((f) => f.enabled !== false));
+    const byId = {};
+    records.forEach((r) => { byId[r.id] = r; });
+    for (const result of results) {
+      if (!result.ok) continue;
+      const puts = await planUpserts(byId, result.entries, result.feed, fetchedAt);
+      puts.forEach((r) => { byId[r.id] = r; });
+      await putLocalArticles(puts);
+    }
+
+    // 既読の初回取り込み (この端末で初回だけ)。取り込めた記事だけ既読にする。
+    if (importPayload) {
+      const readIds = (importPayload.articles || [])
+        .filter((a) => a.isRead)
+        .map((a) => a.id)
+        .filter((id) => byId[id]);
+      await markLocalArticlesRead(readIds, fetchedAt);
+      await setLocalMeta('statesImportedV2', true);
+    }
+
+    // 保持ルール (既読60日・上限) でローカルを掃除する。
+    const pruneIds = planLocalPrune(await loadLocalArticles(), new Date().toISOString());
+    if (pruneIds.length) await deleteLocalArticles(pruneIds);
+
+    await reloadLocal();
     listError.value = '';
   } catch (e) {
-    if (e.message === 'unauthorized') {
-      // セッション失効。保存分を消してサインイン画面に戻す。
-      listError.value = '';
-      expireSession();
-    } else {
+    // ローカルに記事がある間は、背景更新の失敗を画面に出さない。
+    if (!state.value.articles.length) {
       listError.value = `記事を読み込めませんでした（${e.message}）。時間をおいて開き直してください。`;
     }
   } finally {
-    loading.value = false;
-    loadingMore.value = false;
+    refreshing.value = false;
   }
+}
+
+// 起動時: まずローカルを即座に出し、その後で背景更新する。
+// ローカルが空の初回だけ、背景更新の完了まで読み込み表示を続ける。
+async function initTimeline() {
+  loading.value = true;
+  try {
+    await reloadLocal();
+  } catch (e) {
+    listError.value = `ローカルデータを読み込めませんでした（${e.message}）。`;
+  }
+  const firstRun = !state.value.articles.length && !state.value.feeds.length;
+  if (!firstRun) loading.value = false;
+  await refreshInBackground();
+  loading.value = false;
+}
+
+async function onManualRefresh() {
+  if (!session.value) return;
+  await refreshInBackground();
 }
 
 function setFeed(feedId) {
   if (state.value.feedId === feedId) return;
-  state.value = { ...state.value, feedId, articles: [], total: 0 };
-  fetchList();
+  state.value = { ...state.value, feedId };
+  displayLimit.value = DISPLAY_LIMIT;
 }
 
 function setCategory(category) {
   if (state.value.category === category) return;
   // カテゴリを変えたらフィード選択は解除する (対象外フィードが残らないように)。
-  state.value = { ...state.value, category, feedId: '', articles: [], total: 0 };
-  fetchList();
+  state.value = { ...state.value, category, feedId: '' };
+  displayLimit.value = DISPLAY_LIMIT;
 }
 
 function setFilter(filter) {
   if (state.value.filter === filter) return;
-  state.value = { ...state.value, filter, articles: [], total: 0 };
-  fetchList();
+  state.value = { ...state.value, filter };
+  displayLimit.value = DISPLAY_LIMIT;
 }
 
 // ヘッダーの未読ピル: 全フィードの未読一覧へ移動する。
 async function goUnreadAll() {
   const fromAdmin = view.value !== 'timeline';
-  if (fromAdmin) view.value = 'timeline';
+  if (fromAdmin) {
+    view.value = 'timeline';
+    await waitReorderSettled();
+    refreshInBackground();
+  }
   if (state.value.feedId === '' && state.value.category === '' && state.value.filter === 'unread' && !fromAdmin) return;
-  state.value = { ...state.value, feedId: '', category: '', filter: 'unread', articles: [], total: 0 };
-  if (fromAdmin) await waitReorderSettled();
-  fetchList();
+  state.value = { ...state.value, feedId: '', category: '', filter: 'unread' };
+  displayLimit.value = DISPLAY_LIMIT;
 }
 
-// 楽観的更新つきの mark。失敗したら元の状態へ戻す。
-async function applyMark(article, patch) {
+// 既読の付け外しはローカルのみ (サーバーへは送らない)。
+async function applyRead(article, isRead) {
   if (!isOwner.value) return;
-  const before = state.value.articles;
-  state.value = { ...state.value, articles: patchArticle(before, article.id, patch) };
+  const nextArticles = patchArticle(state.value.articles, article.id, { isRead });
+  state.value = {
+    ...state.value,
+    articles: nextArticles,
+    feeds: withUnreadCounts(state.value.feeds, nextArticles),
+  };
   try {
-    await markArticle(session.value.token, article.id, patch);
+    await setLocalArticleRead(article.id, isRead, new Date().toISOString());
   } catch (e) {
-    state.value = { ...state.value, articles: before };
     listError.value = `保存できませんでした（${e.message}）。`;
   }
 }
 
 function onOpenArticle(article) {
   if (isOwner.value && !article.isRead) {
-    // 元記事を開く操作は止めない。既読化は裏で送る。
-    applyMark(article, { isRead: true });
+    // 元記事を開く操作は止めない。既読化はローカルに書くだけ。
+    applyRead(article, true);
   }
 }
 
 async function onMarkAllRead() {
-  if (!isOwner.value || savingAll.value) return;
-  savingAll.value = true;
-  // 一覧の読み込み中でも押せるよう、終わるのを待ってから既読化する
-  // (読み込み結果が既読化を上書きしないようにするため)。
-  if (listInFlight) await listInFlight.catch(() => {});
-  const before = state.value;
+  if (!isOwner.value) return;
+  // v1 と同じ範囲 (フィード指定が優先、次にカテゴリ、無ければ全体)。
+  const scoped = markAllReadScope(state.value, state.value.feedId, state.value.category);
+  const targetIds = state.value.articles
+    .filter((a) => !a.isRead && scoped[a.feedId])
+    .map((a) => a.id);
   state.value = markAllReadInList(state.value, state.value.feedId, state.value.category);
   try {
-    await markAllRead(session.value.token, {
-      feedId: state.value.feedId,
-      category: state.value.feedId ? '' : state.value.category,
-    });
-    // 未読ビューのときは既読化した記事が残らないよう取り直す。
-    if (state.value.filter === 'unread') await fetchList();
+    await markLocalArticlesRead(targetIds, new Date().toISOString());
   } catch (e) {
-    state.value = before;
     listError.value = `保存できませんでした（${e.message}）。`;
-  } finally {
-    savingAll.value = false;
   }
 }
 
@@ -231,10 +328,10 @@ async function backToTimeline() {
   view.value = 'timeline';
   formMode.value = '';
   confirmDeleteId.value = '';
-  // 管理で変わったフィード構成・未読数をタイムラインへ反映するため取り直す。
-  // 並び替え保存が終わる前に取り直すと古い並びが返るため、先に完了を待つ。
+  // 管理で変わったフィード構成をタイムラインへ反映するため、並び替え保存の
+  // 完了を待ってから背景更新 (フィード一覧の取り直し＋再取得) を行う。
   await waitReorderSettled();
-  fetchList();
+  refreshInBackground();
 }
 
 async function onToggleFeed(feed) {
@@ -256,7 +353,7 @@ async function onToggleFeed(feed) {
 
 const orderSender = createOrderSender((ids) => reorderFeeds(session.value.token, ids));
 // 進行中の並び替え保存 (最新の submit)。タイムラインへ戻る際はこれの完了を
-// 待ってから一覧を取り直す。待たないと、保存前の並びで書かれたシートを
+// 待ってからフィード一覧を取り直す。待たないと、保存前の並びで書かれたシートを
 // 読んだ応答が返り、戻った直後のチップ順が古いままになる (競合)。
 let lastReorder = null;
 
@@ -376,7 +473,7 @@ async function onCredential(response) {
     const data = await exchangeSession(response.credential);
     adoptSession(data);
     state.value = createListState();
-    await fetchList();
+    await initTimeline();
   } catch (e) {
     bootError.value = `サインインできませんでした（${e.message}）。許可されたアカウントでお試しください。`;
     loading.value = false;
@@ -430,7 +527,7 @@ async function tryShareFromHash() {
   }
 }
 
-// しばらく離れて戻ってきたら、裏で一覧を取り直す (復帰直後の
+// しばらく離れて戻ってきたら、裏で背景更新する (復帰直後の
 // ネットワーク失敗をユーザーの操作ではなく背景更新側で受けるため)。
 let hiddenAt = 0;
 document.addEventListener('visibilitychange', () => {
@@ -440,7 +537,7 @@ document.addEventListener('visibilitychange', () => {
   }
   if (session.value && view.value === 'timeline' && hiddenAt && Date.now() - hiddenAt > 60_000) {
     hiddenAt = 0;
-    fetchList();
+    refreshInBackground();
   }
 });
 
@@ -454,7 +551,7 @@ onMounted(async () => {
   const shared = await tryShareFromHash();
   booting.value = false;
   if (shared || session.value) {
-    await fetchList();
+    await initTimeline();
   } else {
     loading.value = false;
     await nextTick();
@@ -482,6 +579,13 @@ onMounted(async () => {
           @click="goUnreadAll"
         >未読 {{ unreadTotalCount }}</button>
         <span v-if="isReadonly" class="meta">閲覧のみ</span>
+        <button
+          v-if="session"
+          class="ghost nav-refresh"
+          type="button"
+          :disabled="refreshing"
+          @click="onManualRefresh"
+        >{{ refreshing ? '更新中…' : '更新' }}</button>
         <button v-if="session && isOwner" class="ghost nav-mgmt" type="button" @click="openFeedAdmin">管理</button>
         <button v-if="session" class="nav-logout" type="button" @click="signOut">ログアウト</button>
       </span>
@@ -497,7 +601,7 @@ onMounted(async () => {
       </template>
 
       <template v-else>
-        <p v-if="isReadonly" class="readonly-note">共有リンクで閲覧中（読み取り専用）です。既読やスターは付けられません。</p>
+        <p v-if="isReadonly" class="readonly-note">共有リンクで閲覧中（読み取り専用）です。既読はこの端末の中だけに記録されます。</p>
 
         <template v-if="view === 'timeline'">
         <div class="filter-bar">
@@ -537,13 +641,13 @@ onMounted(async () => {
         </div>
 
         <p v-if="listError" class="panel center error">{{ listError }}
-          <button class="ghost" type="button" @click="fetchList()">再試行</button>
+          <button class="ghost" type="button" @click="refreshInBackground()">再試行</button>
         </p>
         <p v-else-if="loading" class="panel center"><span class="spinner"></span>読み込み中...</p>
         <template v-else>
-          <p v-if="visible.length === 0" class="panel empty-note">記事がありません。</p>
+          <p v-if="displayArticles.length === 0" class="panel empty-note">記事がありません。</p>
           <article
-            v-for="a in visible"
+            v-for="a in displayArticles"
             :key="a.id"
             class="card article-card"
             :class="{ 'is-read': a.isRead }"
@@ -561,15 +665,8 @@ onMounted(async () => {
               <span v-if="!a.isRead" class="unread-dot" aria-label="未読"></span>
               <button
                 type="button"
-                class="star-btn"
-                :class="{ starred: a.isStarred }"
-                :aria-label="a.isStarred ? 'スターを外す' : 'スターを付ける'"
-                @click="applyMark(a, { isStarred: !a.isStarred })"
-              >{{ a.isStarred ? '★' : '☆' }}</button>
-              <button
-                type="button"
                 class="read-toggle"
-                @click="applyMark(a, { isRead: !a.isRead })"
+                @click="applyRead(a, !a.isRead)"
               >{{ a.isRead ? '未読に戻す' : '既読にする' }}</button>
             </div>
             <div v-else class="article-foot">
@@ -577,9 +674,7 @@ onMounted(async () => {
             </div>
           </article>
           <p v-if="hasMore" class="more-row">
-            <button class="ghost" type="button" :disabled="loadingMore" @click="fetchList({ append: true })">
-              {{ loadingMore ? '読み込み中...' : 'もっと見る' }}
-            </button>
+            <button class="ghost" type="button" @click="displayLimit += DISPLAY_LIMIT">もっと見る</button>
           </p>
         </template>
 
@@ -588,7 +683,6 @@ onMounted(async () => {
             v-if="isOwner"
             class="primary mark-all-btn"
             type="button"
-            :disabled="savingAll"
             @click="onMarkAllRead"
           >すべて既読</button>
           <div class="view-tabs" role="tablist" aria-label="表示切替">

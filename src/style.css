@@ -596,8 +596,9 @@ button.ghost.active {
   flex-shrink: 0;
 }
 
-/* ヘッダーの「管理」ボタンは控えめに小さく */
-.nav-mgmt {
+/* ヘッダーの「更新」「管理」ボタンは控えめに小さく */
+.nav-mgmt,
+.nav-refresh {
   font-size: 0.85rem;
   padding: 8px 12px;
   min-height: 38px;
@@ -683,20 +684,6 @@ button.ghost.active {
   border-radius: 99px;
   background: var(--primary);
   flex: none;
-}
-
-.star-btn {
-  border: 0;
-  background: none;
-  font-size: 22px;
-  line-height: 1;
-  padding: 6px;
-  cursor: pointer;
-  color: var(--muted-2);
-}
-
-.star-btn.starred {
-  color: var(--primary);
 }
 
 .read-toggle {

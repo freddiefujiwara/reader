@@ -1,28 +1,11 @@
-// 記事リストの純粋な状態操作 (フィルタ・楽観的更新・未読数)。
+// 記事リストの純粋な状態操作 (フィルタ・既読・未読数)。
 // Vue に依存しない関数だけにし、単体テストで振る舞いを固定する。
+// v2 では記事も未読数もローカルが正本なので、未読数は読み込んだ記事から数える。
 
 export function createListState() {
-  return { articles: [], feeds: [], total: 0, feedId: '', category: '', filter: 'all', generatedAt: null };
+  return { articles: [], feeds: [], feedId: '', category: '', filter: 'all' };
 }
 
-// list API の応答を state へ取り込む。append=true は「もっと見る」の追記で、
-// 既存 id と重複する記事は追加しない。
-export function applyListResponse(state, payload, { append = false } = {}) {
-  const incoming = Array.isArray(payload?.articles) ? payload.articles : [];
-  const articles = append
-    ? [...state.articles, ...incoming.filter((a) => !state.articles.some((x) => x.id === a.id))]
-    : incoming;
-  return {
-    ...state,
-    articles,
-    feeds: Array.isArray(payload?.feeds) ? payload.feeds : state.feeds,
-    total: typeof payload?.total === 'number' ? payload.total : articles.length,
-    generatedAt: payload?.generatedAt || state.generatedAt,
-  };
-}
-
-// 表示条件 (フィード＋ビュー) に合う記事だけを返す。サーバー側でも絞るが、
-// 楽観的更新で状態が変わった記事をその場で出し分けるためにクライアントでも行う。
 // フィード一覧からカテゴリ名を出現順に取り出す (カテゴリ行の表示用)。
 // 空カテゴリは含めない。
 export function feedCategories(feeds) {
@@ -34,6 +17,8 @@ export function feedCategories(feeds) {
   return seen;
 }
 
+// 表示条件 (フィード＋カテゴリ＋ビュー) に合う記事だけを返す。
+// 楽観的更新で状態が変わった記事をその場で出し分けるためにクライアントで行う。
 export function visibleArticles(state) {
   let out = state.articles.slice();
   if (state.category) {
@@ -45,43 +30,67 @@ export function visibleArticles(state) {
   }
   if (state.feedId) out = out.filter((a) => a.feedId === state.feedId);
   if (state.filter === 'unread') out = out.filter((a) => !a.isRead);
-  if (state.filter === 'starred') out = out.filter((a) => a.isStarred);
   return out;
 }
 
-// 1件の既読・スターを差し替えた新しい articles を返す (元の配列は壊さない)。
+// 1件の既読を差し替えた新しい articles を返す (元の配列は壊さない)。
 export function patchArticle(articles, articleId, patch) {
   return articles.map((a) => {
     if (a.id !== articleId) return a;
     const next = { ...a };
     if (patch.isRead !== undefined) next.isRead = patch.isRead;
-    if (patch.isStarred !== undefined) next.isStarred = patch.isStarred;
     return next;
   });
 }
 
-// フィード別未読数と全体の未読数。サーバー応答の feeds が正本だが、
-// 楽観的更新時は読み込んだ記事分だけでも即時に反映できるよう、
-// 読み込み済み記事から数え直す補助も用意する。
 export function unreadTotal(articles) {
   return articles.reduce((n, a) => n + (a.isRead ? 0 : 1), 0);
 }
 
-export function markAllReadInList(state, feedId = '', category = '') {
+// ローカルの記事から数えた未読数をフィードへ付け直す。
+// サーバー応答の unreadCount は使わず、端末に居る記事だけが数えられる。
+export function withUnreadCounts(feeds, articles) {
+  const counts = {};
+  (articles || []).forEach((a) => {
+    if (!a.isRead) counts[a.feedId] = (counts[a.feedId] || 0) + 1;
+  });
+  return (feeds || []).map((f) => ({ ...f, unreadCount: counts[f.id] || 0 }));
+}
+
+// 新しい順 (publishedAt、無ければ fetchedAt) に並べ替えた配列を返す。
+export function sortArticlesDesc(articles) {
+  return (articles || []).slice().sort((a, b) => {
+    const ta = Date.parse(a.publishedAt || a.fetchedAt || '') || 0;
+    const tb = Date.parse(b.publishedAt || b.fetchedAt || '') || 0;
+    if (tb !== ta) return tb - ta;
+    const fa = Date.parse(a.fetchedAt || '') || 0;
+    const fb = Date.parse(b.fetchedAt || '') || 0;
+    if (fb !== fa) return fb - fa;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  });
+}
+
+// すべて既読の対象範囲 (フィード指定が優先、次にカテゴリ、無ければ全体) に
+// 入るフィードIDの集合。
+export function markAllReadScope(state, feedId = '', category = '') {
   const inScope = (f) => {
     if (feedId) return f.id === feedId;
     if (category) return String(f.category || '').trim() === category;
     return true;
   };
   const scopedFeedIds = {};
-  state.feeds.forEach((f) => { if (inScope(f)) scopedFeedIds[f.id] = true; });
+  (state.feeds || []).forEach((f) => { if (inScope(f)) scopedFeedIds[f.id] = true; });
+  return scopedFeedIds;
+}
+
+export function markAllReadInList(state, feedId = '', category = '') {
+  const scopedFeedIds = markAllReadScope(state, feedId, category);
+  const all = !feedId && !category;
   const articles = state.articles.map((a) =>
-    (!feedId && !category) || scopedFeedIds[a.feedId] ? { ...a, isRead: true } : a
+    all || scopedFeedIds[a.feedId] ? { ...a, isRead: true } : a
   );
   const feeds = state.feeds.map((f) => {
-    if (!inScope(f)) return f;
-    // フィルタ対象外フィードは、読み込んでいない記事の未読が残り得るため
-    // 全既読ボタンの対象フィードだけを 0 にする (対象外は応答の再取得で直る)。
+    if (!all && !scopedFeedIds[f.id]) return f;
     return { ...f, unreadCount: 0 };
   });
   return { ...state, articles, feeds };
@@ -97,9 +106,6 @@ export function visibleFeedChips(state) {
   }
   if (state?.filter === 'unread') {
     return feeds.filter((f) => (f.unreadCount || 0) > 0 || f.id === state.feedId);
-  }
-  if (state?.filter === 'starred') {
-    return feeds.filter((f) => (f.starredCount || 0) > 0 || f.id === state.feedId);
   }
   return feeds;
 }
