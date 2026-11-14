@@ -14,6 +14,7 @@ import {
   buildSaveFeedPayload,
   createFeedForm,
   feedFormFromFeed,
+  filterAdminFeeds,
   formatFeedStatus,
   moveFeedOrder,
   createOrderSender,
@@ -93,6 +94,9 @@ const signinEl = ref(null);
 // 画面切替 ('timeline' | 'feeds')。フィード管理はオーナーのみ。
 const view = ref('timeline');
 const mgmtFeeds = ref([]);
+// 管理画面のジャンル絞り込み。タイムラインのカテゴリ選択 (state.category)
+// とは独立に持つ (行き来しても互いに影響しない)。
+const adminCategory = ref('');
 const mgmtLoading = ref(false);
 const mgmtError = ref('');
 const mgmtSavingId = ref('');
@@ -116,6 +120,8 @@ const chipFeeds = computed(() => visibleFeedChips(state.value));
 const categoryList = computed(() => feedCategories(state.value.feeds));
 // 管理フォームのジャンル候補: 現在のフィード一覧にあるものを出現順に。
 const genreOptions = computed(() => feedCategories(mgmtFeeds.value));
+// 管理一覧の表示対象: 選択中のジャンルに合うフィードだけ。
+const adminFeeds = computed(() => filterAdminFeeds(mgmtFeeds.value, adminCategory.value));
 const hasMore = computed(() => visible.value.length > displayLimit.value);
 
 const FILTERS = [
@@ -581,6 +587,11 @@ async function loadFeeds() {
   } finally {
     mgmtLoading.value = false;
   }
+}
+
+// 管理画面のジャンル絞り込みの切り替え (タイムラインの setCategory と対)。
+function setAdminCategory(category) {
+  adminCategory.value = category;
 }
 
 function openFeedAdmin() {
@@ -1065,9 +1076,26 @@ onMounted(async () => {
           </p>
           <p v-else-if="mgmtLoading" class="panel center"><span class="spinner"></span>読み込み中...</p>
           <template v-else>
+            <div v-if="genreOptions.length" class="feed-chips category-chips" role="tablist" aria-label="ジャンルで絞り込み">
+              <button
+                type="button"
+                class="chip"
+                :class="{ active: adminCategory === '' }"
+                @click="setAdminCategory('')"
+              >すべて</button>
+              <button
+                v-for="c in genreOptions"
+                :key="c"
+                type="button"
+                class="chip"
+                :class="{ active: adminCategory === c }"
+                @click="setAdminCategory(c)"
+              >{{ c }}</button>
+            </div>
             <p v-if="mgmtFeeds.length === 0" class="panel empty-note">フィードがありません。</p>
+            <p v-else-if="adminFeeds.length === 0" class="panel empty-note">そのジャンルのフィードはありません。</p>
             <article
-              v-for="(f, i) in mgmtFeeds"
+              v-for="(f, i) in adminFeeds"
               :key="f.id"
               class="card feed-card"
             >
@@ -1097,7 +1125,11 @@ onMounted(async () => {
                 </div>
               </div>
               <div v-else class="feed-actions">
+                <!-- 並び替えはシート全体の順序に対する操作なので、ジャンルで
+                     絞っている間は移動ボタンを出さない (部分集合の中での
+                     移動に見えて誤解を招くため)。 -->
                 <button
+                  v-if="!adminCategory"
                   class="ghost"
                   type="button"
                   aria-label="上へ移動"
@@ -1105,6 +1137,7 @@ onMounted(async () => {
                   @click="onMoveFeed(f, -1)"
                 >↑</button>
                 <button
+                  v-if="!adminCategory"
                   class="ghost"
                   type="button"
                   aria-label="下へ移動"

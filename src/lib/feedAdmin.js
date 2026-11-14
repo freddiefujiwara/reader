@@ -99,6 +99,16 @@ export function buildSaveFeedPayload(form, base = null) {
   };
 }
 
+// 管理画面のジャンル (カテゴリ) 絞り込み。カテゴリは前後の空白を除いて
+// 完全一致で比べる (タイムラインのカテゴリ絞り込みと同じ意味)。
+// カテゴリ未指定 (空) は全件をそのまま返す。
+export function filterAdminFeeds(feeds, category) {
+  const list = Array.isArray(feeds) ? feeds : [];
+  const c = String(category || '').trim();
+  if (!c) return list.slice();
+  return list.filter((f) => String(f?.category || '').trim() === c);
+}
+
 // 並び替え: feeds の中で feedId を direction (-1=上, +1=下) へ1つ動かした
 // 新しい配列を返す。端で動かせない場合と対象が無い場合は null。
 export function moveFeedOrder(feeds, feedId, direction) {
