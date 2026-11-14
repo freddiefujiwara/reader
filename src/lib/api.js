@@ -77,3 +77,7 @@ export function saveFeed(sessionToken, feed, opts) {
 export function deleteFeed(sessionToken, feedId, opts) {
   return postJson({ action: 'deleteFeed', sessionToken, feedId }, opts);
 }
+
+export function reorderFeeds(sessionToken, feedIds, opts) {
+  return postJson({ action: 'reorderFeeds', sessionToken, feedIds }, opts);
+}

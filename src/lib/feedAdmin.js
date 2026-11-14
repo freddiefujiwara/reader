@@ -67,6 +67,18 @@ export function toggleEnabledPayload(feed) {
   };
 }
 
+// 並び替え: feeds の中で feedId を direction (-1=上, +1=下) へ1つ動かした
+// 新しい配列を返す。端で動かせない場合と対象が無い場合は null。
+export function moveFeedOrder(feeds, feedId, direction) {
+  const idx = feeds.findIndex((f) => f.id === feedId);
+  if (idx < 0) return null;
+  const next = idx + direction;
+  if (next < 0 || next >= feeds.length) return null;
+  const out = [...feeds];
+  [out[idx], out[next]] = [out[next], out[idx]];
+  return out;
+}
+
 // 一覧の状態行: 最終取得時刻＋ステータス (エラーがあればエラーを優先)。
 export function formatFeedStatus(feed, now) {
   if (!feed) return '';

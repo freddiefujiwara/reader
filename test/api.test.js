@@ -9,6 +9,7 @@ import {
   listFeeds,
   saveFeed,
   deleteFeed,
+  reorderFeeds,
 } from '../src/lib/api.js';
 
 const API = 'https://example.invalid/exec';
@@ -113,5 +114,10 @@ describe('フィード管理の action', () => {
   it('deleteFeed の未知 id は not_found を投げる', async () => {
     const fetcher = okFetcher({ ok: false, error: 'not_found' });
     await expect(deleteFeed('tok', 'nope', { fetcher, apiUrl: API })).rejects.toThrow('not_found');
+  });
+  it('reorderFeeds', async () => {
+    const fetcher = okFetcher({ ok: true });
+    await reorderFeeds('tok', ['nhk', 'asahi'], { fetcher, apiUrl: API });
+    expect(lastBody(fetcher)).toEqual({ action: 'reorderFeeds', sessionToken: 'tok', feedIds: ['nhk', 'asahi'] });
   });
 });

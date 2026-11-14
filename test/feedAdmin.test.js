@@ -6,6 +6,7 @@ import {
   buildSaveFeedPayload,
   toggleEnabledPayload,
   formatFeedStatus,
+  moveFeedOrder,
 } from '../src/lib/feedAdmin.js';
 
 describe('createFeedForm / feedFormFromFeed', () => {
@@ -108,6 +109,24 @@ describe('toggleEnabledPayload', () => {
   it('無効→有効', () => {
     const feed = { id: 'x', title: 'X', url: 'https://example.com/f', category: '', enabled: false, isPrivate: true };
     expect(toggleEnabledPayload(feed)).toEqual({ ...feed, enabled: true });
+  });
+});
+
+describe('moveFeedOrder', () => {
+  const feeds = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+  it('上へ動かす', () => {
+    expect(moveFeedOrder(feeds, 'b', -1).map((f) => f.id)).toEqual(['b', 'a', 'c']);
+  });
+  it('下へ動かす', () => {
+    expect(moveFeedOrder(feeds, 'b', 1).map((f) => f.id)).toEqual(['a', 'c', 'b']);
+  });
+  it('端では null', () => {
+    expect(moveFeedOrder(feeds, 'a', -1)).toBeNull();
+    expect(moveFeedOrder(feeds, 'c', 1)).toBeNull();
+  });
+  it('未知の id は null で、元配列は変えない', () => {
+    expect(moveFeedOrder(feeds, 'nope', 1)).toBeNull();
+    expect(feeds.map((f) => f.id)).toEqual(['a', 'b', 'c']);
   });
 });
 

@@ -9,6 +9,7 @@ import {
   listFeeds,
   markAllRead,
   markArticle,
+  reorderFeeds,
   saveFeed,
 } from './lib/api.js';
 import {
@@ -16,6 +17,7 @@ import {
   createFeedForm,
   feedFormFromFeed,
   formatFeedStatus,
+  moveFeedOrder,
   toggleEnabledPayload,
   validateFeedForm,
 } from './lib/feedAdmin.js';
@@ -206,6 +208,25 @@ async function onToggleFeed(feed) {
   } catch (e) {
     if (e.message === 'unauthorized') expireSession();
     else mgmtError.value = `保存できませんでした（${e.message}）。`;
+  } finally {
+    mgmtSavingId.value = '';
+  }
+}
+
+async function onMoveFeed(feed, direction) {
+  if (mgmtSavingId.value) return;
+  const next = moveFeedOrder(mgmtFeeds.value, feed.id, direction);
+  if (!next) return;
+  const before = mgmtFeeds.value;
+  mgmtFeeds.value = next;
+  mgmtSavingId.value = feed.id;
+  try {
+    await reorderFeeds(session.value.token, next.map((f) => f.id));
+    mgmtError.value = '';
+  } catch (e) {
+    mgmtFeeds.value = before;
+    if (e.message === 'unauthorized') expireSession();
+    else mgmtError.value = `並び替えを保存できませんでした（${e.message}）。`;
   } finally {
     mgmtSavingId.value = '';
   }
@@ -535,7 +556,7 @@ onMounted(async () => {
           <template v-else>
             <p v-if="mgmtFeeds.length === 0" class="panel empty-note">フィードがありません。</p>
             <article
-              v-for="f in mgmtFeeds"
+              v-for="(f, i) in mgmtFeeds"
               :key="f.id"
               class="card feed-card"
               :class="{ 'is-disabled': f.enabled === false }"
@@ -567,6 +588,20 @@ onMounted(async () => {
                 </div>
               </div>
               <div v-else class="feed-actions">
+                <button
+                  class="ghost"
+                  type="button"
+                  aria-label="上へ移動"
+                  :disabled="i === 0 || !!mgmtSavingId"
+                  @click="onMoveFeed(f, -1)"
+                >↑</button>
+                <button
+                  class="ghost"
+                  type="button"
+                  aria-label="下へ移動"
+                  :disabled="i === mgmtFeeds.length - 1 || !!mgmtSavingId"
+                  @click="onMoveFeed(f, 1)"
+                >↓</button>
                 <button
                   class="ghost"
                   type="button"
