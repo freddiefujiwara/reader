@@ -117,19 +117,15 @@ export function youtubeVideoIdFromLink(link) {
   return m ? m[1] : '';
 }
 
-// 追加時にプロキシ取得をせず、タイトル '' で保存する YouTube 入力の
-// 3形式 (疑似フィード / チャンネルページ / @ハンドル) のいずれか。
+// 追加時にプロキシ取得をせず、タイトル '' で保存する YouTube 入力
+// (チャンネルページ / @ハンドル) かどうか。
 // URL の正規形 (/channel/UC...) への解決とタイトル補完はサーバーが行う。
 export function isYouTubeFeedInput(url) {
-  // 移行期間中のみ: videos.xml 形式は既存フィードの互換用。データ移行の
-  // 完了後はこの分岐 (isYouTubeFeedUrl の判定) ごと外し、チャンネル
-  // ページと @ハンドルだけを対象にする。
-  if (isYouTubeFeedUrl(url)) return true;
   return isYouTubeChannelUrl(url);
 }
 
-// 新規追加の進め方を決める。YouTube の入力 (疑似フィード・チャンネル
-// ページ・@ハンドル) は取得を省いてタイトル '' で保存し ('youtube')、
+// 新規追加の進め方を決める。YouTube の入力 (チャンネルページ・
+// @ハンドル) は取得を省いてタイトル '' で保存し ('youtube')、
 // それ以外は保存前にフィードを取得してタイトルを取る ('fetch')。
 export function planFeedAdd(form) {
   return { mode: isYouTubeFeedInput(form?.url) ? 'youtube' : 'fetch' };
