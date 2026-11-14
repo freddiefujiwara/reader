@@ -2,6 +2,7 @@
    other freddiefujiwara.com apps; keep them in sync with blog's
    style.css. App-specific styles follow below. */
 :root {
+  --nav-h: 64px;
   font-family: "Zen Kaku Gothic New", "Hiragino Kaku Gothic ProN", "Hiragino Sans", "Yu Gothic", sans-serif;
   line-height: 1.85;
 
@@ -90,7 +91,7 @@ body {
   align-items: center;
   gap: 14px;
   padding: 0 clamp(16px, 4vw, 40px);
-  height: 64px;
+  height: var(--nav-h, 64px);
   background: color-mix(in srgb, var(--bg) 86%, transparent);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
@@ -197,9 +198,23 @@ body {
 }
 
 @media (max-width: 720px) {
+  :root {
+    --nav-h: 58px;
+  }
+
   .site-nav {
-    height: 58px;
+    height: var(--nav-h);
     grid-template-columns: auto 1fr auto;
+    gap: 10px;
+    padding: 0 12px;
+  }
+
+  .session-note {
+    gap: 6px;
+  }
+
+  .session-note .unread-pill {
+    padding: 6px 10px;
   }
 
   .site-nav ul {
@@ -407,7 +422,7 @@ button.ghost.active {
 
 .session-note {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 8px;
   align-items: center;
   justify-content: flex-end;
@@ -434,7 +449,7 @@ button.ghost.active {
    フィード管理などの操作ボタンは固定に含めない。 */
 .filter-bar {
   position: sticky;
-  top: 64px;
+  top: var(--nav-h, 64px);
   z-index: 30;
   background: color-mix(in srgb, var(--bg) 88%, transparent);
   backdrop-filter: blur(10px);
@@ -585,6 +600,22 @@ button.ghost.active {
 .nav-mgmt {
   font-size: 0.85rem;
   padding: 8px 12px;
+  min-height: 38px;
+  white-space: nowrap;
+}
+
+/* ログアウトはほぼ使わないので、ヘッダーの隅にひっそり置く */
+.nav-logout {
+  background: none;
+  border: 0;
+  box-shadow: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.78rem;
+  padding: 6px 2px;
+  min-height: 0;
+  white-space: nowrap;
+  cursor: pointer;
 }
 
 .article-card {
@@ -745,7 +776,7 @@ button.ghost.active {
 
 .feed-actions {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 8px;
   margin-top: 12px;
 }
