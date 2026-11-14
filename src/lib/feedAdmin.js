@@ -2,6 +2,8 @@
 // Vue に依存しない関数だけにし、単体テストで振る舞いを固定する。
 // 検証ルールはサーバー側 (reader-gas) と揃える: id はスラッグ、URL は https。
 import { formatPublishedAt } from './format.js';
+import { parseFeedMeta } from './feedParse.js';
+import { generateFeedId } from './feedId.js';
 
 // サーバー側 (reader-gas の FEED_ID_PATTERN) と完全一致させる:
 // アンダースコア不可、先頭含め最大64文字。
@@ -21,6 +23,20 @@ export function feedFormFromFeed(feed) {
   };
 }
 
+// URL だけの検証 (自動入力では他の項目より先に URL を確かめる)。
+export function validateFeedUrl(url) {
+  let parsed;
+  try {
+    parsed = new URL(String(url || '').trim());
+  } catch {
+    return 'URLの形式が正しくありません。';
+  }
+  if (parsed.protocol !== 'https:') {
+    return 'URLは https:// で始まるものにしてください。';
+  }
+  return '';
+}
+
 // クライアント側の事前検証 (サーバー側でも同じ観点で検証される)。
 // 問題が無ければ ''、あれば画面に出す文言を返す。
 export function validateFeedForm(form, { isEdit = false } = {}) {
@@ -30,17 +46,40 @@ export function validateFeedForm(form, { isEdit = false } = {}) {
   if (!String(form?.title || '').trim()) {
     return 'タイトルを入力してください。';
   }
-  const url = String(form?.url || '').trim();
-  let parsed;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return 'URLの形式が正しくありません。';
+  return validateFeedUrl(form?.url);
+}
+
+// 新規追加で ID / タイトルのどちらかが空欄なら「URL だけの登録」に
+// なり、保存前にフィードの取得が要る。両方埋まっていれば従来どおり
+// 取得なしで保存する。
+export function planFeedAdd(form) {
+  const needTitle = !String(form?.title || '').trim();
+  const needId = !String(form?.id || '').trim();
+  return { auto: needTitle || needId, needTitle, needId };
+}
+
+// 取得したフィード XML から空欄を埋めたフォームを返す。タイトルが
+// フィードからも取れなければ ok:false で理由を返す (呼び出し側は
+// 保存せず、手入力を促す)。ID は URL から生成し、takenIds と
+// 重なる場合は連番で避ける。
+export function resolveFeedAddForm(form, { xml = '', takenIds = [] } = {}) {
+  const base = {
+    id: String(form?.id || '').trim(),
+    title: String(form?.title || '').trim(),
+    url: String(form?.url || '').trim(),
+    category: String(form?.category || '').trim(),
+  };
+  const plan = planFeedAdd(base);
+  if (!plan.auto) return { ok: true, form: base };
+  let { id, title } = base;
+  if (plan.needTitle) {
+    title = parseFeedMeta(xml).title;
+    if (!title) {
+      return { ok: false, message: 'タイトルを自動で取得できませんでした。タイトルを入力してください。' };
+    }
   }
-  if (parsed.protocol !== 'https:') {
-    return 'URLは https:// で始まるものにしてください。';
-  }
-  return '';
+  if (plan.needId) id = generateFeedId(base.url, takenIds);
+  return { ok: true, form: { ...base, id, title } };
 }
 
 // saveFeed へ送る feed オブジェクトを組み立てる。

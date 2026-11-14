@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseFeedXml, parseItunesDuration, decodeXmlEntities, stripTags, toIsoDate, summarize } from '../src/lib/feedParse.js';
+import { parseFeedXml, parseFeedMeta, parseItunesDuration, decodeXmlEntities, stripTags, toIsoDate, summarize } from '../src/lib/feedParse.js';
 
 const RSS2 = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
@@ -252,6 +252,43 @@ describe('parseFeedXml (ポッドキャスト: enclosure と duration)', () => {
     const [entry] = parseFeedXml(xml, { id: 'atom-pod' });
     expect(entry.link).toBe('https://example.com/ep');
     expect(entry.audioUrl).toBe('https://example.com/ep.mp3');
+  });
+});
+
+describe('parseFeedMeta (フィード自体のタイトル)', () => {
+  it('RSS 2.0 は channel のタイトルを返す (item のタイトルではない)', () => {
+    expect(parseFeedMeta(RSS2)).toEqual({ title: 'サンプルニュース' });
+  });
+  it('Atom は feed のタイトルを返す (entry のタイトルではない)', () => {
+    expect(parseFeedMeta(ATOM)).toEqual({ title: 'Atomブログ' });
+  });
+  it('RSS 1.0 / RDF は channel のタイトルを返す', () => {
+    expect(parseFeedMeta(RDF)).toEqual({ title: 'RDFニュース' });
+  });
+  it('channel のタイトルが item より後ろにあっても取る', () => {
+    const xml = `<rss version="2.0"><channel>
+      <item><title>記事タイトル</title><link>https://example.com/1</link></item>
+      <title>後置きチャンネル名</title>
+    </channel></rss>`;
+    expect(parseFeedMeta(xml).title).toBe('後置きチャンネル名');
+  });
+  it('channel にタイトルが無ければ item のタイトルは使わず空文字', () => {
+    const xml = `<rss version="2.0"><channel>
+      <item><title>記事だけ</title><link>https://example.com/1</link></item>
+    </channel></rss>`;
+    expect(parseFeedMeta(xml)).toEqual({ title: '' });
+  });
+  it('Atom で feed のタイトルが無ければ entry のタイトルは使わず空文字', () => {
+    const xml = `<feed xmlns="http://www.w3.org/2005/Atom">
+      <entry><id>tag:x,1</id><title>エントリだけ</title><link href="https://example.com/1" /></entry>
+    </feed>`;
+    expect(parseFeedMeta(xml)).toEqual({ title: '' });
+  });
+  it('壊れた入力・空入力では投げず空文字', () => {
+    expect(parseFeedMeta('')).toEqual({ title: '' });
+    expect(parseFeedMeta('not xml at all <<<')).toEqual({ title: '' });
+    expect(parseFeedMeta('<html><head><title>ページ名</title></head></html>')).toEqual({ title: '' });
+    expect(parseFeedMeta(null)).toEqual({ title: '' });
   });
 });
 

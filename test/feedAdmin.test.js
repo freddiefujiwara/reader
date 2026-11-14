@@ -3,6 +3,9 @@ import {
   createFeedForm,
   feedFormFromFeed,
   validateFeedForm,
+  validateFeedUrl,
+  planFeedAdd,
+  resolveFeedAddForm,
   buildSaveFeedPayload,
   toggleEnabledPayload,
   formatFeedStatus,
@@ -85,6 +88,99 @@ describe('validateFeedForm ID ルール (サーバーと一致)', () => {
   });
   it('大文字はエラー', () => {
     expect(validateFeedForm({ ...base, id: 'NHK' })).not.toBe('');
+  });
+});
+
+describe('validateFeedUrl', () => {
+  it('https は問題なし', () => {
+    expect(validateFeedUrl('https://example.com/rss')).toBe('');
+    expect(validateFeedUrl(' https://example.com/rss ')).toBe('');
+  });
+  it('http・形式不正・空はエラー', () => {
+    expect(validateFeedUrl('http://example.com/rss')).not.toBe('');
+    expect(validateFeedUrl('example.com/rss')).not.toBe('');
+    expect(validateFeedUrl('')).not.toBe('');
+  });
+});
+
+describe('planFeedAdd (URL だけの登録の要否)', () => {
+  const base = { id: 'nhk', title: 'NHK', url: 'https://example.com/rss', category: '' };
+  it('ID もタイトルも埋まっていれば取得は要らない', () => {
+    expect(planFeedAdd(base)).toEqual({ auto: false, needTitle: false, needId: false });
+  });
+  it('タイトルが空 (空白だけも) なら取得が要る', () => {
+    expect(planFeedAdd({ ...base, title: '' })).toEqual({ auto: true, needTitle: true, needId: false });
+    expect(planFeedAdd({ ...base, title: '  ' }).needTitle).toBe(true);
+  });
+  it('ID が空なら取得が要る', () => {
+    expect(planFeedAdd({ ...base, id: '' })).toEqual({ auto: true, needTitle: false, needId: true });
+  });
+  it('両方空なら両方要る', () => {
+    expect(planFeedAdd({ ...base, id: '', title: '' })).toEqual({ auto: true, needTitle: true, needId: true });
+  });
+});
+
+describe('resolveFeedAddForm (取得結果で空欄を埋める)', () => {
+  const RSS = `<rss version="2.0"><channel><title>Rebuild</title>
+    <item><title>ep1</title><link>https://feeds.rebuild.fm/ep1</link></item>
+  </channel></rss>`;
+  const NO_TITLE = `<rss version="2.0"><channel>
+    <item><title>ep1</title><link>https://example.com/ep1</link></item>
+  </channel></rss>`;
+  const url = 'https://feeds.rebuild.fm/rebuildfm';
+
+  it('手入力が揃っていれば XML は見ず、そのまま (空白は落とす)', () => {
+    const resolved = resolveFeedAddForm(
+      { id: ' my-id ', title: ' 手入力 ', url: ` ${url} `, category: ' tech ' },
+      { xml: RSS, takenIds: [] }
+    );
+    expect(resolved).toEqual({
+      ok: true,
+      form: { id: 'my-id', title: '手入力', url, category: 'tech' },
+    });
+  });
+  it('タイトル空はフィードから取り、ID 空は URL から生成する', () => {
+    const resolved = resolveFeedAddForm(
+      { id: '', title: '', url, category: '' },
+      { xml: RSS, takenIds: [] }
+    );
+    expect(resolved.ok).toBe(true);
+    expect(resolved.form.title).toBe('Rebuild');
+    expect(resolved.form.id).toBe('rebuild');
+  });
+  it('タイトルがフィードからも取れなければ ok:false で保存させない', () => {
+    const resolved = resolveFeedAddForm(
+      { id: '', title: '', url, category: '' },
+      { xml: NO_TITLE, takenIds: [] }
+    );
+    expect(resolved.ok).toBe(false);
+    expect(resolved.message).toContain('タイトル');
+  });
+  it('ID が手入力されていればそれを保ち、タイトルだけ自動で取る', () => {
+    const resolved = resolveFeedAddForm(
+      { id: 'rebuild-fm', title: '', url, category: '' },
+      { xml: RSS, takenIds: [] }
+    );
+    expect(resolved.ok).toBe(true);
+    expect(resolved.form.id).toBe('rebuild-fm');
+    expect(resolved.form.title).toBe('Rebuild');
+  });
+  it('タイトルが手入力されていればフィードのタイトルで上書きしない', () => {
+    const resolved = resolveFeedAddForm(
+      { id: '', title: '自分の題名', url, category: '' },
+      { xml: RSS, takenIds: [] }
+    );
+    expect(resolved.ok).toBe(true);
+    expect(resolved.form.title).toBe('自分の題名');
+    expect(resolved.form.id).toBe('rebuild');
+  });
+  it('生成 ID が既存と重なれば連番で避ける', () => {
+    const resolved = resolveFeedAddForm(
+      { id: '', title: '', url, category: '' },
+      { xml: RSS, takenIds: ['rebuild'] }
+    );
+    expect(resolved.ok).toBe(true);
+    expect(resolved.form.id).toBe('rebuild-2');
   });
 });
 

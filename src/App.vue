@@ -17,8 +17,11 @@ import {
   formatFeedStatus,
   moveFeedOrder,
   createOrderSender,
+  planFeedAdd,
+  resolveFeedAddForm,
   toggleEnabledPayload,
   validateFeedForm,
+  validateFeedUrl,
 } from './lib/feedAdmin.js';
 import { clearSession, loadSession, saveSession } from './lib/session.js';
 import {
@@ -49,7 +52,7 @@ import {
   setLocalArticleRead,
   setLocalMeta,
 } from './lib/localDb.js';
-import { fetchAllFeeds } from './lib/feedFetch.js';
+import { fetchAllFeeds, fetchFeedXml } from './lib/feedFetch.js';
 import { formatPublishedAt } from './lib/format.js';
 import { clampSeek, formatTime, nextSpeed, progressRatio } from './lib/player.js';
 
@@ -86,6 +89,7 @@ const form = ref(createFeedForm());
 const formBase = ref(null);
 const formError = ref('');
 const formSaving = ref(false);
+const formFetching = ref(false);
 
 const isReadonly = computed(() => session.value?.role === 'readonly');
 const isOwner = computed(() => session.value?.role === 'owner');
@@ -607,9 +611,46 @@ function closeForm() {
   formError.value = '';
 }
 
+// URL だけの登録 (ID / タイトルが空欄): 通常の取得経路でフィードを
+// 先に読み、タイトルを取り、ID を URL から生成してフォームへ戻す。
+// 取得できない・タイトルが取れない場合は保存せず、手入力を促す
+// (勝手な登録はしない)。成功したら true。
+async function autoFillFeedForm() {
+  const urlInvalid = validateFeedUrl(form.value.url);
+  if (urlInvalid) {
+    formError.value = urlInvalid;
+    return false;
+  }
+  formFetching.value = true;
+  try {
+    const xml = await fetchFeedXml(String(form.value.url || '').trim());
+    const resolved = resolveFeedAddForm(form.value, {
+      xml,
+      takenIds: mgmtFeeds.value.map((f) => f.id),
+    });
+    if (!resolved.ok) {
+      formError.value = resolved.message;
+      return false;
+    }
+    form.value = resolved.form;
+    formError.value = '';
+    return true;
+  } catch (e) {
+    formError.value = `フィードを取得できなかったため、自動で入力できませんでした（${e.message}）。IDとタイトルを入力してください。`;
+    return false;
+  } finally {
+    formFetching.value = false;
+  }
+}
+
 async function submitFeedForm() {
-  if (formSaving.value) return;
-  const invalid = validateFeedForm(form.value, { isEdit: formMode.value === 'edit' });
+  if (formSaving.value || formFetching.value) return;
+  const isEdit = formMode.value === 'edit';
+  if (!isEdit && planFeedAdd(form.value).auto) {
+    const filled = await autoFillFeedForm();
+    if (!filled) return;
+  }
+  const invalid = validateFeedForm(form.value, { isEdit });
   if (invalid) {
     formError.value = invalid;
     return;
@@ -895,10 +936,12 @@ onMounted(async () => {
                 placeholder="例: nhk-news"
               />
               <p v-if="formMode === 'edit'" class="field-note">IDは変更できません。</p>
+              <p v-else class="field-note">空欄にすると URL から自動で決めます。</p>
             </div>
             <div class="field">
               <label for="feed-title">タイトル</label>
               <input id="feed-title" v-model="form.title" type="text" autocomplete="off" />
+              <p v-if="formMode === 'add'" class="field-note">空欄にするとフィードから自動で取得します。</p>
             </div>
             <div class="field">
               <label for="feed-url">URL</label>
@@ -917,10 +960,10 @@ onMounted(async () => {
             </div>
             <p v-if="formError" class="error">{{ formError }}</p>
             <div class="form-actions">
-              <button class="primary" type="submit" :disabled="formSaving">
-                {{ formSaving ? '保存中...' : '保存' }}
+              <button class="primary" type="submit" :disabled="formSaving || formFetching">
+                {{ formFetching ? '取得中...' : formSaving ? '保存中...' : '保存' }}
               </button>
-              <button class="ghost" type="button" :disabled="formSaving" @click="closeForm">キャンセル</button>
+              <button class="ghost" type="button" :disabled="formSaving || formFetching" @click="closeForm">キャンセル</button>
             </div>
           </form>
 

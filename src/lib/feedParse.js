@@ -180,6 +180,26 @@ function atomEnclosureAudioUrl(entry) {
   return link ? String(link.attrs.href || '').trim() : '';
 }
 
+// フィード自体のメタ情報 (チャンネルのタイトル) を取り出す。
+// 記事 (item / entry) のタイトルではなく、channel / feed の直下にある
+// <title> だけを見る。取れなければ title は '' (投げない)。
+export function parseFeedMeta(xmlText) {
+  const root = parseXml(xmlText);
+  // RSS 2.0 / RSS 1.0 (RDF): channel 直下の title。
+  const channels = findAllNodes(root, 'channel');
+  for (const channel of channels) {
+    const title = childText(channel, 'title');
+    if (title) return { title };
+  }
+  // Atom: feed 直下の title (entry の title は見ない)。
+  const feedEl = root.children.find((c) => c.name === 'feed');
+  if (feedEl) {
+    const title = childText(feedEl, 'title');
+    if (title) return { title };
+  }
+  return { title: '' };
+}
+
 export function toIsoDate(value) {
   if (!value) return '';
   const t = Date.parse(String(value).trim());
