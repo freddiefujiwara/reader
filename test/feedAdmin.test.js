@@ -7,6 +7,7 @@ import {
   planFeedAdd,
   resolveFeedAddForm,
   buildSaveFeedPayload,
+  filterAdminFeeds,
   formatFeedStatus,
   moveFeedOrder,
   createOrderSender,
@@ -157,6 +158,39 @@ describe('buildSaveFeedPayload', () => {
     const payload = buildSaveFeedPayload({ category: 'news', enabled: false }, base);
     expect('enabled' in payload).toBe(false);
     expect(payload.category).toBe('news');
+  });
+});
+
+describe('filterAdminFeeds (管理画面のジャンル絞り込み)', () => {
+  const feeds = [
+    { id: 'a', category: 'ポッドキャスト' },
+    { id: 'b', category: 'ニュース' },
+    { id: 'c', category: 'ポッドキャスト' },
+    { id: 'd', category: '' },
+    { id: 'e' },
+  ];
+  it('カテゴリ未指定 (空) は全件を順序そのまま返す', () => {
+    expect(filterAdminFeeds(feeds, '').map((f) => f.id)).toEqual(['a', 'b', 'c', 'd', 'e']);
+    expect(filterAdminFeeds(feeds).map((f) => f.id)).toEqual(['a', 'b', 'c', 'd', 'e']);
+    expect(filterAdminFeeds(feeds, null).map((f) => f.id)).toEqual(['a', 'b', 'c', 'd', 'e']);
+  });
+  it('一致するカテゴリのフィードだけを残す', () => {
+    expect(filterAdminFeeds(feeds, 'ポッドキャスト').map((f) => f.id)).toEqual(['a', 'c']);
+    expect(filterAdminFeeds(feeds, 'ニュース').map((f) => f.id)).toEqual(['b']);
+  });
+  it('一致するフィードが無ければ空配列', () => {
+    expect(filterAdminFeeds(feeds, '存在しない')).toEqual([]);
+  });
+  it('前後の空白は除いて比べる (指定側・フィード側の両方)', () => {
+    expect(filterAdminFeeds(feeds, ' ポッドキャスト ').map((f) => f.id)).toEqual(['a', 'c']);
+    const spaced = [{ id: 'x', category: ' ニュース ' }];
+    expect(filterAdminFeeds(spaced, 'ニュース').map((f) => f.id)).toEqual(['x']);
+  });
+  it('入力が配列でなくても落ちず、元配列は変えない', () => {
+    expect(filterAdminFeeds(null, 'ニュース')).toEqual([]);
+    expect(filterAdminFeeds(undefined, '')).toEqual([]);
+    filterAdminFeeds(feeds, 'ニュース');
+    expect(feeds.map((f) => f.id)).toEqual(['a', 'b', 'c', 'd', 'e']);
   });
 });
 

@@ -175,3 +175,60 @@ describe('管理画面の編集フォーム', () => {
     expect(scrollCalls.some((c) => c.el === form)).toBe(true);
   });
 });
+
+describe('管理画面のジャンル絞り込み', () => {
+  const genreTablist = () => el.querySelector('[aria-label="ジャンルで絞り込み"]');
+  const moveButtons = () =>
+    el.querySelectorAll('button[aria-label="上へ移動"], button[aria-label="下へ移動"]');
+  const cardTitles = () =>
+    [...el.querySelectorAll('.feed-card .feed-name')].map((n) => n.textContent.trim());
+
+  it('絞っていないときは全件に移動ボタンが出る', async () => {
+    await mountAdmin();
+    expect(genreTablist(), 'ジャンルタブ行が出る').toBeTruthy();
+    expect(el.querySelectorAll('.feed-card').length).toBe(FEEDS.length);
+    expect(moveButtons().length).toBe(FEEDS.length * 2);
+  });
+
+  it('ジャンルタブで絞るとそのジャンルだけになり、移動ボタンが消える (編集・削除は残る)', async () => {
+    await mountAdmin();
+    findButton(genreTablist(), 'ポッドキャスト').click();
+    await flush();
+    expect(errors).toEqual([]);
+    expect(cardTitles()).toEqual(['Rebuild', 'ゆる言語学ラジオ']);
+    expect(moveButtons().length).toBe(0);
+    const card = el.querySelector('.feed-card');
+    expect(findButton(card, '編集'), '編集ボタンは残る').toBeTruthy();
+    expect(findButton(card, '削除'), '削除ボタンは残る').toBeTruthy();
+  });
+
+  it('「すべて」に戻すと全件と移動ボタンが戻る', async () => {
+    await mountAdmin();
+    findButton(genreTablist(), '教養・ラジオ').click();
+    await flush();
+    expect(el.querySelectorAll('.feed-card').length).toBe(1);
+    expect(moveButtons().length).toBe(0);
+    findButton(genreTablist(), 'すべて').click();
+    await flush();
+    expect(errors).toEqual([]);
+    expect(el.querySelectorAll('.feed-card').length).toBe(FEEDS.length);
+    expect(moveButtons().length).toBe(FEEDS.length * 2);
+  });
+
+  it('絞り込みは管理画面側の状態として保持され、タイムラインと行き来しても残る', async () => {
+    await mountAdmin();
+    findButton(genreTablist(), 'ポッドキャスト').click();
+    await flush();
+    expect(el.querySelectorAll('.feed-card').length).toBe(2);
+    findButton(el, '← タイムラインに戻る').click();
+    await flush();
+    findButton(el, '管理').click();
+    await flush();
+    expect(errors).toEqual([]);
+    // タイムラインのカテゴリ選択とは別の状態なので、戻っても絞り込みは維持される。
+    expect(el.querySelectorAll('.feed-card').length).toBe(2);
+    expect(moveButtons().length).toBe(0);
+    const active = genreTablist().querySelector('.chip.active');
+    expect(active.textContent.trim()).toBe('ポッドキャスト');
+  });
+});
