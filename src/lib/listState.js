@@ -2,7 +2,7 @@
 // Vue に依存しない関数だけにし、単体テストで振る舞いを固定する。
 
 export function createListState() {
-  return { articles: [], feeds: [], total: 0, feedId: '', filter: 'all', generatedAt: null };
+  return { articles: [], feeds: [], total: 0, feedId: '', category: '', filter: 'all', generatedAt: null };
 }
 
 // list API の応答を state へ取り込む。append=true は「もっと見る」の追記で、
@@ -23,8 +23,26 @@ export function applyListResponse(state, payload, { append = false } = {}) {
 
 // 表示条件 (フィード＋ビュー) に合う記事だけを返す。サーバー側でも絞るが、
 // 楽観的更新で状態が変わった記事をその場で出し分けるためにクライアントでも行う。
+// フィード一覧からカテゴリ名を出現順に取り出す (カテゴリ行の表示用)。
+// 空カテゴリは含めない。
+export function feedCategories(feeds) {
+  const seen = [];
+  (feeds || []).forEach((f) => {
+    const c = String(f.category || '').trim();
+    if (c && !seen.includes(c)) seen.push(c);
+  });
+  return seen;
+}
+
 export function visibleArticles(state) {
   let out = state.articles.slice();
+  if (state.category) {
+    const inCategory = {};
+    (state.feeds || []).forEach((f) => {
+      if (String(f.category || '').trim() === state.category) inCategory[f.id] = true;
+    });
+    out = out.filter((a) => inCategory[a.feedId]);
+  }
   if (state.feedId) out = out.filter((a) => a.feedId === state.feedId);
   if (state.filter === 'unread') out = out.filter((a) => !a.isRead);
   if (state.filter === 'starred') out = out.filter((a) => a.isStarred);
@@ -49,12 +67,19 @@ export function unreadTotal(articles) {
   return articles.reduce((n, a) => n + (a.isRead ? 0 : 1), 0);
 }
 
-export function markAllReadInList(state, feedId = '') {
+export function markAllReadInList(state, feedId = '', category = '') {
+  const inScope = (f) => {
+    if (feedId) return f.id === feedId;
+    if (category) return String(f.category || '').trim() === category;
+    return true;
+  };
+  const scopedFeedIds = {};
+  state.feeds.forEach((f) => { if (inScope(f)) scopedFeedIds[f.id] = true; });
   const articles = state.articles.map((a) =>
-    !feedId || a.feedId === feedId ? { ...a, isRead: true } : a
+    (!feedId && !category) || scopedFeedIds[a.feedId] ? { ...a, isRead: true } : a
   );
   const feeds = state.feeds.map((f) => {
-    if (feedId && f.id !== feedId) return f;
+    if (!inScope(f)) return f;
     // フィルタ対象外フィードは、読み込んでいない記事の未読が残り得るため
     // 全既読ボタンの対象フィードだけを 0 にする (対象外は応答の再取得で直る)。
     return { ...f, unreadCount: 0 };
@@ -66,7 +91,10 @@ export function markAllReadInList(state, feedId = '') {
 // 絞る (未読ゼロなら「すべて」だけが残る)。ただし選択中のフィードは、
 // 未読がゼロでも行き場が無くならないよう残す。
 export function visibleFeedChips(state) {
-  const feeds = Array.isArray(state?.feeds) ? state.feeds : [];
+  let feeds = Array.isArray(state?.feeds) ? state.feeds : [];
+  if (state?.category) {
+    feeds = feeds.filter((f) => String(f.category || '').trim() === state.category);
+  }
   if (state?.filter !== 'unread') return feeds;
   return feeds.filter((f) => (f.unreadCount || 0) > 0 || f.id === state.feedId);
 }

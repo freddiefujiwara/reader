@@ -37,9 +37,10 @@ export function exchangeShare(shareToken, opts) {
 
 // 記事一覧 (状態マージ済み・新しい順) ＋フィード一覧 (未読数付き)。
 // -> { ok, articles, total, feeds, generatedAt }
-export function listArticles(sessionToken, { feedId = '', filter = 'all', limit = 50, offset = 0 } = {}, opts) {
+export function listArticles(sessionToken, { feedId = '', category = '', filter = 'all', limit = 50, offset = 0 } = {}, opts) {
   const body = { action: 'list', sessionToken, filter, limit, offset };
   if (feedId) body.feedId = feedId;
+  if (category) body.category = category;
   return postJson(body, opts);
 }
 
@@ -51,10 +52,11 @@ export function markArticle(sessionToken, articleId, patch = {}, opts) {
   return postJson(body, opts);
 }
 
-// まとめて既読化 (オーナーセッションのみ)。feedId 省略で全フィード。
-export function markAllRead(sessionToken, feedId = '', opts) {
+// まとめて既読化 (オーナーセッションのみ)。feedId / category 省略で全フィード。
+export function markAllRead(sessionToken, { feedId = '', category = '' } = {}, opts) {
   const body = { action: 'markAllRead', sessionToken };
   if (feedId) body.feedId = feedId;
+  if (category) body.category = category;
   return postJson(body, opts);
 }
 
