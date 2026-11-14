@@ -19,7 +19,6 @@ import {
   createOrderSender,
   planFeedAdd,
   resolveFeedAddForm,
-  toggleEnabledPayload,
   validateFeedUrl,
 } from './lib/feedAdmin.js';
 import { clearSession, loadSession, saveSession } from './lib/session.js';
@@ -188,13 +187,13 @@ async function refreshOnce() {
       await deleteLocalArticles(orphanIds);
     }
 
-    // (b) 全フィード取得 → 取り込み。無効化されたフィードは取得しない。
+    // (b) 全フィード取得 → 取り込み。
     // 取り込みはフィードごとに ingestFeedArticles が単一トランザクションで
     // 最新のローカル状態を読み直してから書き込む。更新開始時点の
     // スナップショットを書き込みの根拠にすると、取得の合間に付けた
     // 既読・再生位置が古いレコードごと上書きされ巻き戻るため使わない。
     const fetchedAt = new Date().toISOString();
-    const results = await fetchAllFeeds(feeds.filter((f) => f.enabled !== false));
+    const results = await fetchAllFeeds(feeds);
     // ID 移行で退避した状態 (既読・再生位置) を、再取得した記事へ戻す。
     let transfer = await getLocalMeta(FEED_HASH_TRANSFER_KEY);
     const hasTransfer = !!transfer && Object.keys(transfer).length > 0;
@@ -207,8 +206,7 @@ async function refreshOnce() {
     }
     if (hasTransfer) {
       // 取得できたフィード分は付け替え終了。一致しなかった記事は
-      // フィードから外れているので落とす。取得に失敗した分と、
-      // 無効化されていて取得対象外だった分は次回へ残す。
+      // フィードから外れているので落とす。取得に失敗した分は次回へ残す。
       const fetchedOkIds = new Set(results.filter((r) => r.ok).map((r) => r.feed.id));
       const keepIds = new Set(feeds.map((f) => f.id).filter((id) => !fetchedOkIds.has(id)));
       await setLocalMeta(FEED_HASH_TRANSFER_KEY, pruneTransferredState(transfer, keepIds));
@@ -601,23 +599,6 @@ async function backToTimeline() {
   // 完了を待ってから背景更新 (フィード一覧の取り直し＋再取得) を行う。
   await waitReorderSettled();
   refreshInBackground();
-}
-
-async function onToggleFeed(feed) {
-  if (mgmtSavingId.value) return;
-  mgmtSavingId.value = feed.id;
-  try {
-    const payload = await saveFeed(session.value.token, toggleEnabledPayload(feed));
-    if (payload.feed) {
-      mgmtFeeds.value = mgmtFeeds.value.map((f) => (f.id === feed.id ? { ...f, ...payload.feed } : f));
-    }
-    mgmtError.value = '';
-  } catch (e) {
-    if (e.message === 'unauthorized') expireSession();
-    else mgmtError.value = `保存できませんでした（${e.message}）。`;
-  } finally {
-    mgmtSavingId.value = '';
-  }
 }
 
 const orderSender = createOrderSender((ids) => reorderFeeds(session.value.token, ids));
@@ -1070,12 +1051,6 @@ onMounted(async () => {
                 <option v-for="c in genreOptions" :key="c" :value="c"></option>
               </datalist>
             </div>
-            <div v-if="formMode === 'edit'" class="field">
-              <label class="field-check">
-                <input v-model="form.enabled" type="checkbox" />
-                有効にする
-              </label>
-            </div>
             <p v-if="formError" class="error">{{ formError }}</p>
             <div class="form-actions">
               <button class="primary" type="submit" :disabled="formSaving || formFetching">
@@ -1095,14 +1070,12 @@ onMounted(async () => {
               v-for="(f, i) in mgmtFeeds"
               :key="f.id"
               class="card feed-card"
-              :class="{ 'is-disabled': f.enabled === false }"
             >
               <p class="article-meta">
                 <span class="feed-name">{{ feedDisplayName(f) }}</span>
                 <span v-if="f.category">{{ f.category }}</span>
                 <span>未読 {{ f.unreadCount || 0 }}件</span>
                 <span v-if="f.isPrivate" class="private-badge">プライベート</span>
-                <span v-if="f.enabled === false" class="private-badge off">無効</span>
               </p>
               <p class="feed-url">{{ f.url }}</p>
               <p class="feed-status">{{ formatFeedStatus(f) }}</p>
@@ -1138,12 +1111,6 @@ onMounted(async () => {
                   :disabled="i === mgmtFeeds.length - 1"
                   @click="onMoveFeed(f, 1)"
                 >↓</button>
-                <button
-                  class="ghost"
-                  type="button"
-                  :disabled="mgmtSavingId === f.id"
-                  @click="onToggleFeed(f)"
-                >{{ f.enabled === false ? '有効にする' : '無効にする' }}</button>
                 <button class="ghost" type="button" @click="startEditFeed(f)">編集</button>
                 <button class="ghost danger" type="button" @click="askDeleteFeed(f)">削除</button>
               </div>

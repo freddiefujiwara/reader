@@ -13,7 +13,6 @@ const FEEDS = [
     title: 'Rebuild',
     url: 'https://feeds.rebuild.fm/rebuildfm',
     category: 'ポッドキャスト',
-    enabled: true,
     isPrivate: false,
     lastStatus: '200',
     lastError: '',
@@ -25,7 +24,6 @@ const FEEDS = [
     title: '', // YouTube のタイトル補完待ち
     url: 'https://www.youtube.com/feeds/videos.xml?channel_id=UCxxxxxxxxxxxxxxxxxxxxxx',
     category: '教養・ラジオ',
-    enabled: true,
     isPrivate: false,
     lastStatus: '200',
     lastError: '',
@@ -37,7 +35,6 @@ const FEEDS = [
     title: 'ゆる言語学ラジオ',
     url: 'https://api.robotstart.jp/api/v1/feeds/35d00481/get-feeds/podcast',
     category: 'ポッドキャスト',
-    enabled: false,
     isPrivate: false,
     lastStatus: '200',
     lastError: '',
@@ -145,12 +142,6 @@ describe('管理画面の編集フォーム', () => {
     expect(scrollCalls.some((c) => c.el === form)).toBe(true);
   });
 
-  it('無効なフィードでは「有効にする」のチェックが外れている', async () => {
-    await mountAdmin();
-    const form = await openEdit(2);
-    expect(form.querySelector('.field-check input').checked).toBe(false);
-  });
-
   it('ジャンルを変更して保存すると、元の ID / タイトル / URL のまま saveFeed へ渡り、フォームが閉じる', async () => {
     await mountAdmin();
     const form = await openEdit(0);
@@ -169,8 +160,8 @@ describe('管理画面の編集フォーム', () => {
       title: 'Rebuild',
       url: 'https://feeds.rebuild.fm/rebuildfm',
       category: '新しいジャンル',
-      enabled: true,
     });
+    expect('enabled' in payload).toBe(false);
     expect(el.querySelector('.feed-form'), '保存後はフォームが閉じる').toBeNull();
   });
 
