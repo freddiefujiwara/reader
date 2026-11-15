@@ -927,4 +927,27 @@ describe('読み込み表示', () => {
     expect(playBtn.querySelector('svg')).toBeTruthy();
     expect(errors).toEqual([]);
   });
+
+  it('読み込み中は一覧側の当該エピソードの再生ボタンも「…」になり、再生可能になると戻る', async () => {
+    await mountPlayer();
+    await startCard(0);
+    const cardBtn = () => el.querySelectorAll('.article-card')[0].querySelector('.play-btn');
+    const otherBtn = () => el.querySelectorAll('.article-card')[1].querySelector('.play-btn');
+    // プレイヤー本体と同じ読み込み待ちステータスが、再生中の
+    // エピソードのカード側ボタンにも連動する。
+    expect(cardBtn().getAttribute('aria-label')).toBe('読み込み中');
+    expect(cardBtn().textContent).toContain('…');
+    expect(cardBtn().querySelector('svg')).toBeNull();
+    // 他のエピソードのボタンは通常の再生アイコンのまま。
+    expect(otherBtn().getAttribute('aria-label')).toBe('再生');
+    expect(otherBtn().querySelector('svg')).toBeTruthy();
+    expect(otherBtn().textContent).not.toContain('…');
+
+    latestAudio().dispatchEvent(new window.Event('canplay'));
+    await flush();
+    expect(cardBtn().getAttribute('aria-label')).toBe('一時停止');
+    expect(cardBtn().querySelector('svg')).toBeTruthy();
+    expect(cardBtn().textContent).not.toContain('…');
+    expect(errors).toEqual([]);
+  });
 });
