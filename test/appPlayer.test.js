@@ -951,3 +951,83 @@ describe('読み込み表示', () => {
     expect(errors).toEqual([]);
   });
 });
+
+describe('切り替わり時の開始位置 (次の曲の頭が飛ぶ不具合)', () => {
+  // 再生開始 (loadedmetadata) まで進めて、要素へ適用された開始位置を返す。
+  async function startAndSettle(idx) {
+    await startCard(idx);
+    const audio = latestAudio();
+    audio.duration = 1800; // 実尺どおり (duration_sec = 1800)
+    audio.dispatchEvent(new window.Event('loadedmetadata'));
+    await flush();
+    return audio;
+  }
+
+  it('自動送りでは、次のエピソードに保存位置があっても 0 から始まる', async () => {
+    // 次のエピソードに前回分の保存位置 (900 = 中盤) がある状態。
+    await mountWithRecords([{ ...EP1 }, { ...EP2, play_pos: 900 }]);
+    const audio = await startAndSettle(0);
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
+
+    await fireEnded();
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+    audio.duration = 1800;
+    audio.dispatchEvent(new window.Event('loadedmetadata'));
+    await flush();
+    // 切り替わりでは保存位置を使わず、頭から始まる。
+    expect(audio.currentTime).toBe(0);
+    expect(errors).toEqual([]);
+  });
+
+  it('自動送りでは、実例と同じ数秒の保存位置でも 0 から始まる', async () => {
+    // 実機の実例: 次の曲に 3 秒の保存位置があり、切り替わり直後の
+    // 表示が 0:03 になった。
+    await mountWithRecords([{ ...EP1 }, { ...EP2, play_pos: 3 }]);
+    const audio = await startAndSettle(0);
+
+    await fireEnded();
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+    audio.duration = 1800;
+    audio.dispatchEvent(new window.Event('loadedmetadata'));
+    await flush();
+    expect(audio.currentTime).toBe(0);
+    expect(errors).toEqual([]);
+  });
+
+  it('次へボタンでも、次のエピソードは保存位置を使わず 0 から始まる', async () => {
+    await mountWithRecords([{ ...EP1 }, { ...EP2, play_pos: 900 }]);
+    const bar = await startAndSettle(0).then(() => el.querySelector('.player-bar'));
+    bar.querySelector('button[aria-label="次へ"]').click();
+    await flush();
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+    const audio = latestAudio();
+    audio.duration = 1800;
+    audio.dispatchEvent(new window.Event('loadedmetadata'));
+    await flush();
+    expect(audio.currentTime).toBe(0);
+    expect(errors).toEqual([]);
+  });
+
+  it('前へボタンでも、戻り先のエピソードは保存位置を使わず 0 から始まる', async () => {
+    await mountWithRecords([{ ...EP1, play_pos: 900 }, { ...EP2 }]);
+    const bar = await startAndSettle(1).then(() => el.querySelector('.player-bar'));
+    bar.querySelector('button[aria-label="前へ"]').click();
+    await flush();
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
+    const audio = latestAudio();
+    audio.duration = 1800;
+    audio.dispatchEvent(new window.Event('loadedmetadata'));
+    await flush();
+    expect(audio.currentTime).toBe(0);
+    expect(errors).toEqual([]);
+  });
+
+  it('カードから直接選んだ場合は、従来どおり保存位置から再開する', async () => {
+    await mountWithRecords([{ ...EP1 }, { ...EP2, play_pos: 900 }]);
+    const audio = await startAndSettle(1);
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+    expect(audio.currentTime).toBe(900);
+    expect(errors).toEqual([]);
+  });
+
+});

@@ -652,7 +652,13 @@ function updateMediaSession(article) {
 }
 
 // エピソードを Audio 要素へ載せて再生する共通処理。キューは触らない。
-function loadEpisode(article) {
+// resume は「本人がそのエピソードを選んだ開始か」の区別: カードから
+// 直接選んだときだけ保存済みの再開位置 (play_pos) を復元し、自動
+// 送り・前へ／次への切り替わりでは保存位置を使わず 0 から始める。
+// 切り替わりでも復元していた頃は、数秒だけ再生して止めたエピソード
+// に残った位置が次の曲の冒頭を飛ばして見えた (実機で 0:03 から
+// 始まる例を確認)。
+function loadEpisode(article, { resume = true } = {}) {
   discardPreload();
   savePlayPos();
   // 渡された記事は描画時点 (またはキュー固定時点) の控えで、その後の
@@ -671,7 +677,9 @@ function loadEpisode(article) {
   rateSample = null;
   endFlowDone = false;
   isLoading.value = true;
-  pendingSeek = playPosMemory.has(ep.id) ? playPosMemory.get(ep.id) : (ep.playPos || 0);
+  pendingSeek = resume
+    ? (playPosMemory.has(ep.id) ? playPosMemory.get(ep.id) : (ep.playPos || 0))
+    : 0;
   audio.src = ep.audioUrl;
   audio.playbackRate = speed.value;
   updateMediaSession(ep);
@@ -739,7 +747,8 @@ function skipByTrack(delta) {
   if (!target) return;
   if (plan.historyCut != null) playHistory = playHistory.slice(0, plan.historyCut);
   playedInRound.add(target.id);
-  loadEpisode(target);
+  // 前へ／次へは切り替わりなので、遷移先の保存位置は使わず頭から。
+  loadEpisode(target, { resume: false });
 }
 
 function skipBy(delta) {
@@ -881,7 +890,9 @@ function handleEpisodeEnded() {
   if (!next) return;
   if (plan.resetPlayed) playedInRound = new Set();
   playedInRound.add(next.id);
-  loadEpisode(next);
+  // 自動送りは切り替わりなので、次のエピソードの保存位置は使わず
+  // 頭から始める (保存位置の復元はカードからの直接選択だけ)。
+  loadEpisode(next, { resume: false });
 }
 audio.addEventListener('ended', handleEpisodeEnded);
 
