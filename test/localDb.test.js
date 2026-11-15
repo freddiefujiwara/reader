@@ -10,6 +10,7 @@ import {
   setLocalArticleRead,
   setLocalArticlePlayPos,
   clearLocalArticlePlayPos,
+  clearLocalArticleAudio,
   markLocalArticlesRead,
   ingestFeedArticles,
   getLocalMeta,
@@ -107,6 +108,34 @@ describe('再生位置の保存', () => {
   });
   it('対象が無ければ何もしない', async () => {
     await setLocalArticlePlayPos('no-such-episode', 60);
+    const all = await loadLocalArticles();
+    expect(all.some((a) => a.id === 'no-such-episode')).toBe(false);
+  });
+});
+
+describe('音声URLの取り消し', () => {
+  it('clearLocalArticleAudio は URL・受け取り時刻・印だけを消し、他の状態は保つ', async () => {
+    await putLocalArticles([rec('aud-1', {
+      audio_url: 'https://example.com/aud-1.mp3',
+      audio_url_at: '2026-11-14T00:00:00.000Z',
+      audio_stale: true,
+      duration_sec: 600,
+      play_pos: 30,
+      is_read: true,
+      read_at: '2026-11-14T01:00:00.000Z',
+    })]);
+    await clearLocalArticleAudio('aud-1');
+    const row = (await loadLocalArticles()).find((a) => a.id === 'aud-1');
+    expect(row.audio_url).toBe('');
+    expect(row.audio_url_at).toBe('');
+    expect(row.audio_stale).toBe(false);
+    expect(row.duration_sec).toBe(600);
+    expect(row.play_pos).toBe(30);
+    expect(row.is_read).toBe(true);
+    await deleteLocalArticles(['aud-1']);
+  });
+  it('対象が無ければ何もしない', async () => {
+    await clearLocalArticleAudio('no-such-episode');
     const all = await loadLocalArticles();
     expect(all.some((a) => a.id === 'no-such-episode')).toBe(false);
   });

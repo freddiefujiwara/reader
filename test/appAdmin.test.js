@@ -67,6 +67,7 @@ vi.mock('../src/lib/api.js', () => ({
 vi.mock('../src/lib/feedFetch.js', () => ({
   fetchAllFeeds: vi.fn(async () => []),
   fetchFeedXml: vi.fn(async () => ''),
+  fetchOneFeed: vi.fn(async (feed) => ({ feed, ok: false, entries: [], error: new Error('not mocked') })),
 }));
 
 import App from '../src/App.vue';
