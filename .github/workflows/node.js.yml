@@ -42,12 +42,16 @@ jobs:
 
       - name: Build
         run: npm run build --if-present
+        env:
+          VITE_URL_FETCH_TOKEN: ${{ secrets.URL_FETCH_TOKEN }}
 
       - name: Build staging variant into dist/staging
         run: |
           npm run build:staging
           mkdir -p dist/staging
           cp -r dist-staging/* dist/staging/
+        env:
+          VITE_URL_FETCH_TOKEN: ${{ secrets.URL_FETCH_TOKEN }}
 
       - name: "Deploy to gh-pages 🚀"
         uses: JamesIves/github-pages-deploy-action@releases/v3

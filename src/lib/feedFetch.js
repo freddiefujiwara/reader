@@ -1,6 +1,6 @@
 // フィード XML の取得。ブラウザから直接取れない (CORS) ため、
 // url-fetch-gas をプロキシとして使う:
-//   GET <exec>?u=<encodeURIComponent(fetchUrl)>
+//   GET <exec>?u=<encodeURIComponent(fetchUrl)>&token=<値>
 //   -> { url, content, error } (content がフィード XML の生テキスト)
 // 失敗したフィードはその回だけ諦め、ローカルの記事を残す (呼び出し側の判断)。
 import { parseFeedXml } from './feedParse.js';
@@ -9,8 +9,18 @@ import { parseFeedXml } from './feedParse.js';
 export const URL_FETCH_API_URL =
   'https://script.google.com/macros/s/AKfycbx6iFGnB5EaSVedN5mk8F1L0iO9orwZZiOz_2m6wIRzHA1XsU555ib0Ex2LMCR1nLOvhw/exec';
 
-export function proxyUrl(fetchUrl, base = URL_FETCH_API_URL) {
-  return `${base}?u=${encodeURIComponent(fetchUrl)}`;
+// url-fetch-gas のトークン認証 (本番で有効化済み。トークンなしは
+// {"error":"Error: Unauthorized."} になる)。値はビルド時に CI が
+// GitHub Secret URL_FETCH_TOKEN を環境変数 VITE_URL_FETCH_TOKEN
+// として渡し、Vite が import.meta.env 経由で埋め込む
+// (portfolio-treemap と同じ方式)。未設定の環境 (テスト・ローカル)
+// では token パラメータ自体を付けない。対象は url-fetch-gas 経由の
+// 取得だけで、reader-gas へのリクエストには付けない。
+export const URL_FETCH_TOKEN = (import.meta.env && import.meta.env.VITE_URL_FETCH_TOKEN) || '';
+
+export function proxyUrl(fetchUrl, base = URL_FETCH_API_URL, token = URL_FETCH_TOKEN) {
+  const url = `${base}?u=${encodeURIComponent(fetchUrl)}`;
+  return token ? `${url}&token=${encodeURIComponent(token)}` : url;
 }
 
 // api.js と同じ方針: ネットワーク失敗 (TypeError) のときだけ1回送り直す。
@@ -18,10 +28,10 @@ function isRetryable(err) {
   return err instanceof TypeError;
 }
 
-export async function fetchFeedXml(fetchUrl, { fetcher = fetch, proxyBase = URL_FETCH_API_URL, retries = 1, retryDelayMs = 900 } = {}) {
+export async function fetchFeedXml(fetchUrl, { fetcher = fetch, proxyBase = URL_FETCH_API_URL, token = URL_FETCH_TOKEN, retries = 1, retryDelayMs = 900 } = {}) {
   for (let attempt = 0; ; attempt++) {
     try {
-      const res = await fetcher(proxyUrl(fetchUrl, proxyBase));
+      const res = await fetcher(proxyUrl(fetchUrl, proxyBase, token));
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       if (!data || data.error) throw new Error((data && data.error) || 'fetch_failed');

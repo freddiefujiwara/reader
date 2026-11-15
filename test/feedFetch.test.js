@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { proxyUrl, fetchFeedXml, fetchOneFeed, fetchAllFeeds, URL_FETCH_API_URL } from '../src/lib/feedFetch.js';
+import { proxyUrl, fetchFeedXml, fetchOneFeed, fetchAllFeeds, URL_FETCH_API_URL, URL_FETCH_TOKEN } from '../src/lib/feedFetch.js';
 
 const XML = '<rss version="2.0"><channel><item><title>t1</title><link>https://example.com/1</link></item></channel></rss>';
 
@@ -97,6 +97,39 @@ describe('fetchAllFeeds の同時実行数', () => {
     expect(maxInFlight).toBeLessThanOrEqual(6);
     expect(results.map((r) => r.feed.id)).toEqual(feeds.map((f) => f.id));
     expect(results.map((r) => r.entries[0].title)).toEqual(feeds.map((_, i) => `T${i}`));
+  });
+});
+
+describe('url-fetch-gas のトークン認証', () => {
+  it('テスト環境では VITE_URL_FETCH_TOKEN が未設定で、既定では token を付けない', () => {
+    expect(URL_FETCH_TOKEN).toBe('');
+    expect(proxyUrl('https://example.com/f', 'https://proxy.invalid/exec')).not.toContain('token=');
+  });
+  it('トークンがある場合は token パラメータを付ける (値はエンコードする)', () => {
+    expect(proxyUrl('https://example.com/feed?a=1', 'https://proxy.invalid/exec', 'tok en/+'))
+      .toBe('https://proxy.invalid/exec?u=https%3A%2F%2Fexample.com%2Ffeed%3Fa%3D1&token=tok%20en%2F%2B');
+  });
+  it('トークンが空文字なら token パラメータを付けない', () => {
+    expect(proxyUrl('https://example.com/f', 'https://proxy.invalid/exec', ''))
+      .toBe('https://proxy.invalid/exec?u=https%3A%2F%2Fexample.com%2Ff');
+  });
+  it('fetchFeedXml はトークンをプロキシ URL に載せて送る', async () => {
+    const fetcher = okFetcher();
+    await expect(fetchFeedXml('https://example.com/f', { fetcher, token: 'abc123' })).resolves.toBe(XML);
+    const sent = fetcher.mock.calls[0][0];
+    expect(sent).toContain('?u=https%3A%2F%2Fexample.com%2Ff');
+    expect(sent).toContain('&token=abc123');
+  });
+  it('fetchFeedXml はトークン未指定なら token パラメータを送らない', async () => {
+    const fetcher = okFetcher();
+    await fetchFeedXml('https://example.com/f', { fetcher });
+    expect(fetcher.mock.calls[0][0]).not.toContain('token=');
+  });
+  it('fetchOneFeed 経由でもトークンが伝わる', async () => {
+    const fetcher = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ url: 'x', content: XML, error: null }) }));
+    const result = await fetchOneFeed({ id: 'a', url: 'https://example.com/a.xml' }, { fetcher, token: 'zzz' });
+    expect(result.ok).toBe(true);
+    expect(fetcher.mock.calls[0][0]).toContain('&token=zzz');
   });
 });
 
