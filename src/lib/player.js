@@ -147,15 +147,35 @@ export function toElementPosition(displayPos, ctx) {
   return Math.min(Math.max(0, pos * (ctx.elementDuration / ctx.trueSec)), ctx.elementDuration);
 }
 
+// 終端間際 (残りこの秒数以内) の位置は「聴き終えた」ものとして扱い、
+// 再開位置として保存・復元しない。終端付近の保存値が残っていると、
+// 次回の再生開始直後に表示位置ベースの終了判定へ入って、既読化と
+// 自動送りが連鎖してしまうため。
+export const RESUME_END_GUARD_SEC = 5;
+
+// 位置 pos が、全体 totalSec の終端間際 (残り RESUME_END_GUARD_SEC 秒
+// 以内) にあるか。長さ不明・位置が 0 以下なら false。
+export function isWithinEndGuard(pos, totalSec) {
+  if (!Number.isFinite(totalSec) || totalSec <= 0) return false;
+  if (!Number.isFinite(pos) || pos <= 0) return false;
+  return pos >= totalSec - RESUME_END_GUARD_SEC;
+}
+
 // 保存済み再開位置の解釈。旧バージョンは要素スケールで保存していた
 // ため、補正が効いているエピソードで正しい長さを超える値は、要素
 // スケールの値とみなして比率で割り戻す。新しく保存する値は正しい
-// 長さ基準なので trueSec 以下に収まり、そのまま通る。
+// 長さ基準なので trueSec 以下に収まり、そのまま通る。ただし割り戻し
+// 後の値も含め、終端間際の値は再開位置として使わず 0 を返す (端末に
+// 残っている既存の終端付近の保存値もこれで無力化される)。
 export function interpretStoredPlayPos(stored, ctx) {
   const pos = Number.isFinite(stored) && stored > 0 ? stored : 0;
-  if (!ctx || !durationMismatch(ctx.trueSec, ctx.elementDuration)) return pos;
-  if (pos <= ctx.trueSec) return pos;
-  return pos * (ctx.trueSec / ctx.elementDuration);
+  if (!ctx || !Number.isFinite(ctx.trueSec) || ctx.trueSec <= 0) return pos;
+  let result = pos;
+  if (durationMismatch(ctx.trueSec, ctx.elementDuration) && pos > ctx.trueSec) {
+    result = pos * (ctx.trueSec / ctx.elementDuration);
+  }
+  if (result <= ctx.trueSec && isWithinEndGuard(result, ctx.trueSec)) return 0;
+  return result;
 }
 
 // 表示位置が実質の終端 (残り0.3秒以内) に達したか。要素の 'ended' が

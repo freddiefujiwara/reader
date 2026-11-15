@@ -65,6 +65,7 @@ import {
   durationMismatch,
   formatTime,
   interpretStoredPlayPos,
+  isWithinEndGuard,
   loadPlayMode,
   loadTimeModel,
   nextEpisodePlan,
@@ -463,13 +464,22 @@ function savePlayPos() {
   if (!ep) return;
   // 再生し終えた要素の現在位置は「終わり」そのもので再開位置ではない。
   // 終了直後の自動送り (loadEpisode 内の保存) で、クリア済みの位置を
-  // 末尾で上書きしてしまわないよう、ここで 0 に倒す。
-  if (audio.ended) {
+  // 末尾で上書きしてしまわないよう、ここで 0 に倒す。'ended' イベント
+  // 経由でない終了 (表示位置ベースの判定経由) では audio.ended が
+  // 立たないため、終了フロー済みかどうかでも判定する。
+  if (audio.ended || endFlowDone) {
     playPosMemory.set(ep.id, 0);
     return;
   }
   // 再開位置は正しい長さ基準 (表示スケール) で保存する。
   const pos = Math.floor(toDisplayPosition(audio.currentTime || 0, mappingCtx.value));
+  // 終端間際 (残り5秒以内) の位置は再開位置として保存しない。開始
+  // 直後に終了判定へ入る毒になるため、DB 側も 0 に倒しておく。
+  if (isWithinEndGuard(pos, displayDuration.value)) {
+    playPosMemory.set(ep.id, 0);
+    clearLocalArticlePlayPos(ep.id).catch(() => {});
+    return;
+  }
   playPosMemory.set(ep.id, pos);
   if (pos > 0) setLocalArticlePlayPos(ep.id, pos).catch(() => {});
 }
@@ -544,8 +554,10 @@ function togglePlay() {
   if (audio.paused) {
     if (audio.ended) {
       audio.currentTime = 0;
-      endFlowDone = false;
     }
+    // 終わった曲を手で再生し直したら、終了フロー済みの扱いを解く
+    // (savePlayPos の抑制と終了判定が再び効くようにするため)。
+    endFlowDone = false;
     tryPlayAudio();
   } else {
     audio.pause();
@@ -632,8 +644,14 @@ audio.addEventListener('timeupdate', () => {
   }
   // 二重化した時間軸では、実メディアの終わりで要素が止まって
   // 'ended' が来ないことがある。表示位置が実質の終端に達したら
-  // 終了フローへ進める ('ended' と二重には走らない)。
-  if (!endFlowDone && mappingOn.value && reachedTrueEnd(displayTime.value, trueDuration.value)) {
+  // 終了フローへ進める ('ended' と二重には走らない)。ただしこの
+  // 判定は、その曲の再生中に実測したモデルがあるときだけ有効に
+  // する。端末に保存された前回分のモデル (learned) の流用だけでは
+  // 有効にしない (誤った learned が残っていると、他の曲で表示位置
+  // が終端へ変換されて早期終了してしまう)。位置表示の変換自体は
+  // 従来どおり learned も使う (mappingCtx / mappingOn 側)。
+  if (!endFlowDone && measuredModel && durationMismatch(trueDuration.value, duration.value)
+    && reachedTrueEnd(displayTime.value, trueDuration.value)) {
     handleEpisodeEnded();
   }
 });

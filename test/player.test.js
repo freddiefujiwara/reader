@@ -16,6 +16,8 @@ import {
   toDisplayPosition,
   toElementPosition,
   interpretStoredPlayPos,
+  isWithinEndGuard,
+  RESUME_END_GUARD_SEC,
   reachedTrueEnd,
   loadTimeModel,
   saveTimeModel,
@@ -260,16 +262,42 @@ describe('時間マッピング (補正なし)', () => {
   });
 });
 
+describe('isWithinEndGuard', () => {
+  it('残り5秒以内を終端間際とする', () => {
+    expect(RESUME_END_GUARD_SEC).toBe(5);
+    expect(isWithinEndGuard(104, 104)).toBe(true);
+    expect(isWithinEndGuard(99, 104)).toBe(true);
+    expect(isWithinEndGuard(98, 104)).toBe(false);
+    expect(isWithinEndGuard(50, 104)).toBe(false);
+  });
+  it('長さ不明・位置なしでは終端間際にしない', () => {
+    expect(isWithinEndGuard(10, 0)).toBe(false);
+    expect(isWithinEndGuard(10, null)).toBe(false);
+    expect(isWithinEndGuard(0, 104)).toBe(false);
+  });
+});
+
 describe('interpretStoredPlayPos', () => {
   const ctx = { trueSec: 104, elementDuration: 208, model: 'scaled' };
-  it('正しい長さ以下の保存値はそのまま', () => {
+  it('正しい長さ以下の中盤の保存値はそのまま', () => {
     expect(interpretStoredPlayPos(0, ctx)).toBe(0);
     expect(interpretStoredPlayPos(60, ctx)).toBe(60);
-    expect(interpretStoredPlayPos(104, ctx)).toBe(104);
+    expect(interpretStoredPlayPos(98, ctx)).toBe(98);
+  });
+  it('終端間際 (残り5秒以内) の保存値は 0 に倒す', () => {
+    expect(interpretStoredPlayPos(99, ctx)).toBe(0);
+    expect(interpretStoredPlayPos(104, ctx)).toBe(0);
   });
   it('正しい長さを超える旧保存値は要素スケールとみなして割り戻す', () => {
     expect(interpretStoredPlayPos(160, ctx)).toBe(80);
-    expect(interpretStoredPlayPos(208, ctx)).toBe(104);
+  });
+  it('割り戻した結果が終端間際なら 0 に倒す', () => {
+    expect(interpretStoredPlayPos(200, ctx)).toBe(0);
+    expect(interpretStoredPlayPos(208, ctx)).toBe(0);
+  });
+  it('長さが一致していても終端間際の保存値は 0 に倒す', () => {
+    expect(interpretStoredPlayPos(102, { trueSec: 104, elementDuration: 104, model: 'direct' })).toBe(0);
+    expect(interpretStoredPlayPos(60, { trueSec: 104, elementDuration: 104, model: 'direct' })).toBe(60);
   });
   it('補正が効かない場合はそのまま', () => {
     expect(interpretStoredPlayPos(160, { trueSec: 104, elementDuration: 104, model: 'scaled' })).toBe(160);

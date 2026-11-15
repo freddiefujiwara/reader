@@ -65,7 +65,7 @@ vi.mock('../src/config.js', () => ({
 }));
 
 import App from '../src/App.vue';
-import { saveLocalFeeds, putLocalArticles } from '../src/lib/localDb.js';
+import { loadLocalArticles, saveLocalFeeds, putLocalArticles } from '../src/lib/localDb.js';
 
 // jsdom の HTMLMediaElement は再生を実装しないため、App が使う
 // 面だけを持ち、'ended' などをテストから発火できるスタブにする。
@@ -307,6 +307,148 @@ describe('エピソード開始時の記事の引き直し', () => {
     audio.dispatchEvent(new window.Event('loadedmetadata'));
     await flush();
     expect(el.querySelector('.player-total').textContent).toBe('1:44');
+    expect(errors).toEqual([]);
+  });
+});
+
+describe('再開位置の保存 (終端間際は保存しない)', () => {
+  it('終端間際で止めても再開位置は 0 になり、DB の既存値も消える', async () => {
+    // 前回分の再開位置 500 が残っている状態から始める。
+    await mountWithRecords([{ ...EP1, play_pos: 500 }, { ...EP2 }]);
+    await startCard(0);
+    const audio = latestAudio();
+    audio.duration = 1800; // EP1 の実尺どおり
+    audio.dispatchEvent(new window.Event('loadedmetadata'));
+    await flush();
+    expect(audio.currentTime).toBe(500);
+
+    // 終端まで残り3秒の位置で一時停止 → 保存されるのは 0。
+    audio.currentTime = 1797;
+    audio.pause();
+    await flush();
+    const saved = (await loadLocalArticles()).find((r) => r.id === 'ep-1');
+    expect(saved.play_pos).toBe(0);
+    expect(errors).toEqual([]);
+  });
+
+  it('中盤で止めれば、その位置が従来どおり保存される', async () => {
+    await mountPlayer();
+    await startCard(0);
+    const audio = latestAudio();
+    audio.duration = 1800;
+    audio.dispatchEvent(new window.Event('loadedmetadata'));
+    await flush();
+
+    audio.currentTime = 900;
+    audio.pause();
+    await flush();
+    const saved = (await loadLocalArticles()).find((r) => r.id === 'ep-1');
+    expect(saved.play_pos).toBe(900);
+    expect(errors).toEqual([]);
+  });
+});
+
+describe('表示位置ベースの終了判定 (実測モデルの要否)', () => {
+  const ytRec = (base) => ({ ...base, duration_sec: 104 });
+
+  it('learned (端末保存) の流用だけでは、表示位置が終端に達しても終了しない', async () => {
+    // 前回分のモデルが端末に残っている状態。
+    localStorage.setItem('reader:player-timemodel:v1', 'scaled');
+    await mountWithRecords([ytRec(EP1), ytRec(EP2)]);
+    await startCard(0);
+    const audio = latestAudio();
+    audio.duration = 208; // 要素は実尺 104 の2倍を報告する
+    audio.dispatchEvent(new window.Event('loadedmetadata'));
+    await flush();
+
+    // 表示位置は終端 (103.8 / 104) に達するが、この曲では実測して
+    // いないので終了フローは走らない (timeupdate 1回では実測の
+    // 窓が閉じないため、モデルは未確定のまま)。
+    audio.currentTime = 207.6;
+    audio.dispatchEvent(new window.Event('timeupdate'));
+    await flush();
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
+    expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(false);
+    expect(errors).toEqual([]);
+  });
+
+  it('実測で確定したら終了フローが走り、前曲の再開位置は 0 のまま', async () => {
+    await mountWithRecords([ytRec(EP1), ytRec(EP2)]);
+    await startCard(0);
+    const audio = latestAudio();
+    audio.duration = 208;
+    audio.dispatchEvent(new window.Event('loadedmetadata'));
+    await flush();
+
+    // performance.now を操作して実測の窓 (3秒強) を作る: 要素時間が
+    // 10 進む → 'scaled' と分類され、この曲のモデルが確定する。
+    let nowVal = 0;
+    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => nowVal);
+    try {
+      audio.currentTime = 0;
+      audio.dispatchEvent(new window.Event('timeupdate'));
+      nowVal = 3100;
+      audio.currentTime = 10;
+      audio.dispatchEvent(new window.Event('timeupdate'));
+      await flush();
+
+      // 表示位置が終端に達したら終了フローが走り、次へ進む。
+      // 'ended' イベント経由ではないため audio.ended は立っていない。
+      audio.currentTime = 207.6;
+      audio.dispatchEvent(new window.Event('timeupdate'));
+      await flush();
+    } finally {
+      nowSpy.mockRestore();
+    }
+    expect(audio.ended).toBe(false);
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+    expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(true);
+    // 終了処理でクリアした前曲の位置が、次曲ロード冒頭の保存で
+    // 末尾位置に書き戻されていないこと。
+    const saved = (await loadLocalArticles()).find((r) => r.id === 'ep-1');
+    expect(saved.play_pos).toBe(0);
+    expect(errors).toEqual([]);
+  });
+
+  it('終了済みの曲をシークで戻してから保存が走っても、位置は書き戻されない', async () => {
+    await mountWithRecords([ytRec(EP1), ytRec(EP2)]);
+    await startCard(1); // 末尾の EP2 から始める (終わっても次は無い)
+    const audio = latestAudio();
+    audio.duration = 208;
+    audio.dispatchEvent(new window.Event('loadedmetadata'));
+    await flush();
+
+    let nowVal = 0;
+    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => nowVal);
+    try {
+      audio.currentTime = 0;
+      audio.dispatchEvent(new window.Event('timeupdate'));
+      nowVal = 3100;
+      audio.currentTime = 10;
+      audio.dispatchEvent(new window.Event('timeupdate'));
+      await flush();
+      // 実測確定後に終端へ到達 → 終了フロー (既読化・位置クリア)。
+      audio.currentTime = 207.6;
+      audio.dispatchEvent(new window.Event('timeupdate'));
+      await flush();
+    } finally {
+      nowSpy.mockRestore();
+    }
+    expect(el.querySelectorAll('.article-card')[1].classList.contains('is-read')).toBe(true);
+    expect((await loadLocalArticles()).find((r) => r.id === 'ep-2').play_pos).toBe(0);
+
+    // 終了後にシークで中盤 (表示位置 50) へ戻し、画面を離れる
+    // (visibilitychange の保存が走る)。終了済みの曲なので、位置は
+    // 書き戻されず 0 のままのはず。
+    audio.currentTime = 100;
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+    try {
+      document.dispatchEvent(new window.Event('visibilitychange'));
+      await flush();
+    } finally {
+      delete document.visibilityState;
+    }
+    expect((await loadLocalArticles()).find((r) => r.id === 'ep-2').play_pos).toBe(0);
     expect(errors).toEqual([]);
   });
 });
