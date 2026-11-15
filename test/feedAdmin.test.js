@@ -12,6 +12,7 @@ import {
   resolveFeedAddForm,
   buildSaveFeedPayload,
   filterAdminFeeds,
+  genreSuggestions,
   formatFeedStatus,
   moveFeedOrder,
   createOrderSender,
@@ -356,5 +357,34 @@ describe('createOrderSender', () => {
     await expect(sender.submit(['a'])).rejects.toThrow('forbidden');
     await sender.submit(['b']);
     expect(calls).toBe(2);
+  });
+});
+
+describe('genreSuggestions (フォームのジャンル候補)', () => {
+  const OPTIONS = ['ポッドキャスト', '教養・ラジオ', 'private', 'News'];
+
+  it('空入力なら全候補を出現順で返す', () => {
+    expect(genreSuggestions(OPTIONS, '')).toEqual(OPTIONS);
+    expect(genreSuggestions(OPTIONS, '  ')).toEqual(OPTIONS);
+    expect(genreSuggestions(OPTIONS, null)).toEqual(OPTIONS);
+  });
+
+  it('入力を含む候補だけに絞る (英字は大小を区別しない)', () => {
+    expect(genreSuggestions(OPTIONS, 'ポッ')).toEqual(['ポッドキャスト']);
+    expect(genreSuggestions(OPTIONS, 'ラジオ')).toEqual(['教養・ラジオ']);
+    expect(genreSuggestions(OPTIONS, 'PRI')).toEqual(['private']);
+    expect(genreSuggestions(OPTIONS, 'new')).toEqual(['News']);
+  });
+
+  it('入力と完全一致する候補は出さない (選んでも値が変わらないため)', () => {
+    expect(genreSuggestions(OPTIONS, 'ポッドキャスト')).toEqual([]);
+    expect(genreSuggestions(OPTIONS, 'private')).toEqual([]);
+  });
+
+  it('一致が無ければ空、候補が無ければ空', () => {
+    expect(genreSuggestions(OPTIONS, '存在しない')).toEqual([]);
+    expect(genreSuggestions([], '')).toEqual([]);
+    expect(genreSuggestions(null, '')).toEqual([]);
+    expect(genreSuggestions(undefined, 'x')).toEqual([]);
   });
 });

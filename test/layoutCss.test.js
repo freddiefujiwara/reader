@@ -27,3 +27,13 @@ describe('下部バーとプレイヤーバーの重なり防止', () => {
     expect(ruleBody('.player-bar')).toContain('bottom: var(--bottom-bar-height)');
   });
 });
+
+describe('ジャンル候補の配置', () => {
+  it('候補 (.genre-suggestions) は通常フローの flex で、絶対配置ではない', () => {
+    const body = ruleBody('.genre-suggestions');
+    expect(body, '候補のルールがある').not.toBe('');
+    expect(body).toContain('display: flex');
+    expect(body).not.toContain('position: absolute');
+    expect(body).not.toContain('position: fixed');
+  });
+});
