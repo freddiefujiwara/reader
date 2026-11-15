@@ -1389,6 +1389,10 @@ onMounted(async () => {
           </p>
           <p v-else-if="mgmtLoading" class="panel center"><span class="spinner"></span>読み込み中...</p>
           <template v-else>
+            <!-- フィード編集中はフォームに集中できるよう、ジャンル選択と
+                 一覧は隠す。adminCategory 等の状態はそのまま保持し、
+                 保存/キャンセルで閉じれば元の絞り込み表示に戻る。 -->
+            <template v-if="formMode !== 'edit'">
             <div v-if="genreOptions.length" class="feed-chips category-chips" role="tablist" aria-label="ジャンルで絞り込み">
               <button
                 type="button"
@@ -1460,6 +1464,7 @@ onMounted(async () => {
                 <button class="ghost danger" type="button" @click="askDeleteFeed(f)">削除</button>
               </div>
             </article>
+            </template>
           </template>
         </template>
       </template>

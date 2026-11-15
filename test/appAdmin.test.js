@@ -314,6 +314,63 @@ describe('管理画面のジャンル絞り込み', () => {
   });
 });
 
+describe('管理画面の編集中表示', () => {
+  const genreTablist = () => el.querySelector('[aria-label="ジャンルで絞り込み"]');
+
+  it('編集フォームを開くと、ジャンル選択とフィード一覧が隠れる', async () => {
+    await mountAdmin();
+    expect(genreTablist(), 'ジャンル選択が出ている').toBeTruthy();
+    expect(el.querySelectorAll('.feed-card').length).toBe(FEEDS.length);
+    const form = await openEdit(0);
+    expect(errors).toEqual([]);
+    expect(form, '編集フォームは出る').toBeTruthy();
+    expect(genreTablist(), '編集中はジャンル選択を隠す').toBeNull();
+    expect(el.querySelectorAll('.feed-card').length, '編集中は一覧を隠す').toBe(0);
+  });
+
+  it('ジャンルで絞った状態で編集し、キャンセルすると絞り込みがそのまま戻る', async () => {
+    await mountAdmin();
+    findButton(genreTablist(), 'ポッドキャスト').click();
+    await flush();
+    expect(el.querySelectorAll('.feed-card').length).toBe(2);
+    const form = await openEdit(0);
+    expect(el.querySelectorAll('.feed-card').length).toBe(0);
+    findButton(form, 'キャンセル').click();
+    await flush();
+    expect(errors).toEqual([]);
+    expect(el.querySelector('.feed-form'), 'フォームは閉じる').toBeNull();
+    expect(genreTablist(), 'ジャンル選択が戻る').toBeTruthy();
+    const active = genreTablist().querySelector('.chip.active');
+    expect(active.textContent.trim(), '絞り込みは保持される').toBe('ポッドキャスト');
+    expect(el.querySelectorAll('.feed-card').length).toBe(2);
+  });
+
+  it('編集を保存するとフォームが閉じて一覧が戻る', async () => {
+    await mountAdmin();
+    const form = await openEdit(0);
+    const input = form.querySelector('#feed-category');
+    input.value = '新しいジャンル';
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+    form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+    await flush();
+    await flush();
+    expect(errors).toEqual([]);
+    expect(el.querySelector('.feed-form'), '保存後はフォームが閉じる').toBeNull();
+    expect(genreTablist(), 'ジャンル選択が戻る').toBeTruthy();
+    expect(el.querySelectorAll('.feed-card').length, '一覧が戻る').toBe(FEEDS.length);
+  });
+
+  it('追加フォームではジャンル選択と一覧は隠さない (対象は編集時のみ)', async () => {
+    await mountAdmin();
+    findButton(el, 'フィードを追加').click();
+    await flush();
+    expect(errors).toEqual([]);
+    expect(el.querySelector('.feed-form'), '追加フォームは出る').toBeTruthy();
+    expect(genreTablist(), 'ジャンル選択は出たまま').toBeTruthy();
+    expect(el.querySelectorAll('.feed-card').length).toBe(FEEDS.length);
+  });
+});
+
 describe('管理画面の YouTube チャンネル URL 追加', () => {
   // サーバーが返す解決済みフィード: URL は /channel/ の正規形、タイトル補完済み。
   const RESOLVED = {
