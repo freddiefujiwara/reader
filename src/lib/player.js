@@ -150,7 +150,7 @@ export function failedEpisodePlan({ queue, currentId, repeat = 'none', shuffle =
 
 // 再生意思があるのに表示位置がこの時間 (ミリ秒) 進まなければ、
 // そのエピソードは再生できないとみなす。
-export const STALL_THRESHOLD_MS = 20_000;
+export const STALL_THRESHOLD_MS = 10_000;
 
 // 表示位置の進み具合を観測する小さな状態機械。App.vue 側が
 // タイマーの tick ごとに observe(表示位置, 現在時刻) を呼ぶ。
