@@ -3,6 +3,13 @@
    style.css. App-specific styles follow below. */
 :root {
   --nav-h: 64px;
+  /* 下部固定バー (.bottom-bar) の高さ。内訳: border-top 1px +
+     上下 padding 10px ずつ + 一番背の高い中身 (「すべて既読」の
+     primary ボタン、min-height 48px) + 端末の下部安全領域。
+     プレイヤーバー (.player-bar) の持ち上げ量と必ず一致させる
+     ため、両方からこの変数を参照する (以前は 61px と見積りが
+     ずれていて、プレイヤーがボタンの上部に重なっていた)。 */
+  --bottom-bar-height: calc(69px + env(safe-area-inset-bottom, 0px));
   font-family: "Zen Kaku Gothic New", "Hiragino Kaku Gothic ProN", "Hiragino Sans", "Yu Gothic", sans-serif;
   line-height: 1.85;
 
@@ -530,6 +537,9 @@ button.ghost.active {
   right: 0;
   bottom: 0;
   z-index: 40;
+  /* 高さを変数で固定し、プレイヤーバーの持ち上げ量と一致させる
+     (box-sizing: border-box のため padding と border を含む)。 */
+  height: var(--bottom-bar-height);
   display: flex;
   align-items: center;
   gap: 10px;
@@ -709,12 +719,14 @@ button.ghost.active {
 }
 
 /* プレイヤーバー: .bottom-bar の上に重ねる固定バー。
-   横幅と余白の取り方は .bottom-bar に合わせる。 */
+   横幅と余白の取り方は .bottom-bar に合わせる。持ち上げ量は
+   下部バーの実高さ (--bottom-bar-height) と一致させ、バー同士が
+   重ならないようにする。 */
 .player-bar {
   position: fixed;
   left: 0;
   right: 0;
-  bottom: calc(61px + env(safe-area-inset-bottom));
+  bottom: var(--bottom-bar-height);
   z-index: 41;
   background: var(--surface);
   border-top: 1px solid var(--border);
@@ -723,7 +735,7 @@ button.ghost.active {
 
 /* プレイヤーが出ている間は、2本のバーに隠れないよう余白を足す。 */
 .layout.has-player {
-  padding-bottom: 250px;
+  padding-bottom: calc(258px + env(safe-area-inset-bottom, 0px));
 }
 
 .player-now {
