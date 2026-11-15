@@ -5,11 +5,15 @@ import {
   deleteFeed,
   exchangeSession,
   exchangeShare,
+  getShareLinkStatus,
+  issueShareLink,
   listArticles,
   listFeeds,
   reorderFeeds,
+  revokeShareLink,
   saveFeed,
 } from './lib/api.js';
+import { buildShareUrl, formatShareExpiry } from './lib/shareLink.js';
 import {
   buildSaveFeedPayload,
   createFeedForm,
@@ -127,6 +131,16 @@ const mgmtLoading = ref(false);
 const mgmtError = ref('');
 const mgmtSavingId = ref('');
 const confirmDeleteId = ref('');
+// 共有リンク (マジックリンク)。サーバーはトークンのハッシュしか
+// 持たないため、平文の URL を表示できるのは発行したこの画面だけ
+// (shareUrl は発行直後にだけ入る)。
+const shareStatus = ref(null); // null=未取得 / { active, expiresAt }
+const shareUrl = ref('');
+const shareLoading = ref(false);
+const shareSaving = ref(false);
+const shareError = ref('');
+const shareConfirm = ref(''); // '' | 'issue' | 'revoke'
+const shareCopied = ref(false);
 const formMode = ref(''); // '' | 'add' | 'edit'
 const formEl = ref(null);
 const form = ref(createFeedForm());
@@ -1334,6 +1348,91 @@ async function loadFeeds() {
   }
 }
 
+/* ---- 共有リンク (マジックリンク、管理画面の最下部) ---- */
+
+async function loadShareStatus() {
+  if (!session.value) return;
+  shareLoading.value = true;
+  try {
+    const payload = await getShareLinkStatus(session.value.token);
+    shareStatus.value = {
+      active: !!payload.active,
+      expiresAt: payload.expiresAt || null,
+    };
+    shareError.value = '';
+  } catch (e) {
+    if (e.message === 'unauthorized') expireSession();
+    else shareError.value = `共有リンクの状態を取得できませんでした（${e.message}）。`;
+  } finally {
+    shareLoading.value = false;
+  }
+}
+
+function askIssueShare() {
+  shareConfirm.value = 'issue';
+}
+
+function askRevokeShare() {
+  shareConfirm.value = 'revoke';
+}
+
+function cancelShareConfirm() {
+  shareConfirm.value = '';
+}
+
+async function onIssueShare() {
+  if (shareSaving.value || !session.value) return;
+  shareSaving.value = true;
+  try {
+    const payload = await issueShareLink(session.value.token);
+    shareStatus.value = { active: true, expiresAt: payload.expiresAt || null };
+    // ベースはアプリの置き場所 (本番 /reader/、ステージングは
+    // /reader/staging/)。開く側はハッシュしか見ない。
+    shareUrl.value = buildShareUrl(payload.token, {
+      origin: window.location.origin,
+      base: import.meta.env.BASE_URL,
+    });
+    shareCopied.value = false;
+    shareConfirm.value = '';
+    shareError.value = '';
+  } catch (e) {
+    if (e.message === 'unauthorized') expireSession();
+    else shareError.value = `リンクを発行できませんでした（${e.message}）。`;
+  } finally {
+    shareSaving.value = false;
+  }
+}
+
+async function onRevokeShare() {
+  if (shareSaving.value || !session.value) return;
+  shareSaving.value = true;
+  try {
+    await revokeShareLink(session.value.token);
+    shareStatus.value = { active: false, expiresAt: null };
+    shareUrl.value = '';
+    shareCopied.value = false;
+    shareConfirm.value = '';
+    shareError.value = '';
+  } catch (e) {
+    if (e.message === 'unauthorized') expireSession();
+    else shareError.value = `リンクを無効化できませんでした（${e.message}）。`;
+  } finally {
+    shareSaving.value = false;
+  }
+}
+
+async function copyShareUrl() {
+  if (!shareUrl.value) return;
+  try {
+    await navigator.clipboard.writeText(shareUrl.value);
+    shareCopied.value = true;
+  } catch {
+    // コピーできない環境では、入力欄の URL を手でコピーしてもらう
+    // (入力欄はタップで全選択される)。
+    shareCopied.value = false;
+  }
+}
+
 // 管理画面のジャンル絞り込みの切り替え。タイムラインの setCategory と
 // 同じトグル方式: 選択中のジャンルを再タップしたら解除し、全件表示に
 // 戻す (「すべて」チップは置かない)。
@@ -1347,7 +1446,9 @@ function openFeedAdmin() {
   formMode.value = '';
   formScroll.clear();
   confirmDeleteId.value = '';
+  shareConfirm.value = '';
   loadFeeds();
+  loadShareStatus();
 }
 
 async function backToTimeline() {
@@ -2045,6 +2146,80 @@ onMounted(async () => {
             </article>
             </template>
           </template>
+
+          <!-- 共有リンク (マジックリンク) は管理画面の最下部に置く。
+               サーバーはトークンのハッシュしか持たないため、平文の
+               URL を表示できるのは発行直後のこの画面だけ。 -->
+          <section class="panel share-link-panel">
+            <h2 class="feed-form-title">共有リンク</h2>
+            <p class="hint">このリンクを開くと、ログインなしで読み取り専用として閲覧できます。有効期限は発行から1か月です。</p>
+            <p v-if="shareLoading && !shareStatus" class="hint"><span class="spinner"></span>読み込み中...</p>
+            <template v-else>
+              <p v-if="shareStatus && shareStatus.active" class="share-status">
+                有効なリンクがあります<template v-if="formatShareExpiry(shareStatus.expiresAt)">（{{ formatShareExpiry(shareStatus.expiresAt) }} まで）</template>。
+              </p>
+              <p v-else class="share-status">有効なリンクはありません。</p>
+
+              <div v-if="shareUrl" class="share-url-row">
+                <input
+                  class="share-url"
+                  type="text"
+                  readonly
+                  :value="shareUrl"
+                  aria-label="共有リンクのURL"
+                  @focus="$event.target.select()"
+                />
+                <button class="ghost" type="button" @click="copyShareUrl">{{ shareCopied ? 'コピーしました' : 'コピー' }}</button>
+              </div>
+              <p v-if="shareUrl" class="field-note">この URL を表示できるのは発行直後だけです（サーバーには控えがありません）。必要な場合は今のうちにコピーして控えてください。</p>
+
+              <div v-if="shareConfirm === 'issue'" class="delete-confirm">
+                <p class="error">{{ shareStatus && shareStatus.active ? '新しいリンクを発行すると、いまのリンクは使えなくなります。発行しますか？' : '共有リンクを発行しますか？' }}</p>
+                <div class="feed-actions">
+                  <button
+                    class="ghost danger"
+                    type="button"
+                    :disabled="shareSaving"
+                    @click="onIssueShare"
+                  >{{ shareSaving ? '発行中...' : '発行する' }}</button>
+                  <button
+                    class="ghost"
+                    type="button"
+                    :disabled="shareSaving"
+                    @click="cancelShareConfirm"
+                  >キャンセル</button>
+                </div>
+              </div>
+              <div v-else-if="shareConfirm === 'revoke'" class="delete-confirm">
+                <p class="error">共有リンクを無効化しますか？このリンクでは閲覧できなくなります。</p>
+                <div class="feed-actions">
+                  <button
+                    class="ghost danger"
+                    type="button"
+                    :disabled="shareSaving"
+                    @click="onRevokeShare"
+                  >{{ shareSaving ? '無効化中...' : '無効化する' }}</button>
+                  <button
+                    class="ghost"
+                    type="button"
+                    :disabled="shareSaving"
+                    @click="cancelShareConfirm"
+                  >キャンセル</button>
+                </div>
+              </div>
+              <div v-else class="feed-actions">
+                <button class="primary" type="button" :disabled="shareSaving || shareLoading" @click="askIssueShare">リンクを発行する</button>
+                <button
+                  v-if="shareStatus && shareStatus.active"
+                  class="ghost danger"
+                  type="button"
+                  :disabled="shareSaving || shareLoading"
+                  @click="askRevokeShare"
+                >リンクを無効化する</button>
+              </div>
+            </template>
+            <p v-if="shareError" class="error">{{ shareError }}</p>
+          </section>
         </template>
       </template>
 
