@@ -14,7 +14,9 @@ import {
   filterAdminFeeds,
   genreSuggestions,
   formatFeedStatus,
-  moveFeedOrder,
+  moveItemToIndex,
+  dragRowPitch,
+  dragInsertIndex,
   createOrderSender,
 } from '../src/lib/feedAdmin.js';
 
@@ -290,21 +292,89 @@ describe('filterAdminFeeds (管理画面のジャンル絞り込み)', () => {
   });
 });
 
-describe('moveFeedOrder', () => {
-  const feeds = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
-  it('上へ動かす', () => {
-    expect(moveFeedOrder(feeds, 'b', -1).map((f) => f.id)).toEqual(['b', 'a', 'c']);
-  });
+describe('moveItemToIndex', () => {
+  const feeds = [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }];
+  const ids = (list) => list.map((f) => f.id);
   it('下へ動かす', () => {
-    expect(moveFeedOrder(feeds, 'b', 1).map((f) => f.id)).toEqual(['a', 'c', 'b']);
+    expect(ids(moveItemToIndex(feeds, 0, 2))).toEqual(['b', 'c', 'a', 'd']);
   });
-  it('端では null', () => {
-    expect(moveFeedOrder(feeds, 'a', -1)).toBeNull();
-    expect(moveFeedOrder(feeds, 'c', 1)).toBeNull();
+  it('上へ動かす', () => {
+    expect(ids(moveItemToIndex(feeds, 3, 1))).toEqual(['a', 'd', 'b', 'c']);
   });
-  it('未知の id は null で、元配列は変えない', () => {
-    expect(moveFeedOrder(feeds, 'nope', 1)).toBeNull();
-    expect(feeds.map((f) => f.id)).toEqual(['a', 'b', 'c']);
+  it('先頭へ動かす', () => {
+    expect(ids(moveItemToIndex(feeds, 2, 0))).toEqual(['c', 'a', 'b', 'd']);
+  });
+  it('末尾へ動かす', () => {
+    expect(ids(moveItemToIndex(feeds, 1, 3))).toEqual(['a', 'c', 'd', 'b']);
+  });
+  it('同じ位置は null で、元配列は変えない', () => {
+    expect(moveItemToIndex(feeds, 1, 1)).toBeNull();
+    expect(ids(feeds)).toEqual(['a', 'b', 'c', 'd']);
+  });
+  it('範囲外は null', () => {
+    expect(moveItemToIndex(feeds, -1, 0)).toBeNull();
+    expect(moveItemToIndex(feeds, 0, 4)).toBeNull();
+    expect(moveItemToIndex(feeds, 4, 0)).toBeNull();
+    expect(moveItemToIndex([], 0, 0)).toBeNull();
+  });
+});
+
+describe('dragRowPitch', () => {
+  // 高さ80・間隔20 (ピッチ100) の4行。
+  const rects = [0, 100, 200, 300].map((top) => ({ top, height: 80 }));
+  it('次の行までの距離を返す', () => {
+    expect(dragRowPitch(rects, 0)).toBe(100);
+    expect(dragRowPitch(rects, 2)).toBe(100);
+  });
+  it('末尾は1つ前のピッチで代用する', () => {
+    expect(dragRowPitch(rects, 3)).toBe(100);
+  });
+  it('1行だけなら高さ、範囲外は0', () => {
+    expect(dragRowPitch([{ top: 0, height: 80 }], 0)).toBe(80);
+    expect(dragRowPitch(rects, 4)).toBe(0);
+    expect(dragRowPitch([], 0)).toBe(0);
+  });
+});
+
+describe('dragInsertIndex', () => {
+  // 高さ80・ピッチ100 の4行。中点は 40 / 140 / 240 / 340。
+  const rects = [0, 100, 200, 300].map((top) => ({ top, height: 80 }));
+  it('動かさなければ元の位置', () => {
+    expect(dragInsertIndex(rects, 0, 0)).toBe(0);
+    expect(dragInsertIndex(rects, 2, 0)).toBe(2);
+  });
+  it('下へ: 中点を越えた分だけ進む', () => {
+    // 行0の中心は40。+110 で中心150: 行1の中点140を越えるので1。
+    expect(dragInsertIndex(rects, 0, 110)).toBe(1);
+    // +150 で中心190: 行2の中点240には届かないので1のまま。
+    expect(dragInsertIndex(rects, 0, 150)).toBe(1);
+    // +210 で中心250: 行2の中点240も越えるので2。
+    expect(dragInsertIndex(rects, 0, 210)).toBe(2);
+  });
+  it('下へ: 末尾まで運ぶと末尾のインデックス', () => {
+    expect(dragInsertIndex(rects, 0, 1000)).toBe(3);
+    expect(dragInsertIndex(rects, 1, 1000)).toBe(3);
+  });
+  it('上へ: 中点を越えた分だけ戻る', () => {
+    // 行3の中心は340。-110 で中心230: 行2の中点240を下回るので2。
+    expect(dragInsertIndex(rects, 3, -110)).toBe(2);
+    // -150 で中心190: 行1の中点140は下回らないので2のまま。
+    expect(dragInsertIndex(rects, 3, -150)).toBe(2);
+    // -250 で中心90: 行1の中点140も下回るので1。
+    expect(dragInsertIndex(rects, 3, -250)).toBe(1);
+  });
+  it('上へ: 先頭まで運ぶと0', () => {
+    expect(dragInsertIndex(rects, 3, -1000)).toBe(0);
+    expect(dragInsertIndex(rects, 1, -1000)).toBe(0);
+  });
+  it('中心が中点ちょうどでは越えた数に入れない', () => {
+    // 行0の中心40 +100 = 140 は行1の中点140とちょうど同じ。
+    expect(dragInsertIndex(rects, 0, 100)).toBe(0);
+    expect(dragInsertIndex(rects, 0, 101)).toBe(1);
+  });
+  it('範囲外の fromIndex はそのまま返す', () => {
+    expect(dragInsertIndex(rects, 9, 100)).toBe(9);
+    expect(dragInsertIndex([], 0, 100)).toBe(0);
   });
 });
 

@@ -194,16 +194,55 @@ export function genreSuggestions(options, input) {
   return list.filter((c) => c !== q && c.toLowerCase().includes(lower));
 }
 
-// 並び替え: feeds の中で feedId を direction (-1=上, +1=下) へ1つ動かした
-// 新しい配列を返す。端で動かせない場合と対象が無い場合は null。
-export function moveFeedOrder(feeds, feedId, direction) {
-  const idx = feeds.findIndex((f) => f.id === feedId);
-  if (idx < 0) return null;
-  const next = idx + direction;
-  if (next < 0 || next >= feeds.length) return null;
-  const out = [...feeds];
-  [out[idx], out[next]] = [out[next], out[idx]];
+// 並び替え: list の fromIndex の要素を toIndex へ動かした新しい配列を
+// 返す。範囲外・同じ位置 (動かない) の場合は null。元の配列は変えない。
+export function moveItemToIndex(list, fromIndex, toIndex) {
+  const items = Array.isArray(list) ? list : [];
+  if (!Number.isInteger(fromIndex) || !Number.isInteger(toIndex)) return null;
+  if (fromIndex < 0 || fromIndex >= items.length) return null;
+  if (toIndex < 0 || toIndex >= items.length) return null;
+  if (fromIndex === toIndex) return null;
+  const out = [...items];
+  const [moved] = out.splice(fromIndex, 1);
+  out.splice(toIndex, 0, moved);
   return out;
+}
+
+// ドラッグ中の行のピッチ (自分の上端から次の行の上端までの距離)。
+// 掴んだ行を取り除くと後続はこの量だけ詰まる (行の高さ＋下マージン)。
+// 末尾の行は1つ前の行のピッチで代用し、1行だけなら高さそのもの。
+export function dragRowPitch(rects, index) {
+  const rows = Array.isArray(rects) ? rects : [];
+  if (index < 0 || index >= rows.length) return 0;
+  if (index + 1 < rows.length) return rows[index + 1].top - rows[index].top;
+  if (index > 0) return rows[index].top - rows[index - 1].top;
+  return rows[index].height;
+}
+
+// ドラッグ中の挿入位置: 各行の { top, height } (文書座標) と、掴んだ行の
+// 開始位置からの移動量 offsetY から、掴んだ行が最終的に入る
+// インデックスを返す。掴んだ行の中心が、進む方向にある行の
+// (ドラッグ開始時点の) 中点を越えた分だけ進み/戻る。中心が中点
+// ちょうどの場合は越えた数に入れない。基準は開始時点の並びで固定
+// するため、途中で他の行が詰めて動いても判定は揺れない。
+export function dragInsertIndex(rects, fromIndex, offsetY) {
+  const rows = Array.isArray(rects) ? rects : [];
+  if (fromIndex < 0 || fromIndex >= rows.length) return fromIndex;
+  const dragged = rows[fromIndex];
+  const center = dragged.top + dragged.height / 2 + offsetY;
+  let target = fromIndex;
+  if (offsetY > 0) {
+    for (let i = fromIndex + 1; i < rows.length; i += 1) {
+      if (rows[i].top + rows[i].height / 2 < center) target = i;
+      else break;
+    }
+  } else if (offsetY < 0) {
+    for (let i = fromIndex - 1; i >= 0; i -= 1) {
+      if (rows[i].top + rows[i].height / 2 > center) target = i;
+      else break;
+    }
+  }
+  return target;
 }
 
 // 一覧の状態行: 最終取得時刻＋ステータス (エラーがあればエラーを優先)。

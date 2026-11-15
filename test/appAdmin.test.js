@@ -71,7 +71,7 @@ vi.mock('../src/lib/feedFetch.js', () => ({
 }));
 
 import App from '../src/App.vue';
-import { saveFeed, listFeeds } from '../src/lib/api.js';
+import { saveFeed, listFeeds, reorderFeeds } from '../src/lib/api.js';
 import { fetchFeedXml } from '../src/lib/feedFetch.js';
 
 const scrollCalls = [];
@@ -258,25 +258,26 @@ describe('管理画面のプライベート表示', () => {
 
 describe('管理画面のジャンル絞り込み', () => {
   const genreTablist = () => el.querySelector('[aria-label="ジャンルで絞り込み"]');
-  const moveButtons = () =>
-    el.querySelectorAll('button[aria-label="上へ移動"], button[aria-label="下へ移動"]');
+  const dragHandles = () => el.querySelectorAll('button.drag-handle');
   const cardTitles = () =>
     [...el.querySelectorAll('.feed-card .feed-name')].map((n) => n.textContent.trim());
 
-  it('絞っていないときは全件に移動ボタンが出る', async () => {
+  it('絞っていないときは全件にドラッグハンドルが出て、矢印ボタンは無い', async () => {
     await mountAdmin();
     expect(genreTablist(), 'ジャンルタブ行が出る').toBeTruthy();
     expect(el.querySelectorAll('.feed-card').length).toBe(FEEDS.length);
-    expect(moveButtons().length).toBe(FEEDS.length * 2);
+    expect(dragHandles().length).toBe(FEEDS.length);
+    expect(findButton(el, '↑')).toBeUndefined();
+    expect(findButton(el, '↓')).toBeUndefined();
   });
 
-  it('ジャンルタブで絞るとそのジャンルだけになり、移動ボタンが消える (編集・削除は残る)', async () => {
+  it('ジャンルタブで絞るとそのジャンルだけになり、ドラッグハンドルが消える (編集・削除は残る)', async () => {
     await mountAdmin();
     findButton(genreTablist(), 'ポッドキャスト').click();
     await flush();
     expect(errors).toEqual([]);
     expect(cardTitles()).toEqual(['Rebuild', 'ゆる言語学ラジオ']);
-    expect(moveButtons().length).toBe(0);
+    expect(dragHandles().length).toBe(0);
     const card = el.querySelector('.feed-card');
     expect(findButton(card, '編集'), '編集ボタンは残る').toBeTruthy();
     expect(findButton(card, '削除'), '削除ボタンは残る').toBeTruthy();
@@ -293,19 +294,19 @@ describe('管理画面のジャンル絞り込み', () => {
     expect(el.querySelectorAll('.feed-card').length).toBe(FEEDS.length);
   });
 
-  it('選択中のジャンルを再タップすると解除され、全件と移動ボタンが戻る', async () => {
+  it('選択中のジャンルを再タップすると解除され、全件とドラッグハンドルが戻る', async () => {
     await mountAdmin();
     findButton(genreTablist(), '教養・ラジオ').click();
     await flush();
     expect(el.querySelectorAll('.feed-card').length).toBe(1);
-    expect(moveButtons().length).toBe(0);
+    expect(dragHandles().length).toBe(0);
     expect(genreTablist().querySelector('.chip.active').textContent.trim()).toBe('教養・ラジオ');
     findButton(genreTablist(), '教養・ラジオ').click();
     await flush();
     expect(errors).toEqual([]);
     expect(genreTablist().querySelector('.chip.active')).toBeNull();
     expect(el.querySelectorAll('.feed-card').length).toBe(FEEDS.length);
-    expect(moveButtons().length).toBe(FEEDS.length * 2);
+    expect(dragHandles().length).toBe(FEEDS.length);
   });
 
   it('別のジャンルをタップすると、解除ではなくそのジャンルへ切り替わる', async () => {
@@ -335,9 +336,112 @@ describe('管理画面のジャンル絞り込み', () => {
     expect(errors).toEqual([]);
     // タイムラインのカテゴリ選択とは別の状態なので、戻っても絞り込みは維持される。
     expect(el.querySelectorAll('.feed-card').length).toBe(2);
-    expect(moveButtons().length).toBe(0);
+    expect(dragHandles().length).toBe(0);
     const active = genreTablist().querySelector('.chip.active');
     expect(active.textContent.trim()).toBe('ポッドキャスト');
+  });
+});
+
+describe('管理画面のドラッグ並べ替え', () => {
+  const cardTitles = () =>
+    [...el.querySelectorAll('.feed-card .feed-name')].map((n) => n.textContent.trim());
+  const handles = () => [...el.querySelectorAll('button.drag-handle')];
+  const cards = () => [...el.querySelectorAll('.feed-card')];
+
+  // jsdom はレイアウトを持たないため、フィードカードの矩形だけを
+  // 決め打ちで返す (高さ80・ピッチ100 で縦に並んでいることにする)。
+  let origRect = null;
+  function stubCardRects() {
+    origRect = window.HTMLElement.prototype.getBoundingClientRect;
+    window.HTMLElement.prototype.getBoundingClientRect = function () {
+      if (this.classList && this.classList.contains('feed-card')) {
+        const idx = [...document.querySelectorAll('.feed-card')].indexOf(this);
+        const top = idx * 100;
+        return { top, bottom: top + 80, height: 80, left: 0, right: 300, width: 300, x: 0, y: top, toJSON: () => ({}) };
+      }
+      return { top: 0, bottom: 0, height: 0, left: 0, right: 0, width: 0, x: 0, y: 0, toJSON: () => ({}) };
+    };
+  }
+
+  function pointer(type, target, clientY) {
+    const ev = new window.Event(type, { bubbles: true, cancelable: true });
+    ev.clientY = clientY;
+    ev.button = 0;
+    ev.pointerId = 1;
+    target.dispatchEvent(ev);
+  }
+
+  beforeEach(() => {
+    stubCardRects();
+  });
+
+  afterEach(() => {
+    if (origRect) window.HTMLElement.prototype.getBoundingClientRect = origRect;
+    origRect = null;
+  });
+
+  it('ハンドルを下へドラッグして離すと、新しい順序で reorderFeeds が呼ばれ、一覧の並びも変わる', async () => {
+    await mountAdmin();
+    const handle = handles()[0];
+    // 1行目を clientY 40 → 250 へ運ぶ (移動量210)。掴んだ行の中心は
+    // 250 になり、2行目 (中点140) と3行目 (中点240) を越えるので
+    // 挿入先はインデックス2。
+    pointer('pointerdown', handle, 40);
+    pointer('pointermove', handle, 250);
+    await flush();
+    expect(errors).toEqual([]);
+    // ドラッグ中: 掴んだ行は指に追随し、間の行はピッチ分だけ詰まる。
+    expect(cards()[0].classList.contains('is-dragging')).toBe(true);
+    expect(cards()[0].style.transform).toBe('translateY(210px)');
+    expect(cards()[1].style.transform).toBe('translateY(-100px)');
+    expect(cards()[2].style.transform).toBe('translateY(-100px)');
+    expect(cards()[3].style.transform).toBe('');
+    pointer('pointerup', handle, 250);
+    await flush();
+    expect(errors).toEqual([]);
+    expect(reorderFeeds).toHaveBeenCalledTimes(1);
+    const [token, ids] = reorderFeeds.mock.calls[0];
+    expect(token).toBe('tok');
+    expect(ids).toEqual([FEEDS[1].id, FEEDS[2].id, FEEDS[0].id, FEEDS[3].id]);
+    expect(cardTitles()).toEqual(['www.youtube.com', 'ゆる言語学ラジオ', 'Rebuild', 'X freddie']);
+  });
+
+  it('ハンドルを上へドラッグすると、上の位置へ入る', async () => {
+    await mountAdmin();
+    const handle = handles()[3];
+    // 4行目を clientY 340 → 130 へ運ぶ (移動量-210)。中心は130に
+    // なり、3行目 (中点240) と2行目 (中点140) を下回るので挿入先は1。
+    pointer('pointerdown', handle, 340);
+    pointer('pointermove', handle, 130);
+    pointer('pointerup', handle, 130);
+    await flush();
+    expect(errors).toEqual([]);
+    expect(reorderFeeds).toHaveBeenCalledTimes(1);
+    const [, ids] = reorderFeeds.mock.calls[0];
+    expect(ids).toEqual([FEEDS[0].id, FEEDS[3].id, FEEDS[1].id, FEEDS[2].id]);
+  });
+
+  it('動かさずに離すと保存は呼ばれない', async () => {
+    await mountAdmin();
+    const handle = handles()[1];
+    pointer('pointerdown', handle, 140);
+    pointer('pointerup', handle, 140);
+    await flush();
+    expect(errors).toEqual([]);
+    expect(reorderFeeds).not.toHaveBeenCalled();
+  });
+
+  it('ドラッグをキャンセルすると保存されず、並びも変わらない', async () => {
+    await mountAdmin();
+    const handle = handles()[0];
+    pointer('pointerdown', handle, 40);
+    pointer('pointermove', handle, 250);
+    pointer('pointercancel', handle, 250);
+    await flush();
+    expect(errors).toEqual([]);
+    expect(reorderFeeds).not.toHaveBeenCalled();
+    expect(cardTitles()).toEqual(['Rebuild', 'www.youtube.com', 'ゆる言語学ラジオ', 'X freddie']);
+    expect(cards()[0].classList.contains('is-dragging')).toBe(false);
   });
 });
 

@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, ref } from 'vue';
 import { API_URL, GOOGLE_CLIENT_ID } from './config.js';
 import {
   deleteFeed,
@@ -17,7 +17,9 @@ import {
   filterAdminFeeds,
   formatFeedStatus,
   genreSuggestions,
-  moveFeedOrder,
+  dragInsertIndex,
+  dragRowPitch,
+  moveItemToIndex,
   createOrderSender,
   planFeedAdd,
   resolveFeedAddForm,
@@ -30,10 +32,8 @@ import {
   feedDisplayName,
   markAllReadInList,
   markAllReadScope,
-  mergePendingReadMarks,
   patchArticle,
   patchFeedCategory,
-  shouldClearCategorySelection,
   sortArticlesDesc,
   visibleArticles,
   visibleFeedChips,
@@ -151,75 +151,6 @@ const genreSuggestionList = computed(() => genreSuggestions(genreOptions.value, 
 const adminFeeds = computed(() => filterAdminFeeds(mgmtFeeds.value, adminCategory.value));
 const hasMore = computed(() => visible.value.length > displayLimit.value);
 
-// 選択中のカテゴリ (ジャンル) を持つフィードが1つも無くなったら、
-// 選択を自動で解除して全件表示に戻す。最後の1件を別ジャンルへ
-// 編集・削除するとカテゴリのチップ自体が消え、手では解除できなく
-// なるため。一覧が空の間 (読み込み中・未取得) は解除しない
-// (判定は shouldClearCategorySelection に任せる)。
-//
-// 解除の判定は、一覧が変わった瞬間ではなく、関連する非同期処理が
-// 落ち着いた後の最新の一覧で行う。背景更新は保存前に取り始めた
-// 旧一覧で一時的に読み直すことがあり、その瞬間に解除すると、
-// 追随更新で最新の一覧 (カテゴリあり) に揃い直しても絞り込み
-// だけが外れたままになるため。
-let timelineCategoryClearCheck = null;
-function queueTimelineCategoryClearCheck() {
-  if (timelineCategoryClearCheck) return timelineCategoryClearCheck;
-  const run = (async () => {
-    while (refreshInFlight) {
-      const current = refreshInFlight;
-      await current.catch(() => {});
-      // 更新の完了処理 (後始末や、戻る際に予約される追随更新) が
-      // 次の更新を差し込む余地を残してから、継続を確認する。
-      await nextTick();
-    }
-    if (!shouldClearCategorySelection(state.value.feeds, state.value.category)) return;
-    // setCategory と同じく、カテゴリが外れるときはフィード選択も外す。
-    state.value = { ...state.value, category: '', feedId: '' };
-    displayLimit.value = DISPLAY_LIMIT;
-  })();
-  timelineCategoryClearCheck = run;
-  const done = () => {
-    if (timelineCategoryClearCheck === run) timelineCategoryClearCheck = null;
-  };
-  run.then(done, done);
-  return run;
-}
-
-let adminCategoryClearCheck = null;
-function queueAdminCategoryClearCheck() {
-  if (adminCategoryClearCheck) return adminCategoryClearCheck;
-  const run = (async () => {
-    // 一覧の取り直し・保存・削除の完了後に、最新の一覧で判定する。
-    while (mgmtLoading.value || formSaving.value || mgmtSavingId.value) {
-      await nextTick();
-    }
-    if (shouldClearCategorySelection(mgmtFeeds.value, adminCategory.value)) {
-      adminCategory.value = '';
-    }
-  })();
-  adminCategoryClearCheck = run;
-  const done = () => {
-    if (adminCategoryClearCheck === run) adminCategoryClearCheck = null;
-  };
-  run.then(done, done);
-  return run;
-}
-
-watch(
-  () => state.value.feeds,
-  (feeds) => {
-    if (shouldClearCategorySelection(feeds, state.value.category)) {
-      queueTimelineCategoryClearCheck();
-    }
-  }
-);
-watch(mgmtFeeds, (feeds) => {
-  if (shouldClearCategorySelection(feeds, adminCategory.value)) {
-    queueAdminCategoryClearCheck();
-  }
-});
-
 const FILTERS = [
   { key: 'all', label: 'すべて' },
   { key: 'unread', label: '未読' },
@@ -227,24 +158,12 @@ const FILTERS = [
 
 /* ---- ローカル (IndexedDB) が表示の正本 ---- */
 
-// 付けたばかりで、背景更新の読み直し (reloadLocal) が使う DB の
-// スナップショットに含まれているか分からない既読変更 (記事ID -> isRead)。
-// 読み直しは読み取り開始時点の中身で state を作り直すため、この間に
-// 付けた既読は DB へ書けていても未読へ巻き戻ってしまう。そこで変更を
-// ここに控えておき、reloadLocal が読み直した一覧へ重ね直す。
-// スナップショット側と一致した変更はその読み直しで控えから落ちる。
-const pendingReadMarks = new Map();
-
 // DB の中身を state へ読み直す。未読数はローカルの記事から数える。
 async function reloadLocal() {
   const [feeds, records] = await Promise.all([loadLocalFeeds(), loadLocalArticles()]);
   const titles = {};
   feeds.forEach((f) => { titles[f.id] = feedDisplayName(f); });
-  const loaded = sortArticlesDesc(records.map((r) => articleRecordToView(r, titles[r.feed_id])));
-  const merged = mergePendingReadMarks(loaded, pendingReadMarks);
-  pendingReadMarks.clear();
-  merged.keep.forEach((isRead, id) => { pendingReadMarks.set(id, isRead); });
-  const views = merged.articles;
+  const views = sortArticlesDesc(records.map((r) => articleRecordToView(r, titles[r.feed_id])));
   state.value = { ...state.value, feeds: withUnreadCounts(feeds, views), articles: views };
 }
 
@@ -438,9 +357,6 @@ async function goHome() {
 // 既読の付け外しはローカルのみ (サーバーへは送らない)。
 async function applyRead(article, isRead) {
   if (!isOwner.value) return;
-  // 実行中の背景更新の読み直しに巻き戻されないよう、先に控える
-  // (reloadLocal が読み直した一覧へ重ね直す)。
-  pendingReadMarks.set(article.id, isRead);
   const nextArticles = patchArticle(state.value.articles, article.id, { isRead });
   state.value = {
     ...state.value,
@@ -450,9 +366,6 @@ async function applyRead(article, isRead) {
   try {
     await setLocalArticleRead(article.id, isRead, new Date().toISOString());
   } catch (e) {
-    // 書けなかった変更は控えからも落とす (次の読み直しで DB の
-    // 中身どおりに戻る。従来の失敗時の振る舞いと同じ)。
-    pendingReadMarks.delete(article.id);
     listError.value = `保存できませんでした（${e.message}）。`;
   }
 }
@@ -471,15 +384,10 @@ async function onMarkAllRead() {
   const targetIds = state.value.articles
     .filter((a) => !a.isRead && scoped[a.feedId])
     .map((a) => a.id);
-  // 実行中の背景更新の読み直しに巻き戻されないよう、先に控える
-  // (reloadLocal が読み直した一覧へ重ね直す)。
-  targetIds.forEach((id) => { pendingReadMarks.set(id, true); });
   state.value = markAllReadInList(state.value, state.value.feedId, state.value.category);
   try {
     await markLocalArticlesRead(targetIds, new Date().toISOString());
   } catch (e) {
-    // 書けなかった変更は控えからも落とす (applyRead と同じ)。
-    targetIds.forEach((id) => { pendingReadMarks.delete(id); });
     listError.value = `保存できませんでした（${e.message}）。`;
   }
 }
@@ -1176,15 +1084,13 @@ async function waitReorderSettled() {
   try {
     await lastReorder;
   } catch {
-    // エラー表示と読み直しは onMoveFeed 側で行う。
+    // エラー表示と読み直しは applyFeedOrder 側で行う。
   }
 }
 
-async function onMoveFeed(feed, direction) {
-  const next = moveFeedOrder(mgmtFeeds.value, feed.id, direction);
-  if (!next) return;
-  // 画面は即座に動かし、保存は orderSender が直列化＋合体して送る。
-  // 保存中でも次の移動を受け付ける (ボタンは端以外では無効化しない)。
+// 並び順の確定: 画面へ即座に反映し、保存は orderSender が直列化＋合体
+// して送る。失敗したらエラー表示＋一覧を取り直す。
+async function applyFeedOrder(next) {
   mgmtFeeds.value = next;
   try {
     lastReorder = orderSender.submit(next.map((f) => f.id));
@@ -1197,6 +1103,91 @@ async function onMoveFeed(feed, direction) {
       loadFeeds();
     }
   }
+}
+
+/* ---- ドラッグでの並び替え ---- */
+
+// ドラッグ中だけ持つ状態。rects は開始時点の各行の { top, height }
+// (文書座標)。from / target は mgmtFeeds のインデックス (ジャンル
+// 絞り込み中はドラッグできないため adminFeeds と並びが一致する)。
+// dy は指の移動量 (行の範囲内にクランプ済み)、pitch は行の詰め量。
+const drag = ref(null);
+// ドロップ直後の1フレームだけ transform のアニメーションを止める。
+// 並び替えでレイアウト位置が変わるのと同時に transform が外れると、
+// 行がずれて見えるため。
+const dragSettling = ref(false);
+
+function onDragPointerDown(event, index) {
+  if (adminCategory.value) return;
+  if (event.button != null && event.button > 0) return;
+  const card = event.currentTarget?.closest('article.feed-card');
+  if (!card || !card.parentElement) return;
+  const cards = [...card.parentElement.querySelectorAll(':scope > article.feed-card')];
+  if (cards.length !== mgmtFeeds.value.length) return;
+  const rects = cards.map((c) => {
+    const r = c.getBoundingClientRect();
+    return { top: r.top + window.scrollY, height: r.height };
+  });
+  drag.value = {
+    from: index,
+    target: index,
+    dy: 0,
+    rects,
+    pitch: dragRowPitch(rects, index),
+    startY: event.clientY + window.scrollY,
+  };
+  try {
+    event.currentTarget.setPointerCapture(event.pointerId);
+  } catch {
+    // キャプチャできない環境ではハンドル上での操作として続ける。
+  }
+  event.preventDefault();
+}
+
+function onDragPointerMove(event) {
+  const d = drag.value;
+  if (!d) return;
+  // ビューポートの端では少しスクロールさせ、長い一覧でも端まで
+  // 運べるようにする。スクロールで文書座標が変わるため、移動量は
+  // スクロール後の座標で計算する。
+  if (event.clientY < 72) window.scrollBy(0, -14);
+  else if (event.clientY > window.innerHeight - 72) window.scrollBy(0, 14);
+  const rawDy = event.clientY + window.scrollY - d.startY;
+  const first = d.rects[0];
+  const last = d.rects[d.rects.length - 1];
+  const minDy = first.top - d.rects[d.from].top;
+  const maxDy = last.top + last.height - (d.rects[d.from].top + d.rects[d.from].height);
+  d.dy = Math.min(Math.max(rawDy, minDy), maxDy);
+  d.target = dragInsertIndex(d.rects, d.from, d.dy);
+}
+
+function onDragPointerUp() {
+  const d = drag.value;
+  if (!d) return;
+  drag.value = null;
+  if (d.target === d.from) return;
+  const next = moveItemToIndex(mgmtFeeds.value, d.from, d.target);
+  if (!next) return;
+  dragSettling.value = true;
+  applyFeedOrder(next);
+  nextTick(() => {
+    dragSettling.value = false;
+  });
+}
+
+function onDragPointerCancel() {
+  drag.value = null;
+}
+
+// ドラッグ中の各行の変位。掴んだ行は指に追随し、挿入先までの間の
+// 行は掴んだ行のピッチ分だけ詰めて表示する。
+function feedCardDragStyle(index) {
+  const d = drag.value;
+  if (!d) return undefined;
+  if (index === d.from) return { transform: `translateY(${d.dy}px)` };
+  if (d.from < index && index <= d.target) return { transform: `translateY(${-d.pitch}px)` };
+  if (d.target <= index && index < d.from) return { transform: `translateY(${d.pitch}px)` };
+  return undefined;
 }
 
 function askDeleteFeed(feed) {
@@ -1683,7 +1674,24 @@ onMounted(async () => {
               v-for="(f, i) in adminFeeds"
               :key="f.id"
               class="card feed-card"
+              :class="{ 'is-dragging': drag && drag.from === i, 'drag-settling': dragSettling }"
+              :style="feedCardDragStyle(i)"
             >
+              <!-- 並び替えは左端のハンドルからのドラッグで行う。シート
+                   全体の順序に対する操作なので、ジャンルで絞っている
+                   間はハンドル自体を出さない (部分集合の中での移動に
+                   見えて誤解を招くため)。 -->
+              <button
+                v-if="!adminCategory"
+                type="button"
+                class="drag-handle"
+                aria-label="ドラッグで並び替え"
+                @pointerdown="onDragPointerDown($event, i)"
+                @pointermove="onDragPointerMove"
+                @pointerup="onDragPointerUp"
+                @pointercancel="onDragPointerCancel"
+              >≡</button>
+              <div class="feed-card-main">
               <p class="article-meta">
                 <span class="feed-name">{{ feedDisplayName(f) }}</span>
                 <span v-if="f.category">{{ f.category }}</span>
@@ -1709,27 +1717,9 @@ onMounted(async () => {
                 </div>
               </div>
               <div v-else class="feed-actions">
-                <!-- 並び替えはシート全体の順序に対する操作なので、ジャンルで
-                     絞っている間は移動ボタンを出さない (部分集合の中での
-                     移動に見えて誤解を招くため)。 -->
-                <button
-                  v-if="!adminCategory"
-                  class="ghost"
-                  type="button"
-                  aria-label="上へ移動"
-                  :disabled="i === 0"
-                  @click="onMoveFeed(f, -1)"
-                >↑</button>
-                <button
-                  v-if="!adminCategory"
-                  class="ghost"
-                  type="button"
-                  aria-label="下へ移動"
-                  :disabled="i === mgmtFeeds.length - 1"
-                  @click="onMoveFeed(f, 1)"
-                >↓</button>
                 <button class="ghost" type="button" @click="startEditFeed(f)">編集</button>
                 <button class="ghost danger" type="button" @click="askDeleteFeed(f)">削除</button>
+              </div>
               </div>
             </article>
             </template>
