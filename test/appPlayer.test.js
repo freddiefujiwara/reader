@@ -65,7 +65,8 @@ vi.mock('../src/config.js', () => ({
 }));
 
 import App from '../src/App.vue';
-import { loadLocalArticles, saveLocalFeeds, putLocalArticles } from '../src/lib/localDb.js';
+import { listArticles } from '../src/lib/api.js';
+import { loadLocalArticles, saveLocalFeeds, putLocalArticles, deleteLocalArticles } from '../src/lib/localDb.js';
 
 // jsdom の HTMLMediaElement は再生を実装しないため、App が使う
 // 面だけを持ち、'ended' などをテストから発火できるスタブにする。
@@ -186,6 +187,63 @@ describe('プレイヤーの自動送り (連続再生)', () => {
     // 末尾なので進まず、同じエピソードのまま止まる。
     expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
     expect(latestAudio().src).toBe('https://example.com/ep2.mp3');
+  });
+});
+
+describe('キューの範囲 (表示条件に合う全フィード)', () => {
+  // https://example.com/feed2.xml のハッシュID (feedHash で固定済み)。
+  const FEED2 = {
+    ...FEED,
+    id: '77699cb82a926f0e',
+    title: 'Feed2',
+    url: 'https://example.com/feed2.xml',
+    unreadCount: 1,
+  };
+  const recOn = (feedId) => (id, title, published_at, audio_url) => ({
+    ...rec(id, title, published_at, audio_url),
+    feed_id: feedId,
+  });
+  const A1 = recOn(FEED_ID)('a-1', 'フィード1の新', '2026-11-14T00:00:00.000Z', 'https://example.com/a1.mp3');
+  const B1 = recOn(FEED2.id)('b-1', 'フィード2の話', '2026-11-13T00:00:00.000Z', 'https://example.com/b1.mp3');
+  const A2 = recOn(FEED_ID)('a-2', 'フィード1の旧', '2026-11-12T00:00:00.000Z', 'https://example.com/a2.mp3');
+
+  it('自動送りはフィードをまたいで表示順に進み、末尾で止まる', async () => {
+    // 起動時の更新はサーバー側フィード一覧に無い記事を孤児として落とす
+    // ため、このテストの間だけ listArticles のモックに FEED2 も含める。
+    // IndexedDB はファイル内のテストで共有されるため、先行テストの記事を
+    // 消してから種まきし、後始末 (モック復旧と記事の削除) は finally で行う。
+    listArticles.mockResolvedValue({ ok: true, feeds: [FEED, FEED2], articles: [] });
+    try {
+      const before = await loadLocalArticles();
+      if (before.length) await deleteLocalArticles(before.map((r) => r.id));
+      await saveLocalFeeds([FEED, FEED2]);
+      await putLocalArticles([{ ...A1 }, { ...B1 }, { ...A2 }]);
+      el = document.createElement('div');
+      document.body.appendChild(el);
+      app = createApp(App);
+      app.config.errorHandler = (err) => { errors.push(err); };
+      app.mount(el);
+      await flush();
+      expect(el.querySelectorAll('.article-card').length, '記事カードが3件出る').toBe(3);
+
+      const bar = await startCard(0);
+      expect(errors).toEqual([]);
+      expect(bar.querySelector('.player-title').textContent).toBe('フィード1の新');
+
+      await fireEnded();
+      expect(errors).toEqual([]);
+      expect(el.querySelector('.player-title').textContent).toBe('フィード2の話');
+      expect(latestAudio().src).toBe('https://example.com/b1.mp3');
+
+      await fireEnded();
+      expect(el.querySelector('.player-title').textContent).toBe('フィード1の旧');
+
+      await fireEnded();
+      expect(el.querySelector('.player-title').textContent).toBe('フィード1の旧');
+    } finally {
+      listArticles.mockResolvedValue({ ok: true, feeds: [FEED], articles: [] });
+      await deleteLocalArticles(['a-1', 'b-1', 'a-2']);
+    }
   });
 });
 
