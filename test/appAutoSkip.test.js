@@ -316,7 +316,7 @@ describe('ストール検知での自動スキップ', () => {
     await flushFake();
   }
 
-  it('再生中なのに位置が20秒進まなければ次へ進み、進んでいれば進まない', async () => {
+  it('再生中なのに位置が10秒進まなければ次へ進み、進んでいれば進まない', async () => {
     vi.useFakeTimers();
     let nowVal = 0;
     const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => nowVal);
@@ -337,11 +337,11 @@ describe('ストール検知での自動スキップ', () => {
       await tick(flushFake, () => { nowVal = 45_000; audio.currentTime = 75; });
       expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
 
-      // ここから位置が止まる。19秒ではまだ送らない。
-      await tick(flushFake, () => { nowVal = 64_000; });
+      // ここから位置が止まる。9秒ではまだ送らない。
+      await tick(flushFake, () => { nowVal = 54_000; });
       expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
-      // 20秒を超えたら次へ進む。
-      await tick(flushFake, () => { nowVal = 65_500; });
+      // 10秒を超えたら次へ進む。
+      await tick(flushFake, () => { nowVal = 55_500; });
       expect(errors).toEqual([]);
       expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
       expect(audio.src).toBe('https://example.com/ep2.mp3');
@@ -370,9 +370,9 @@ describe('ストール検知での自動スキップ', () => {
       audio.currentTime = 10;
       audio.dispatchEvent(new window.Event('playing'));
       await tick(flushFake, () => { nowVal = 30_000; });
-      await tick(flushFake, () => { nowVal = 49_500; });
+      await tick(flushFake, () => { nowVal = 39_500; });
       expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
-      await tick(flushFake, () => { nowVal = 50_500; });
+      await tick(flushFake, () => { nowVal = 40_500; });
       expect(errors).toEqual([]);
       expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
     } finally {
