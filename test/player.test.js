@@ -21,6 +21,8 @@ import {
   interpretStoredPlayPos,
   isWithinEndGuard,
   RESUME_END_GUARD_SEC,
+  isWithinStartGuard,
+  RESUME_START_GUARD_SEC,
   reachedKnownDurationEnd,
   KNOWN_DURATION_END_TOLERANCE_SEC,
   END_CHECK_INTERVAL_MS,
@@ -386,6 +388,23 @@ describe('isWithinEndGuard', () => {
   });
 });
 
+describe('isWithinStartGuard', () => {
+  it('冒頭5秒以下を冒頭とする (終端側のガードと対称)', () => {
+    expect(RESUME_START_GUARD_SEC).toBe(5);
+    expect(isWithinStartGuard(1)).toBe(true);
+    expect(isWithinStartGuard(3)).toBe(true);
+    expect(isWithinStartGuard(5)).toBe(true);
+    expect(isWithinStartGuard(6)).toBe(false);
+    expect(isWithinStartGuard(60)).toBe(false);
+  });
+  it('0 や不明な値は冒頭にしない (もともと再開位置にならない)', () => {
+    expect(isWithinStartGuard(0)).toBe(false);
+    expect(isWithinStartGuard(-3)).toBe(false);
+    expect(isWithinStartGuard(Number.NaN)).toBe(false);
+    expect(isWithinStartGuard(null)).toBe(false);
+  });
+});
+
 describe('次の曲の先読み', () => {
   it('先読みを始める残り時間は60秒', () => {
     expect(PRELOAD_REMAINING_SEC).toBe(60);
@@ -418,6 +437,20 @@ describe('interpretStoredPlayPos', () => {
     expect(interpretStoredPlayPos(160, { trueSec: 104, elementDuration: 104, model: 'scaled' })).toBe(160);
     expect(interpretStoredPlayPos(160, null)).toBe(160);
     expect(interpretStoredPlayPos(-5, ctx)).toBe(0);
+  });
+  it('冒頭数秒の保存値は 0 に倒す (文脈が無くても)', () => {
+    expect(interpretStoredPlayPos(3, ctx)).toBe(0);
+    expect(interpretStoredPlayPos(5, ctx)).toBe(0);
+    expect(interpretStoredPlayPos(6, ctx)).toBe(6);
+    expect(interpretStoredPlayPos(3, null)).toBe(0);
+    expect(interpretStoredPlayPos(3, { trueSec: 104, elementDuration: 104, model: 'direct' })).toBe(0);
+  });
+  it('割り戻した結果が冒頭数秒なら 0 に倒す', () => {
+    // 割り戻しは trueSec を超える旧保存値にだけ効く。その結果が
+    // 冒頭数秒に落ちたら、表示スケールの値と同じく 0 に倒す。
+    const wide = { trueSec: 100, elementDuration: 10000, model: 'scaled' };
+    expect(interpretStoredPlayPos(400, wide)).toBe(0);
+    expect(interpretStoredPlayPos(1200, wide)).toBe(12);
   });
 });
 

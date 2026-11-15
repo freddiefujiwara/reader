@@ -214,6 +214,19 @@ export function toElementPosition(displayPos, ctx) {
 // 自動送りが連鎖してしまうため。
 export const RESUME_END_GUARD_SEC = 5;
 
+// 冒頭 (この秒数以下) の位置も「途中」ではなく頭として扱い、再開
+// 位置として保存・復元しない。数秒だけ再生して止めた (動作確認で
+// 少しだけ聴いた等) 位置が残ると、次にそのエピソードが始まるとき
+// 冒頭が飛んだように見えるため。終端側と対称の扱いにする。
+export const RESUME_START_GUARD_SEC = 5;
+
+// 位置 pos が冒頭 (RESUME_START_GUARD_SEC 秒以下) にあるか。
+// 0 や不明な値は false (0 はもともと再開位置にならない)。
+export function isWithinStartGuard(pos) {
+  if (!Number.isFinite(pos) || pos <= 0) return false;
+  return pos <= RESUME_START_GUARD_SEC;
+}
+
 // 位置 pos が、全体 totalSec の終端間際 (残り RESUME_END_GUARD_SEC 秒
 // 以内) にあるか。長さ不明・位置が 0 以下なら false。
 export function isWithinEndGuard(pos, totalSec) {
@@ -230,12 +243,17 @@ export function isWithinEndGuard(pos, totalSec) {
 // 残っている既存の終端付近の保存値もこれで無力化される)。
 export function interpretStoredPlayPos(stored, ctx) {
   const pos = Number.isFinite(stored) && stored > 0 ? stored : 0;
-  if (!ctx || !Number.isFinite(ctx.trueSec) || ctx.trueSec <= 0) return pos;
+  if (!ctx || !Number.isFinite(ctx.trueSec) || ctx.trueSec <= 0) {
+    return isWithinStartGuard(pos) ? 0 : pos;
+  }
   let result = pos;
   if (durationMismatch(ctx.trueSec, ctx.elementDuration) && pos > ctx.trueSec) {
     result = pos * (ctx.trueSec / ctx.elementDuration);
   }
   if (result <= ctx.trueSec && isWithinEndGuard(result, ctx.trueSec)) return 0;
+  // 割り戻した結果も含め、冒頭数秒の値は再開位置として使わない
+  // (旧バージョンが保存した数秒の値もここで無力化される)。
+  if (isWithinStartGuard(result)) return 0;
   return result;
 }
 
