@@ -36,7 +36,7 @@ import {
   feedCategories,
   feedDisplayName,
   markAllReadInList,
-  markAllReadScope,
+  markAllReadTargets,
   mergePendingReadMarks,
   patchArticle,
   patchFeedCategory,
@@ -164,6 +164,11 @@ const visible = computed(() => visibleArticles(state.value));
 const displayArticles = computed(() => visible.value.slice(0, displayLimit.value));
 const unreadTotalCount = computed(() =>
   state.value.feeds.reduce((n, f) => n + (f.unreadCount || 0), 0)
+);
+// 「すべて既読」の対象件数 (現在のスコープ = 選択中のフィード／
+// カテゴリ内の未読)。ボタンの非活性判定と確認文言の件数に使う。
+const scopedUnreadCount = computed(() =>
+  markAllReadTargets(state.value, state.value.feedId, state.value.category).length
 );
 const chipFeeds = computed(() => visibleFeedChips(state.value));
 const categoryList = computed(() => feedCategories(state.value.feeds));
@@ -575,12 +580,32 @@ function onOpenArticle(article) {
   }
 }
 
+// 「すべて既読」の確認表示。誤タップで大量に既読化しないよう、
+// 実行前に下部バー内で確認を取る (フィード削除や共有リンク発行と
+// 同じインライン確認の流儀)。スコープが変わったら確認は畳む
+// (別の範囲への確認を持ち越さない)。
+const markAllConfirm = ref(false);
+
+function askMarkAllRead() {
+  if (!isOwner.value) return;
+  if (scopedUnreadCount.value === 0) return;
+  markAllConfirm.value = true;
+}
+
+function cancelMarkAllRead() {
+  markAllConfirm.value = false;
+}
+
+watch(
+  () => [state.value.feedId, state.value.category, state.value.filter],
+  () => { markAllConfirm.value = false; }
+);
+
 async function onMarkAllRead() {
   if (!isOwner.value) return;
+  markAllConfirm.value = false;
   // v1 と同じ範囲 (フィード指定が優先、次にカテゴリ、無ければ全体)。
-  const scoped = markAllReadScope(state.value, state.value.feedId, state.value.category);
-  const targetIds = state.value.articles
-    .filter((a) => !a.isRead && scoped[a.feedId])
+  const targetIds = markAllReadTargets(state.value, state.value.feedId, state.value.category)
     .map((a) => a.id);
   // 実行中の背景更新の読み直しに巻き戻されないよう、先に控える
   // (reloadLocal が読み直した一覧へ重ね直す)。
@@ -1991,21 +2016,29 @@ onMounted(async () => {
         </template>
 
         <div class="bottom-bar">
-          <button
-            v-if="isOwner"
-            class="primary mark-all-btn"
-            type="button"
-            @click="onMarkAllRead"
-          >すべて既読</button>
-          <div class="view-tabs" role="tablist" aria-label="表示切替">
-            <button
-              v-for="f in FILTERS"
-              :key="f.key"
-              type="button"
-              :class="{ active: state.filter === f.key }"
-              @click="setFilter(f.key)"
-            >{{ f.label }}</button>
+          <div v-if="isOwner && markAllConfirm" class="mark-all-confirm">
+            <span class="mark-all-confirm-text">未読{{ scopedUnreadCount }}件をすべて既読にしますか？</span>
+            <button class="primary mark-all-confirm-btn" type="button" @click="onMarkAllRead">すべて既読にする</button>
+            <button class="ghost mark-all-confirm-btn" type="button" @click="cancelMarkAllRead">キャンセル</button>
           </div>
+          <template v-else>
+            <button
+              v-if="isOwner"
+              class="primary mark-all-btn"
+              type="button"
+              :disabled="scopedUnreadCount === 0"
+              @click="askMarkAllRead"
+            >すべて既読</button>
+            <div class="view-tabs" role="tablist" aria-label="表示切替">
+              <button
+                v-for="f in FILTERS"
+                :key="f.key"
+                type="button"
+                :class="{ active: state.filter === f.key }"
+                @click="setFilter(f.key)"
+              >{{ f.label }}</button>
+            </div>
+          </template>
         </div>
         </template>
 

@@ -9,6 +9,7 @@ import {
   sortArticlesDesc,
   markAllReadInList,
   markAllReadScope,
+  markAllReadTargets,
   mergePendingReadMarks,
   visibleFeedChips,
   feedCategories,
@@ -96,6 +97,44 @@ describe('markAllReadInList / markAllReadScope', () => {
     expect(markAllReadScope(s, 'b', '楽天')).toEqual({ b: true });
     expect(markAllReadScope(s, '', '楽天')).toEqual({ a: true });
     expect(markAllReadScope(s, '', '')).toEqual({ a: true, b: true });
+  });
+});
+
+describe('markAllReadTargets', () => {
+  it('全体では未読だけを返し、既読は含めない', () => {
+    expect(markAllReadTargets(baseState(), '', '').map((a) => a.id)).toEqual(['1', '3']);
+  });
+  it('フィード指定ではそのフィードの未読だけを返す', () => {
+    expect(markAllReadTargets(baseState(), 'nhk', '').map((a) => a.id)).toEqual(['1']);
+    expect(markAllReadTargets(baseState(), 'zenn', '').map((a) => a.id)).toEqual(['3']);
+  });
+  it('カテゴリ指定ではカテゴリ内フィードの未読だけを返す', () => {
+    const s = {
+      ...createListState(),
+      feeds: [
+        { id: 'a', category: '楽天', unreadCount: 1 },
+        { id: 'b', category: '投資・FIRE', unreadCount: 1 },
+        { id: 'c', category: '楽天', unreadCount: 0 },
+      ],
+      articles: [A('1', 'a'), A('2', 'b'), A('3', 'c', true)],
+    };
+    expect(markAllReadTargets(s, '', '楽天').map((a) => a.id)).toEqual(['1']);
+  });
+  it('フィード指定がカテゴリより優先される', () => {
+    const s = {
+      ...createListState(),
+      feeds: [
+        { id: 'a', category: '楽天', unreadCount: 1 },
+        { id: 'b', category: '投資・FIRE', unreadCount: 1 },
+      ],
+      articles: [A('1', 'a'), A('2', 'b')],
+    };
+    expect(markAllReadTargets(s, 'b', '楽天').map((a) => a.id)).toEqual(['2']);
+  });
+  it('すべて既読なら空を返す', () => {
+    const s = baseState();
+    s.articles = s.articles.map((a) => ({ ...a, isRead: true }));
+    expect(markAllReadTargets(s, '', '')).toEqual([]);
   });
 });
 

@@ -567,6 +567,29 @@ button.ghost.active {
   flex-shrink: 0;
 }
 
+/* 「すべて既読」の確認は、下部バーの中身を確認行へ入れ替えて出す
+   (バー自体の高さは変えない)。 */
+.mark-all-confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.mark-all-confirm-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.bottom-bar .mark-all-confirm-btn {
+  flex-shrink: 0;
+  padding: 10px 14px;
+  min-height: 44px;
+}
+
 /* ヘッダーの「更新」「管理」ボタンは控えめに小さく */
 .nav-mgmt,
 .nav-refresh {
