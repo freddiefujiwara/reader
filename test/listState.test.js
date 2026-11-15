@@ -108,7 +108,7 @@ describe('visibleFeedChips', () => {
   it('未読フィルタでは未読があるフィードだけ', () => {
     expect(visibleFeedChips({ feeds, filter: 'unread', feedId: '' }).map((f) => f.id)).toEqual(['a', 'c']);
   });
-  it('未読が全くなければ空 (チップは「すべて」だけになる)', () => {
+  it('未読が全くなければ空', () => {
     const zero = feeds.map((f) => ({ ...f, unreadCount: 0 }));
     expect(visibleFeedChips({ feeds: zero, filter: 'unread', feedId: '' })).toEqual([]);
   });

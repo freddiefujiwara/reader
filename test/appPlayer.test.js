@@ -286,6 +286,55 @@ describe('前へ／次へボタン', () => {
   });
 });
 
+describe('フィルタのトグル選択 (「すべて」廃止)', () => {
+  const chipByText = (root, text) =>
+    [...root.querySelectorAll('button.chip')].find((b) => b.textContent.trim().startsWith(text));
+
+  it('カテゴリとチャンネルのチップに「すべて」が無く、未選択が初期状態', async () => {
+    await mountPlayer();
+    const chips = [...el.querySelectorAll('.feed-chips button.chip')];
+    expect(chips.length).toBeGreaterThan(0);
+    expect(chips.some((b) => b.textContent.trim() === 'すべて')).toBe(false);
+    expect(chips.some((b) => b.classList.contains('active'))).toBe(false);
+    // 既読状態の切替 (すべて／未読) は対象外で、従来どおり残る。
+    const tabs = [...el.querySelectorAll('.view-tabs button')].map((b) => b.textContent.trim());
+    expect(tabs).toEqual(['すべて', '未読']);
+    expect(errors).toEqual([]);
+  });
+
+  it('カテゴリは再タップで解除され、全件表示に戻る', async () => {
+    await mountPlayer();
+    const chip = () => chipByText(el.querySelector('.category-chips'), 'ポッドキャスト');
+    expect(chip()).toBeTruthy();
+    chip().click();
+    await flush();
+    expect(chip().classList.contains('active')).toBe(true);
+    expect(el.querySelectorAll('.article-card').length).toBe(2);
+
+    chip().click();
+    await flush();
+    expect(errors).toEqual([]);
+    expect(chip().classList.contains('active')).toBe(false);
+    expect(el.querySelectorAll('.article-card').length).toBe(2);
+  });
+
+  it('チャンネルは再タップで解除され、全件表示に戻る', async () => {
+    await mountPlayer();
+    const chip = () => chipByText(el.querySelector('.feed-chips:not(.category-chips)'), 'Rebuild');
+    expect(chip()).toBeTruthy();
+    chip().click();
+    await flush();
+    expect(chip().classList.contains('active')).toBe(true);
+    expect(el.querySelectorAll('.article-card').length).toBe(2);
+
+    chip().click();
+    await flush();
+    expect(errors).toEqual([]);
+    expect(chip().classList.contains('active')).toBe(false);
+    expect(el.querySelectorAll('.article-card').length).toBe(2);
+  });
+});
+
 describe('キューの範囲 (表示条件に合う全フィード)', () => {
   // https://example.com/feed2.xml のハッシュID (feedHash で固定済み)。
   const FEED2 = {
