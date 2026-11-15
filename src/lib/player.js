@@ -108,6 +108,86 @@ export function nextEpisodePlan({ queue, currentId, repeat = 'none', shuffle = f
   return { type: 'stop' };
 }
 
+/* ---- 再生できないエピソードの自動スキップ ----
+   再生エラー・play() の拒否・再生中のストールで「このエピソードは
+   再生できない」と判断したら、止まったままにせずキューの次へ
+   自動で進むための部品。送り先の決定はここ (純粋関数) で行い、
+   検知と実行は App.vue 側が担う。 */
+
+// 連続失敗の絶対上限。キューが長い場合でも、失敗が続いたら
+// この回数で送りを止める (下の failureSkipLimit と併用)。
+export const MAX_FAILURE_SKIPS = 10;
+
+// 連続失敗の上限: 「キューの曲数を1巡する分」と絶対上限の
+// 小さい方。全曲が壊れている場合でも、キューを1巡したところで
+// 止まる (全体繰り返し・ランダムでも無限に回らない)。
+export function failureSkipLimit(queueLength) {
+  const n = Number.isFinite(queueLength) ? Math.floor(queueLength) : 0;
+  if (n <= 0) return 0;
+  return Math.min(n, MAX_FAILURE_SKIPS);
+}
+
+// 再生に失敗したときの送り先。進み方自体は終了時の自動送り
+// (nextEpisodePlan) と同じだが、単曲リピート中でも壊れた
+// エピソード自体は繰り返さない (repeat 'one' は 'none' として
+// 解釈する)。consecutiveFailures は今回の失敗を含めた連続失敗数
+// で、上限を超えたら { type: 'stop' } を返して送りを止める。
+export function failedEpisodePlan({ queue, currentId, repeat = 'none', shuffle = false, playedIds, randomPick, consecutiveFailures = 1 } = {}) {
+  const ids = Array.isArray(queue) ? queue : [];
+  if (!ids.length) return { type: 'stop' };
+  if (consecutiveFailures > failureSkipLimit(ids.length)) return { type: 'stop' };
+  return nextEpisodePlan({
+    queue: ids,
+    currentId,
+    repeat: repeat === 'one' ? 'none' : repeat,
+    shuffle,
+    playedIds,
+    randomPick,
+  });
+}
+
+/* ---- ストール (再生が止まったまま) の検知 ---- */
+
+// 再生意思があるのに表示位置がこの時間 (ミリ秒) 進まなければ、
+// そのエピソードは再生できないとみなす。
+export const STALL_THRESHOLD_MS = 20_000;
+
+// 表示位置の進み具合を観測する小さな状態機械。App.vue 側が
+// タイマーの tick ごとに observe(表示位置, 現在時刻) を呼ぶ。
+// 実時間ではなく位置の差で判定するため、バックグラウンドで
+// タイマーが間引かれても、実際に再生できていれば位置が進んで
+// いて誤判定しない。
+export function createStallTracker({ thresholdMs = STALL_THRESHOLD_MS } = {}) {
+  let lastPos = null;
+  let lastAdvanceAt = 0;
+  return {
+    // 曲の切り替わり・シーク・再開のたびに計測をやり直す
+    // (切り替わり直後とシーク直後の猶予になる)。
+    reset(now) {
+      lastPos = null;
+      lastAdvanceAt = Number.isFinite(now) ? now : 0;
+    },
+    // 戻り値は { progressed, stalled }。progressed は前回の観測
+    // から位置が進んだこと (正常に再生できている証拠)。
+    observe(pos, now) {
+      if (!Number.isFinite(pos) || !Number.isFinite(now)) return { progressed: false, stalled: false };
+      if (lastPos === null) {
+        lastPos = pos;
+        lastAdvanceAt = now;
+        return { progressed: false, stalled: false };
+      }
+      if (pos !== lastPos) {
+        // 進んだ場合も、シーク等で後退した場合も基準を取り直す。
+        const progressed = pos > lastPos;
+        lastPos = pos;
+        lastAdvanceAt = now;
+        return { progressed, stalled: false };
+      }
+      return { progressed: false, stalled: now - lastAdvanceAt >= thresholdMs };
+    },
+  };
+}
+
 /* ---- 前へ／次へボタン (blog の musicPlayer と同じ規則) ---- */
 
 // 両端で折り返す1ステップ移動。blog の stepIndex と同じ式。
