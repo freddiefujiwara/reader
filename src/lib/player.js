@@ -201,16 +201,27 @@ export function reachedTrueEnd(displayPos, trueSec) {
    限られていたため、両者が一致する通常の曲では 'ended' だけが
    頼りになり、終端で数十秒止まることがあった。そこで、
    durationSec が判明している曲では、表示位置がその長さに
-   達した時点で終了とみなす。最後のコンマ数秒が実際の終わり
-   より手前に判定される可能性は、許容誤差
-   (TRUE_END_TOLERANCE_SEC) の範囲に限られる。
+   達した時点で終了とみなす。
    要素 duration と一致する曲では、表示位置は要素の位置そのもの
    (モデル変換を通らない) なので実測モデルは要らない。ずれて
    いる曲の表示位置はモデル変換を通るため、従来どおり、この曲
    の再生中に実測したモデルがある場合に限る (端末保存の
    learned の流用だけでは発火しない。PR #45 の防御)。 */
+
+// 既知の長さへの到達とみなす許容誤差 (秒)。durationSec の元に
+// なる itunes:duration は整数秒 (四捨五入) で運ばれるため、
+// durationSec は真の長さより最大で約0.5秒長くなりうる。
+// reachedTrueEnd の 0.3 秒では閾値 (trueSec − 0.3) がメディアの
+// 実終端 (駐留位置) より上になって到達判定が届かない曲が出る
+// ため、この判定専用に 0.6 秒を取る。代償として、最悪で曲の
+// 最後の約0.6秒手前で判定されうるが、丸め誤差を吸収するために
+// 必要。
+export const KNOWN_DURATION_END_TOLERANCE_SEC = 0.6;
+
 export function reachedKnownDurationEnd({ displayPos, trueSec, elementDuration, hasMeasuredModel } = {}) {
-  if (!reachedTrueEnd(displayPos, trueSec)) return false;
+  if (!Number.isFinite(trueSec) || trueSec <= 0) return false;
+  if (!Number.isFinite(displayPos)) return false;
+  if (displayPos < trueSec - KNOWN_DURATION_END_TOLERANCE_SEC) return false;
   if (!durationMismatch(trueSec, elementDuration)) return true;
   return hasMeasuredModel === true;
 }

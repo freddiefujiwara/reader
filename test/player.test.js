@@ -21,6 +21,7 @@ import {
   reachedTrueEnd,
   TRUE_END_TOLERANCE_SEC,
   reachedKnownDurationEnd,
+  KNOWN_DURATION_END_TOLERANCE_SEC,
   isEndStalled,
   END_STALL_WATCH_INTERVAL_MS,
   END_STALL_WINDOW_SEC,
@@ -427,12 +428,26 @@ describe('reachedKnownDurationEnd', () => {
     expect(reachedKnownDurationEnd({
       displayPos: 100, trueSec: 100, elementDuration: 100, hasMeasuredModel: false,
     })).toBe(true);
-    // 許容誤差 (0.3秒) の境界。
+    // 許容誤差 (この判定専用の0.6秒。itunes:duration の整数秒への
+    // 丸めを吸収する) の境界。
     expect(reachedKnownDurationEnd({
-      displayPos: 100 - TRUE_END_TOLERANCE_SEC, trueSec: 100, elementDuration: 100, hasMeasuredModel: false,
+      displayPos: 100 - KNOWN_DURATION_END_TOLERANCE_SEC, trueSec: 100, elementDuration: 100, hasMeasuredModel: false,
     })).toBe(true);
     expect(reachedKnownDurationEnd({
-      displayPos: 100 - TRUE_END_TOLERANCE_SEC - 0.1, trueSec: 100, elementDuration: 100, hasMeasuredModel: false,
+      displayPos: 100 - KNOWN_DURATION_END_TOLERANCE_SEC - 0.1, trueSec: 100, elementDuration: 100, hasMeasuredModel: false,
+    })).toBe(false);
+  });
+  it('durationSec が整数秒への丸めで真の長さより長くても、駐留位置で到達とする', () => {
+    // 真の長さ 100 秒のメディアが、itunes:duration の四捨五入で
+    // durationSec = 100.49 になったケース。要素は真の終端 (100)
+    // で駐留する。従来の 0.3 秒では閾値 (100.19) が駐留位置より
+    // 上になり到達判定が届かなかった。
+    expect(reachedKnownDurationEnd({
+      displayPos: 100, trueSec: 100.49, elementDuration: 100, hasMeasuredModel: false,
+    })).toBe(true);
+    // 丸めの最大幅 (約0.5秒) を超えて手前の位置では到達としない。
+    expect(reachedKnownDurationEnd({
+      displayPos: 99.8, trueSec: 100.49, elementDuration: 100, hasMeasuredModel: false,
     })).toBe(false);
   });
   it('既知の長さの手前では終了としない', () => {
