@@ -196,13 +196,21 @@ export function reachedTrueEnd(displayPos, trueSec) {
 // ウォッチドッグの監視間隔 (ミリ秒)。
 export const END_STALL_WATCH_INTERVAL_MS = 1000;
 // 表示位置が実効終端の残りこの秒数以内にあれば「終端付近」。
-export const END_STALL_WINDOW_SEC = 1;
-// 要素の currentTime がこの秒数以上まったく進まなければ「停滞」。
-// インターバルが1秒のため、実際の検出は終端到達から約1〜2秒になる。
+// 終端の少し手前で駐留するケースも拾うため余裕を持たせている
+// (通常再生の最終数秒は位置が進み続けるので誤発火しない)。
+export const END_STALL_WINDOW_SEC = 5;
+// 監視1回 (tick) あたりの前進がこの秒数未満なら「前進していない」
+// とみなす。終端で止まった要素の報告値のわずかな揺れや、実時間
+// よりはるかに遅い微小な前進を、進みとして数えないための下限。
+export const END_STALL_PROGRESS_EPSILON_SEC = 0.05;
+// 「前進していない」状態がこの秒数以上続いたら「停滞」。
+// インターバルが1秒のため、実際の検出は駐留から約1〜2秒になる。
 export const END_STALL_FROZEN_SEC = 1;
 
-// 終端付近に駐留し、currentTime が END_STALL_FROZEN_SEC 秒以上
-// 進んでいないか。実効終端 (effectiveDuration) は表示スケールの
+// 終端付近に駐留し、「前進していない」状態が END_STALL_FROZEN_SEC
+// 秒以上続いているか。frozenForSec は App.vue 側のウォッチドッグが
+// 数えた「tick ごとの前進が END_STALL_PROGRESS_EPSILON_SEC 未満
+// だった時間」。実効終端 (effectiveDuration) は表示スケールの
 // 全長 (表示位置と同じスケールで渡す)。長さ不明・位置が 0 以下・
 // 停滞時間が不明なら false (従来どおり 'ended' を待つ)。
 export function isEndStalled(displayPos, effectiveDuration, frozenForSec) {
@@ -212,6 +220,13 @@ export function isEndStalled(displayPos, effectiveDuration, frozenForSec) {
   return displayPos >= effectiveDuration - END_STALL_WINDOW_SEC
     && frozenForSec >= END_STALL_FROZEN_SEC;
 }
+
+/* ---- 次の曲の先読み ---- */
+// 再生中の曲の残りがこの秒数以下になったら、次に再生することが
+// 確定している曲の読み込みを2つ目の要素で温め始める (App.vue
+// 側)。曲の開始直後から読み込むとデータ消費が増えるため、
+// 終盤に限る。
+export const PRELOAD_REMAINING_SEC = 60;
 
 /* ---- 再生モードの端末保存 (セッションキーと同じ環境分け) ---- */
 

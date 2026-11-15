@@ -74,7 +74,9 @@ import {
   nextSpeed,
   progressRatio,
   reachedTrueEnd,
+  END_STALL_PROGRESS_EPSILON_SEC,
   END_STALL_WATCH_INTERVAL_MS,
+  PRELOAD_REMAINING_SEC,
   REPEAT_LABELS,
   savePlayMode,
   saveTimeModel,
@@ -451,15 +453,18 @@ function samplePlaybackRate() {
    ことがある。その場合は timeupdate も止まるため、表示位置ベース
    の終了判定 (timeupdate 駆動) も届かず、再生中表示のまま終端で
    固まってしまう。インターバルで要素の currentTime の進みを監視
-   し、終端付近で止まったままなら終了フローへ進める。再生開始は
-   すべて tryPlayAudio に集約されているので、そこで監視を始め、
-   stopPlayer と終了フローで確実に止める。 */
+   し、終端付近でほぼ止まったままなら終了フローへ進める。再生開始
+   はすべて tryPlayAudio に集約されているので、そこで監視を始め、
+   stopPlayer と終了フローで確実に止める。
+   再生中かどうかの正は、要素の paused ではなくアプリ側の
+   isPlaying とする。ユーザーの一時停止 (ボタン・Media Session)
+   は必ず 'pause' イベント経由で isPlaying=false になる一方、
+   iOS が終端でイベントを出さないまま要素を paused にするケース
+   では isPlaying が true のまま残る。要素の paused を見ると、
+   後者の間は停滞時間が一切貯まらず発火しなくなってしまう。 */
 let endWatchTimer = null;
 let endWatchLastCt = null;
 let endWatchFrozenSince = 0;
-// currentTime が「進んだ」とみなす最小の変化 (秒)。終端で止まった
-// 要素の報告値のわずかな揺れを、進みとして数えないための下限。
-const END_STALL_MOVE_EPSILON_SEC = 0.05;
 
 function startEndWatchdog() {
   stopEndWatchdog();
@@ -479,16 +484,27 @@ function checkEndStall() {
   if (!currentEpisode.value) return;
   const now = Date.now();
   const ct = audio.currentTime || 0;
-  if (endWatchLastCt === null
-    || Math.abs(ct - endWatchLastCt) > END_STALL_MOVE_EPSILON_SEC) {
-    // 進んでいる (または監視の起点)。停滞の数え始めをここに置く。
+  if (endWatchLastCt === null) {
+    // 監視の起点。ここから tick ごとの前進量を測る。
     endWatchLastCt = ct;
     endWatchFrozenSince = now;
     return;
   }
-  if (!isPlaying.value || audio.paused || audio.ended || endFlowDone) {
-    // 止まっている間は「進んでいない時間」に数えない。一時停止を
-    // 挟んで再開した直後に、停止中の蓄積で誤って発火しないため。
+  // 前回 tick からの前進量で判定する (前回「進んだ位置」からの
+  // 累積ではない)。微小な前進が続く場合は毎 tick とも下限未満に
+  // なるため、累積で下限を超えて数え直しになることがない。
+  const delta = ct - endWatchLastCt;
+  endWatchLastCt = ct;
+  if (Math.abs(delta) >= END_STALL_PROGRESS_EPSILON_SEC) {
+    // 十分に前進した (または大きくシークした)。停滞の数え直し。
+    endWatchFrozenSince = now;
+    return;
+  }
+  if (!isPlaying.value || audio.ended || endFlowDone) {
+    // アプリ側が再生中でない間は「前進していない時間」に数えない。
+    // 一時停止を挟んで再開した直後に、停止中の蓄積で誤って発火
+    // しないため。要素の paused は見ない (上記のとおり、終端で
+    // 無言で paused になった要素こそ停滞として数える)。
     endWatchFrozenSince = now;
     return;
   }
@@ -496,6 +512,62 @@ function checkEndStall() {
   if (isEndStalled(displayTime.value, displayDuration.value, frozenForSec)) {
     handleEpisodeEnded();
   }
+}
+
+/* ---- 次の曲の先読み ----
+   切り替え時点で初めて読み込みが始まると、回線が遅いときに遷移で
+   長く待たされる。再生中の曲の残りが PRELOAD_REMAINING_SEC 以下に
+   なったら、2つ目の要素で次の曲の読み込みを温めておく (本体は
+   切り替え時に同じ URL を引くので、キャッシュが効いて開始が
+   速くなる)。先読み要素のエラーは無視し、本体には波及させない。
+   遷移・停止・エピソード変更では loadEpisode / stopPlayer が
+   必ず破棄する。 */
+let preloadAudio = null;
+let preloadId = null;
+
+// 次に再生することが事前に確定している記事 (無ければ null)。
+// 次曲の決定は本体の自動送り (nextEpisodePlan) と同じにするが、
+// ランダムは次が遷移時の抽選で決まるため対象外とし、単曲
+// リピートは次も同じ曲なので対象外とする。
+function preloadTarget() {
+  if (!currentEpisode.value || shuffleOn.value || repeatMode.value === 'one') return null;
+  const plan = nextEpisodePlan({
+    queue: playQueue.value.map((a) => a.id),
+    currentId: currentEpisode.value.id,
+    repeat: repeatMode.value,
+    shuffle: false,
+    playedIds: playedInRound,
+  });
+  if (plan.type !== 'advance') return null;
+  const next = playQueue.value.find((a) => a.id === plan.id);
+  if (!next || next.id === currentEpisode.value.id || !next.audioUrl) return null;
+  return next;
+}
+
+function discardPreload() {
+  if (!preloadAudio) return;
+  preloadAudio.removeAttribute('src');
+  preloadAudio.load();
+  preloadAudio = null;
+  preloadId = null;
+}
+
+// timeupdate から呼ばれる。対象が変わっていたら張り替え、対象が
+// 無くなったら破棄する。残りが多い間は読み込みを始めない。
+function updatePreload() {
+  const target = preloadTarget();
+  if (!target) {
+    discardPreload();
+    return;
+  }
+  if (preloadAudio && preloadId !== target.id) discardPreload();
+  if (preloadAudio) return;
+  const remaining = displayDuration.value - displayTime.value;
+  if (!Number.isFinite(remaining) || remaining > PRELOAD_REMAINING_SEC) return;
+  preloadAudio = new Audio();
+  preloadAudio.preload = 'auto';
+  preloadId = target.id;
+  preloadAudio.src = target.audioUrl;
 }
 
 const speedLabel = computed(() => `${speed.value}×`);
@@ -564,6 +636,7 @@ function updateMediaSession(article) {
 
 // エピソードを Audio 要素へ載せて再生する共通処理。キューは触らない。
 function loadEpisode(article) {
+  discardPreload();
   savePlayPos();
   // 渡された記事は描画時点 (またはキュー固定時点) の控えで、その後の
   // 更新で durationSec / audioUrl が埋まっても古いままのことがある。
@@ -661,6 +734,7 @@ function onSeekInput(event) {
 function stopPlayer() {
   savePlayPos();
   stopEndWatchdog();
+  discardPreload();
   audio.pause();
   audio.removeAttribute('src');
   audio.load();
@@ -696,6 +770,7 @@ audio.addEventListener('loadedmetadata', () => {
 audio.addEventListener('timeupdate', () => {
   if (!seeking.value) currentTime.value = audio.currentTime || 0;
   samplePlaybackRate();
+  updatePreload();
   if (Date.now() - lastPosSaveAt > 10_000) {
     lastPosSaveAt = Date.now();
     savePlayPos();

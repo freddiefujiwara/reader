@@ -532,6 +532,88 @@ describe('終端停滞ウォッチドッグ (ended が来ない終端の検出)'
     expect(errors).toEqual([]);
   });
 
+  it('終端の残り3秒付近で止まったままでも、次へ進む', async () => {
+    await mountFake();
+    await startFake(0);
+    const audio = latestAudio();
+    await parkAt(audio, 1797);
+
+    // 終端窓 (残り5秒) の内側だが、従来の窓 (残り1秒) より手前で
+    // 駐留するケース。最初の監視 (起点の記録) だけでは進まず、
+    // 次の監視で検出する (駐留から約2秒で次へ進む)。
+    await vi.advanceTimersByTimeAsync(1200);
+    await flushFake();
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
+    await vi.advanceTimersByTimeAsync(2000);
+    await flushFake();
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+    expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(true);
+    expect(errors).toEqual([]);
+  });
+
+  it('終端付近で微小な前進 (tick あたり 0.05 秒未満) が続いても、次へ進む', async () => {
+    await mountFake();
+    await startFake(0);
+    const audio = latestAudio();
+    await parkAt(audio, 1799.5);
+
+    // 終端で要素の報告値がわずかに前にずり続けるケース。tick
+    // ごとの前進が下限 (0.05 秒) 未満なら「前進していない」と
+    // みなすため、累積で下限を超えても数え直しにはならない。
+    for (let i = 0; i < 4; i += 1) {
+      if (el.querySelector('.player-title').textContent === 'エピソード2') break;
+      audio.currentTime = Math.min(audio.currentTime + 0.03, 1799.95);
+      audio.dispatchEvent(new window.Event('timeupdate'));
+      await vi.advanceTimersByTimeAsync(1000);
+    }
+    await flushFake();
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+    expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(true);
+    expect(errors).toEqual([]);
+  });
+
+  it('終端で要素が無言で paused になっても (isPlaying は true のまま)、次へ進む', async () => {
+    await mountFake();
+    await startFake(0);
+    const audio = latestAudio();
+    await parkAt(audio, 1799.5);
+
+    // iOS が終端で 'ended' も 'pause' も発火しないまま要素を
+    // paused にするケース。'pause' イベントは来ないので、アプリ
+    // 側の isPlaying は true のまま残る (画面は再生中表示)。要素
+    // の paused を見て停滞を数えないと、この状態では停滞時間が
+    // 一切貯まらず発火しなかった。
+    audio.paused = true;
+    await vi.advanceTimersByTimeAsync(1200);
+    await flushFake();
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
+    await vi.advanceTimersByTimeAsync(2000);
+    await flushFake();
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+    expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(true);
+    expect(errors).toEqual([]);
+  });
+
+  it('最終5秒を通常速度で再生中は、終了フローは走らない', async () => {
+    await mountFake();
+    await startFake(0);
+    const audio = latestAudio();
+    await parkAt(audio, 1795.5);
+
+    // 終端窓 (残り5秒) の内側を、監視間隔 (1秒) のたびに約1秒
+    // ずつ前進する通常再生。前進量が下限以上なので停滞とは
+    // 数えず、終端付近にいても誤って発火しない。
+    for (let i = 0; i < 4; i += 1) {
+      audio.currentTime = 1795.5 + (i + 1) * 1.0;
+      audio.dispatchEvent(new window.Event('timeupdate'));
+      await vi.advanceTimersByTimeAsync(1000);
+    }
+    await flushFake();
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
+    expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(false);
+    expect(errors).toEqual([]);
+  });
+
   it('曲の途中で currentTime が止まっても (ネットワーク停滞)、終了フローは走らない', async () => {
     await mountFake();
     await startFake(0);
@@ -576,6 +658,72 @@ describe('終端停滞ウォッチドッグ (ended が来ない終端の検出)'
     await flushFake();
     expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
     expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(false);
+    expect(errors).toEqual([]);
+  });
+});
+
+describe('次の曲の先読み', () => {
+  // 先読みは本体とは別の2つ目の要素で温める。要素は必要になる
+  // まで作られないので、作られたかどうかはインスタンス数で見る。
+  const preloadInstance = () => audioInstances[audioInstances.length - 1];
+
+  async function parkNearEnd(audio, pos) {
+    audio.duration = 1800;
+    audio.dispatchEvent(new window.Event('loadedmetadata'));
+    audio.currentTime = pos;
+    audio.dispatchEvent(new window.Event('timeupdate'));
+    await flush();
+  }
+
+  it('残り60秒以下になると次の曲を先読みし、それより前はしない', async () => {
+    await mountPlayer();
+    await startCard(0);
+    const audio = latestAudio();
+    expect(audioInstances.length).toBe(1);
+
+    // 残り100秒: まだ先読みしない (開始直後から読み込まない)。
+    await parkNearEnd(audio, 1700);
+    expect(audioInstances.length).toBe(1);
+
+    // 残り50秒: 次の曲 (エピソード2) の先読みが始まる。
+    await parkNearEnd(audio, 1750);
+    expect(audioInstances.length).toBe(2);
+    expect(preloadInstance()).not.toBe(audio);
+    expect(preloadInstance().src).toBe('https://example.com/ep2.mp3');
+    expect(preloadInstance().preload).toBe('auto');
+    expect(errors).toEqual([]);
+  });
+
+  it('遷移時に先読みは破棄される', async () => {
+    await mountPlayer();
+    await startCard(0);
+    const audio = latestAudio();
+    await parkNearEnd(audio, 1750);
+    const pre = preloadInstance();
+    expect(pre.src).toBe('https://example.com/ep2.mp3');
+
+    audio.ended = true;
+    audio.paused = true;
+    audio.dispatchEvent(new window.Event('ended'));
+    await flush();
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+    expect(pre.src).toBe('');
+    expect(errors).toEqual([]);
+  });
+
+  it('単曲リピートでは先読みしない', async () => {
+    await mountPlayer();
+    const bar = await startCard(0);
+    const audio = latestAudio();
+    const repeatBtn = () => bar.querySelector('button[aria-label^="リピート"]');
+    repeatBtn().click();
+    await flush();
+    repeatBtn().click();
+    await flush();
+    expect(repeatBtn().getAttribute('aria-label')).toBe('リピート：1曲');
+
+    await parkNearEnd(audio, 1750);
+    expect(audioInstances.length).toBe(1);
     expect(errors).toEqual([]);
   });
 });
