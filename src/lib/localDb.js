@@ -191,6 +191,16 @@ export function transferKey(feedId, link) {
   return `${feedId}\n${link}`;
 }
 
+// 付け替えで退避する記事の状態 (既読・再生位置・取り込み日時)。
+function stagedStateOf(record) {
+  return {
+    is_read: !!record.is_read,
+    read_at: record.read_at || '',
+    play_pos: record.play_pos || 0,
+    fetched_at: record.fetched_at || '',
+  };
+}
+
 // 記事レコードを旧フィードIDから新フィードID (idMap: 旧ID -> 新ID) へ
 // 付け替える計画を立てる。記事IDが「旧ID＋リンク」から再現できる
 // レコード (guid がリンクと同一だったもの) は ID を計算し直して
@@ -209,16 +219,7 @@ export async function planFeedRekey(records, idMap) {
     if (fromLink === record.id) {
       puts.push({ ...record, id: await articleId(newId, record.link), feed_id: newId });
     } else {
-      staged.push({
-        feedId: newId,
-        link: record.link,
-        state: {
-          is_read: !!record.is_read,
-          read_at: record.read_at || '',
-          play_pos: record.play_pos || 0,
-          fetched_at: record.fetched_at || '',
-        },
-      });
+      staged.push({ feedId: newId, link: record.link, state: stagedStateOf(record) });
     }
   }
   return { puts, deletes, staged };
@@ -407,18 +408,26 @@ export async function ingestFeedArticles(feed, entries, fetchedAtIso, transfer) 
   return { records, consumedKeys };
 }
 
-// 記事1件の既読を切り替える。対象が無ければ何もしない。
-export async function setLocalArticleRead(id, isRead, readAtIso) {
+// 記事レコード1件を読み、mutate を適用して書き戻す共通処理。
+// 対象が無ければ何もしない。
+async function updateArticleRecord(id, mutate) {
   const db = await openLocalDb();
   const tx = db.transaction('articles', 'readwrite');
   const store = tx.objectStore('articles');
   const record = await requestToPromise(store.get(id));
   if (record) {
-    record.is_read = !!isRead;
-    record.read_at = isRead ? (readAtIso || '') : '';
+    mutate(record);
     store.put(record);
   }
   await txDone(tx);
+}
+
+// 記事1件の既読を切り替える。
+export function setLocalArticleRead(id, isRead, readAtIso) {
+  return updateArticleRecord(id, (record) => {
+    record.is_read = !!isRead;
+    record.read_at = isRead ? (readAtIso || '') : '';
+  });
 }
 
 // まとめて既読化。ids のうち未読のものだけを書き換える。
@@ -438,19 +447,13 @@ export async function markLocalArticlesRead(ids, readAtIso) {
   await txDone(tx);
 }
 
-// 再生位置 (秒) を保存する。対象が無ければ何もしない。
+// 再生位置 (秒) を保存する。
 // レコードはオブジェクトごと保存する形なので、フィールド追加に
 // DB のバージョン変更は要らない (索引は変えていない)。
-export async function setLocalArticlePlayPos(id, posSec) {
-  const db = await openLocalDb();
-  const tx = db.transaction('articles', 'readwrite');
-  const store = tx.objectStore('articles');
-  const record = await requestToPromise(store.get(id));
-  if (record) {
+export function setLocalArticlePlayPos(id, posSec) {
+  return updateArticleRecord(id, (record) => {
     record.play_pos = Number.isFinite(posSec) && posSec > 0 ? Math.floor(posSec) : 0;
-    store.put(record);
-  }
-  await txDone(tx);
+  });
 }
 
 // 再生位置を消す (再生し終えたエピソード用)。
@@ -460,19 +463,12 @@ export function clearLocalArticlePlayPos(id) {
 
 // 音声URLを取り消す。保持していた古いURLで再生を試みて即エラーに
 // なった (失効していた) ときに使い、ボタンが消える状態にする。
-// 対象が無ければ何もしない。
-export async function clearLocalArticleAudio(id) {
-  const db = await openLocalDb();
-  const tx = db.transaction('articles', 'readwrite');
-  const store = tx.objectStore('articles');
-  const record = await requestToPromise(store.get(id));
-  if (record) {
+export function clearLocalArticleAudio(id) {
+  return updateArticleRecord(id, (record) => {
     record.audio_url = '';
     record.audio_url_at = '';
     record.audio_stale = false;
-    store.put(record);
-  }
-  await txDone(tx);
+  });
 }
 
 // フィード一覧はサーバーの並び順が正本。sortOrder を付けて保存し、
@@ -507,6 +503,16 @@ export async function setLocalMeta(key, value) {
   await txDone(tx);
 }
 
+// 付け替え計画 (状態の退避・付け替え・旧レコードの削除) を DB へ適用する。
+async function applyRekeyPlan(plan) {
+  if (plan.staged.length) {
+    const current = await getLocalMeta(FEED_HASH_TRANSFER_KEY);
+    await setLocalMeta(FEED_HASH_TRANSFER_KEY, mergeTransferredState(current, plan.staged));
+  }
+  if (plan.puts.length) await putLocalArticles(plan.puts);
+  if (plan.deletes.length) await deleteLocalArticles(plan.deletes);
+}
+
 // フィードIDのハッシュ化の移行 (新ビルドの初回だけ)。キャッシュ済みの
 // フィード一覧 (旧ID＋URL) から旧ID→新IDの対応を作り、記事を付け替える。
 // フィード一覧のキャッシュが新しい一覧で上書きされる前に呼ぶこと。
@@ -522,12 +528,7 @@ export async function migrateFeedHashIds() {
     if (newId && newId !== feed.id) idMap[feed.id] = newId;
   }
   const plan = await planFeedRekey(await loadLocalArticles(), idMap);
-  if (plan.staged.length) {
-    const current = await getLocalMeta(FEED_HASH_TRANSFER_KEY);
-    await setLocalMeta(FEED_HASH_TRANSFER_KEY, mergeTransferredState(current, plan.staged));
-  }
-  if (plan.puts.length) await putLocalArticles(plan.puts);
-  if (plan.deletes.length) await deleteLocalArticles(plan.deletes);
+  await applyRekeyPlan(plan);
   await setLocalMeta(FEED_HASH_MIGRATED_KEY, true);
   return { migrated: true, rekeyed: plan.puts.length, staged: plan.staged.length };
 }
@@ -589,16 +590,7 @@ export async function planYouTubeArticleRekey(records, idMap) {
     if (videoId) {
       puts.push({ ...record, id: await articleId(newId, videoId), feed_id: newId });
     } else {
-      staged.push({
-        feedId: newId,
-        link: record.link,
-        state: {
-          is_read: !!record.is_read,
-          read_at: record.read_at || '',
-          play_pos: record.play_pos || 0,
-          fetched_at: record.fetched_at || '',
-        },
-      });
+      staged.push({ feedId: newId, link: record.link, state: stagedStateOf(record) });
     }
   }
   return { puts, deletes, staged };
@@ -615,12 +607,7 @@ export async function migrateYouTubeChannelUrlIds(serverFeeds) {
   const cached = await loadLocalFeeds();
   const { idMap, complete } = planYouTubeChannelPairs(cached, serverFeeds);
   const plan = await planYouTubeArticleRekey(await loadLocalArticles(), idMap);
-  if (plan.staged.length) {
-    const current = await getLocalMeta(FEED_HASH_TRANSFER_KEY);
-    await setLocalMeta(FEED_HASH_TRANSFER_KEY, mergeTransferredState(current, plan.staged));
-  }
-  if (plan.puts.length) await putLocalArticles(plan.puts);
-  if (plan.deletes.length) await deleteLocalArticles(plan.deletes);
+  await applyRekeyPlan(plan);
   if (complete) await setLocalMeta(YT_CHANNEL_URL_MIGRATED_KEY, true);
   return { migrated: true, complete, rekeyed: plan.puts.length, staged: plan.staged.length };
 }

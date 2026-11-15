@@ -75,6 +75,12 @@ export function buildQueue(articles, current) {
   return queue;
 }
 
+// ランダム選択の既定実装 (候補から一様に1件)。呼び出し側は
+// テストで差し替えられるよう randomPick を引数に取る。
+function defaultRandomPick(candidates) {
+  return candidates[Math.floor(Math.random() * candidates.length)];
+}
+
 // 1件終わったときの次手。blog の endedPlan と同じ規則を記事IDで表す。
 //   repeat 'one' → replay (同じエピソードを先頭から)
 //   shuffle      → このラウンドで未再生のものから randomPick で1件。
@@ -89,9 +95,7 @@ export function nextEpisodePlan({ queue, currentId, repeat = 'none', shuffle = f
   if (!ids.length) return { type: 'stop' };
   if (repeat === 'one') return { type: 'replay' };
   const played = playedIds instanceof Set ? playedIds : new Set(playedIds || []);
-  const pick = typeof randomPick === 'function'
-    ? randomPick
-    : (candidates) => candidates[Math.floor(Math.random() * candidates.length)];
+  const pick = typeof randomPick === 'function' ? randomPick : defaultRandomPick;
   if (shuffle) {
     const remaining = ids.filter((id) => id !== currentId && !played.has(id));
     if (remaining.length) return { type: 'advance', id: pick(remaining) };
@@ -212,9 +216,7 @@ export function stepIndex(index, count, delta) {
 export function skipPlan({ queue, currentId, delta, shuffle = false, history = [], randomPick } = {}) {
   const ids = Array.isArray(queue) ? queue : [];
   if (!ids.length) return null;
-  const pick = typeof randomPick === 'function'
-    ? randomPick
-    : (candidates) => candidates[Math.floor(Math.random() * candidates.length)];
+  const pick = typeof randomPick === 'function' ? randomPick : defaultRandomPick;
   if (delta > 0) {
     if (shuffle && ids.length > 1) {
       return { id: pick(ids.filter((id) => id !== currentId)), historyCut: null };
