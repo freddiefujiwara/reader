@@ -7,6 +7,11 @@ import {
   progressRatio,
   buildQueue,
   nextEpisodePlan,
+  failedEpisodePlan,
+  failureSkipLimit,
+  MAX_FAILURE_SKIPS,
+  createStallTracker,
+  STALL_THRESHOLD_MS,
   stepIndex,
   skipPlan,
   nextRepeat,
@@ -536,6 +541,109 @@ describe('時間モデルの保存', () => {
   it('本番とステージングでキーを分ける', () => {
     expect(timeModelKey({})).toBe('reader:player-timemodel:v1');
     expect(timeModelKey({ VITE_STAGING: '1' })).toBe('reader:player-timemodel:v1:staging');
+  });
+});
+
+describe('failedEpisodePlan (再生できないエピソードの送り先)', () => {
+  const queue = ['a', 'b', 'c'];
+  it('次があれば、終了時の自動送りと同じく次へ進む', () => {
+    expect(failedEpisodePlan({ queue, currentId: 'a' })).toEqual({ type: 'advance', id: 'b' });
+    expect(failedEpisodePlan({ queue, currentId: 'b' })).toEqual({ type: 'advance', id: 'c' });
+  });
+  it('末尾でリピートなしなら止まる', () => {
+    expect(failedEpisodePlan({ queue, currentId: 'c' })).toEqual({ type: 'stop' });
+  });
+  it('全体繰り返しでは、末尾の次は先頭へ進む', () => {
+    expect(failedEpisodePlan({ queue, currentId: 'c', repeat: 'all' })).toEqual({ type: 'advance', id: 'a' });
+  });
+  it('単曲リピート中でも、壊れたエピソード自体は繰り返さず次へ進む', () => {
+    expect(failedEpisodePlan({ queue, currentId: 'a', repeat: 'one' })).toEqual({ type: 'advance', id: 'b' });
+    // 末尾では単曲リピートでも繰り返さず止まる。
+    expect(failedEpisodePlan({ queue, currentId: 'c', repeat: 'one' })).toEqual({ type: 'stop' });
+  });
+  it('ランダムでは未再生から選び、残りが無ければ止まる (全体繰り返しなら引き直す)', () => {
+    const pickFirst = (candidates) => candidates[0];
+    expect(failedEpisodePlan({
+      queue, currentId: 'a', shuffle: true, playedIds: new Set(['a']), randomPick: pickFirst,
+    })).toEqual({ type: 'advance', id: 'b' });
+    expect(failedEpisodePlan({
+      queue, currentId: 'c', shuffle: true, playedIds: new Set(['a', 'b', 'c']), randomPick: pickFirst,
+    })).toEqual({ type: 'stop' });
+    expect(failedEpisodePlan({
+      queue, currentId: 'c', repeat: 'all', shuffle: true, playedIds: new Set(['a', 'b', 'c']), randomPick: pickFirst,
+    })).toEqual({ type: 'advance', id: 'a', resetPlayed: true });
+  });
+  it('連続失敗が上限 (キューの1巡分) を超えたら、次があっても止まる', () => {
+    // キュー3件では上限は3。3回目までは送り、4回目で止める。
+    expect(failedEpisodePlan({ queue, currentId: 'a', consecutiveFailures: 3 }))
+      .toEqual({ type: 'advance', id: 'b' });
+    expect(failedEpisodePlan({ queue, currentId: 'a', consecutiveFailures: 4 }))
+      .toEqual({ type: 'stop' });
+    // 全体繰り返しで全曲が壊れていても、1巡したところで止まる。
+    expect(failedEpisodePlan({ queue, currentId: 'c', repeat: 'all', consecutiveFailures: 4 }))
+      .toEqual({ type: 'stop' });
+  });
+  it('長いキューでは絶対上限で止まる', () => {
+    const long = Array.from({ length: 20 }, (_, i) => `e${i}`);
+    expect(failedEpisodePlan({ queue: long, currentId: 'e0', consecutiveFailures: MAX_FAILURE_SKIPS }))
+      .toEqual({ type: 'advance', id: 'e1' });
+    expect(failedEpisodePlan({ queue: long, currentId: 'e0', consecutiveFailures: MAX_FAILURE_SKIPS + 1 }))
+      .toEqual({ type: 'stop' });
+  });
+  it('キューが空・現在位置が不明なら止まる', () => {
+    expect(failedEpisodePlan({ queue: [], currentId: 'a' })).toEqual({ type: 'stop' });
+    expect(failedEpisodePlan({ queue, currentId: 'zzz' })).toEqual({ type: 'stop' });
+  });
+});
+
+describe('failureSkipLimit', () => {
+  it('キューを1巡する分と絶対上限の小さい方', () => {
+    expect(failureSkipLimit(0)).toBe(0);
+    expect(failureSkipLimit(1)).toBe(1);
+    expect(failureSkipLimit(3)).toBe(3);
+    expect(failureSkipLimit(MAX_FAILURE_SKIPS)).toBe(MAX_FAILURE_SKIPS);
+    expect(failureSkipLimit(25)).toBe(MAX_FAILURE_SKIPS);
+    expect(failureSkipLimit(Number.NaN)).toBe(0);
+  });
+});
+
+describe('createStallTracker (ストール検知)', () => {
+  it('既定の閾値は20秒', () => {
+    expect(STALL_THRESHOLD_MS).toBe(20_000);
+  });
+  it('最初の観測は基準作りだけで、止まったとは判定しない', () => {
+    const t = createStallTracker({ thresholdMs: 100 });
+    expect(t.observe(30, 0)).toEqual({ progressed: false, stalled: false });
+    expect(t.observe(30, 99)).toEqual({ progressed: false, stalled: false });
+  });
+  it('位置が進めば progressed で、止まったまま閾値を超えたら stalled', () => {
+    const t = createStallTracker({ thresholdMs: 100 });
+    t.observe(30, 0);
+    expect(t.observe(31, 50)).toEqual({ progressed: true, stalled: false });
+    // 進んだ時点から数え直し、閾値ちょうどで stalled になる。
+    expect(t.observe(31, 149)).toEqual({ progressed: false, stalled: false });
+    expect(t.observe(31, 150)).toEqual({ progressed: false, stalled: true });
+  });
+  it('位置が後退したら (シーク等) 基準を取り直す', () => {
+    const t = createStallTracker({ thresholdMs: 100 });
+    t.observe(80, 0);
+    expect(t.observe(10, 5000)).toEqual({ progressed: false, stalled: false });
+    expect(t.observe(10, 5099)).toEqual({ progressed: false, stalled: false });
+    expect(t.observe(10, 5100)).toEqual({ progressed: false, stalled: true });
+  });
+  it('reset すると基準からやり直す (切り替わり・シーク直後の猶予)', () => {
+    const t = createStallTracker({ thresholdMs: 100 });
+    t.observe(30, 0);
+    expect(t.observe(30, 100)).toEqual({ progressed: false, stalled: true });
+    t.reset(200);
+    expect(t.observe(30, 200)).toEqual({ progressed: false, stalled: false });
+    expect(t.observe(30, 299)).toEqual({ progressed: false, stalled: false });
+    expect(t.observe(30, 300)).toEqual({ progressed: false, stalled: true });
+  });
+  it('解釈できない値は判定しない', () => {
+    const t = createStallTracker({ thresholdMs: 100 });
+    expect(t.observe(Number.NaN, 0)).toEqual({ progressed: false, stalled: false });
+    expect(t.observe(30, Number.NaN)).toEqual({ progressed: false, stalled: false });
   });
 });
 

@@ -69,7 +69,9 @@ import {
   buildQueue,
   clampSeek,
   classifyRate,
+  createStallTracker,
   durationMismatch,
+  failedEpisodePlan,
   formatTime,
   interpretStoredPlayPos,
   isWithinEndGuard,
@@ -533,6 +535,22 @@ const audioRefreshingIds = ref(new Set());
 let currentSrcStale = false;
 let currentSrcUrl = '';
 
+/* ---- 再生できないエピソードの自動スキップ ----
+   error イベント・play() の拒否・再生中のストールを検知したら、
+   止まったままにせずキューの次へ進む (player.js の
+   failedEpisodePlan が送り先を決める)。連続失敗が続く場合は
+   上限で止める。1曲でも正常に再生が進んだら数え直す。 */
+let consecutivePlayFailures = 0;
+// エピソードを要素へ載せるたびに増える番号と、失敗処理済みの
+// 番号。同じ読み込みへの二重の失敗通知 (error と play() 拒否の
+// 両方が来る等) で二重に送らないために使う。
+let episodeLoadSeq = 0;
+let failureHandledForSeq = -1;
+// このエピソードで実際に再生が始まったか ('playing' が来たか)。
+// 初回読み込み中はストール検知の対象にしないために使う。
+let episodePlayStarted = false;
+const stallTracker = createStallTracker();
+
 /* ---- YouTube 音声の長さ二重化の補正 (player.js の純粋関数を使う) ----
    currentTime / duration は Audio 要素のスケールのまま保持し、表示と
    保存 (play_pos) は正しい長さ (durationSec) 基準へ変換して扱う。
@@ -642,9 +660,36 @@ function checkKnownDurationEnd() {
   return true;
 }
 
+// ストール検知: 再生意思がある (再生中で、一時停止・シーク中・
+// 初回読み込み中ではない) のに、表示位置が一定時間進まない
+// 状態を、終端チェックと同じタイマーの tick から見る。判定は
+// 表示位置の差で行うため、バックグラウンドでタイマーが間引か
+// れても、再生できていれば位置が進んでいて誤判定しない。
+function checkPlaybackStall() {
+  if (!currentEpisode.value || !isPlaying.value || seeking.value || !episodePlayStarted) return false;
+  const pos = toDisplayPosition(audio.currentTime || 0, mappingCtx.value);
+  const { progressed, stalled } = stallTracker.observe(pos, performance.now());
+  if (progressed) {
+    // 1曲でも正常に再生が進んだら、連続失敗は数え直す。
+    consecutivePlayFailures = 0;
+    return false;
+  }
+  if (!stalled) return false;
+  stallTracker.reset(performance.now());
+  handlePlaybackFailure();
+  return true;
+}
+
+// タイマーの tick では、終端の到達判定とストール検知の両方を
+// 見に行く (どちらも timeupdate が止まった状況でこそ要る)。
+function playerTimerTick() {
+  checkKnownDurationEnd();
+  checkPlaybackStall();
+}
+
 function startEndCheckTimer() {
   stopEndCheckTimer();
-  endCheckTimer = setInterval(checkKnownDurationEnd, END_CHECK_INTERVAL_MS);
+  endCheckTimer = setInterval(playerTimerTick, END_CHECK_INTERVAL_MS);
 }
 
 function stopEndCheckTimer() {
@@ -721,9 +766,23 @@ function tryPlayAudio() {
   // (loadEpisode・再開・単曲リピート・Media Session のいずれの
   // 経路でもここを通る)。
   startEndCheckTimer();
+  // 新しい再生の試行では、失敗処理済みの印を解く (同じ読み込み
+  // への二重通知の抑止は handlePlaybackFailure 側が担う)。
+  failureHandledForSeq = -1;
+  const epId = currentEpisode.value ? currentEpisode.value.id : null;
   try {
     const attempt = audio.play();
-    if (attempt && typeof attempt.catch === 'function') attempt.catch(() => {});
+    if (attempt && typeof attempt.catch === 'function') {
+      attempt.catch((err) => {
+        // pause() や src の差し替えで中断されただけの拒否は、
+        // そのエピソードの失敗ではない。
+        if (err && err.name === 'AbortError') return;
+        // 既に別のエピソードへ切り替わっていたら、今の曲の
+        // 失敗として扱わない。
+        if (!currentEpisode.value || currentEpisode.value.id !== epId) return;
+        handlePlaybackFailure();
+      });
+    }
   } catch {
     // 再生できなかった場合はボタンから押し直してもらう。
   }
@@ -797,6 +856,11 @@ function loadEpisode(article, { resume = true } = {}) {
   currentEpisode.value = ep;
   currentSrcStale = !!ep.audioStale;
   currentSrcUrl = ep.audioUrl || '';
+  // 読み込みの世代を進め、ストール計測と「再生が始まったか」を
+  // このエピソード用にやり直す (切り替わり直後の猶予になる)。
+  episodeLoadSeq += 1;
+  episodePlayStarted = false;
+  stallTracker.reset(performance.now());
   // 再生した順を覚える (ランダム時の「前へ」用。blog の startTrack
   // の履歴記録と同じ位置づけで、自動送りもここを通る)。
   playHistory.push(ep.id);
@@ -824,6 +888,8 @@ function startEpisode(article) {
   playQueue.value = buildQueue(visible.value, article);
   playedInRound = new Set([article.id]);
   playHistory = [];
+  // 本人が選び直した開始では、連続失敗を数え直す。
+  consecutivePlayFailures = 0;
   loadEpisode(article);
 }
 
@@ -923,6 +989,8 @@ function skipByTrack(delta) {
   if (!target) return;
   if (plan.historyCut != null) playHistory = playHistory.slice(0, plan.historyCut);
   playedInRound.add(target.id);
+  // 本人の操作で移ったときは、連続失敗を数え直す。
+  consecutivePlayFailures = 0;
   // 前へ／次へは切り替わりなので、遷移先の保存位置は使わず頭から。
   loadEpisode(target, { resume: false });
 }
@@ -969,6 +1037,7 @@ function stopPlayer() {
   currentEpisode.value = null;
   currentSrcStale = false;
   currentSrcUrl = '';
+  episodePlayStarted = false;
   playHistory = [];
   isPlaying.value = false;
   isLoading.value = false;
@@ -1016,7 +1085,12 @@ audio.addEventListener('timeupdate', () => {
   // では有効にしない。reachedKnownDurationEnd 側で判定)。
   checkKnownDurationEnd();
 });
-audio.addEventListener('play', () => { isPlaying.value = true; });
+audio.addEventListener('play', () => {
+  isPlaying.value = true;
+  // 再開のたびにストール計測をやり直す (一時停止を挟んだ窓で
+  // 誤判定しないため)。
+  stallTracker.reset(performance.now());
+});
 audio.addEventListener('pause', () => {
   isPlaying.value = false;
   savePlayPos();
@@ -1029,25 +1103,80 @@ audio.addEventListener('seeking', () => {
 });
 audio.addEventListener('seeked', () => {
   if (audio.readyState >= 3) isLoading.value = false;
+  // シーク直後はストール計測をやり直す (猶予を持たせる)。
+  stallTracker.reset(performance.now());
 });
-audio.addEventListener('playing', () => { isLoading.value = false; });
+audio.addEventListener('playing', () => {
+  isLoading.value = false;
+  // 実際に再生が始まったので、ここからストール検知の対象になる。
+  episodePlayStarted = true;
+});
 audio.addEventListener('canplay', () => { isLoading.value = false; });
 audio.addEventListener('error', () => {
   isLoading.value = false;
-  // 保持していた古いURL (stale) での再生が即エラーになった場合は、
-  // そのURLは失効していたとみなし、記事の音声を取り消してボタンが
-  // 消える状態にし、再生は失敗として扱う (プレイヤーを閉じる)。
-  // 新鮮なURLのエラーは一時的な通信事情もあり得るため対象にしない。
-  // また、対象は要素に載っている当のURLへのエラーだけに限る
-  // (src の差し替え・破棄に伴う error では取り消さない)。
-  const ep = currentEpisode.value;
-  if (!ep || !currentSrcStale || !currentSrcUrl || audio.src !== currentSrcUrl) return;
-  currentSrcStale = false;
-  currentSrcUrl = '';
-  clearLocalArticleAudio(ep.id).catch(() => {});
-  stopPlayer();
-  reloadLocal().catch(() => {});
+  // 対象は要素に載っている当のURLへのエラーだけに限る
+  // (src の差し替え・破棄に伴う遅れて来る error は失敗として
+  // 扱わない)。実際の処理は共通の失敗処理へ集約する。
+  if (!currentEpisode.value || !currentSrcUrl || audio.src !== currentSrcUrl) return;
+  handlePlaybackFailure();
 });
+
+// 再生に失敗したときの共通処理 (error イベント・play() の拒否・
+// ストール検知から呼ばれる)。送り先は player.js の
+// failedEpisodePlan が決める (手動の「次へ」と同じ進み方で、
+// 単曲リピート中でも壊れたエピソード自体は繰り返さない)。
+// 失敗したエピソードは聴き終えたわけではないので、既読には
+// しない。次が無い・連続失敗が上限に達した場合は、終端の
+// 動作に合わせてその場で停止する。
+function handlePlaybackFailure() {
+  const ep = currentEpisode.value;
+  if (!ep || endFlowDone) return;
+  // 同じ読み込みへの二重の失敗通知では、二重に送らない。
+  if (failureHandledForSeq === episodeLoadSeq) return;
+  failureHandledForSeq = episodeLoadSeq;
+  isLoading.value = false;
+  // 保持していた古いURL (stale) での失敗は、そのURLが失効して
+  // いたとみなして記事の音声を取り消す (PR #63)。対象は要素に
+  // 載っている当のURLへの失敗だけに限る。
+  const staleDead = currentSrcStale && !!currentSrcUrl && audio.src === currentSrcUrl;
+  if (staleDead) {
+    currentSrcStale = false;
+    currentSrcUrl = '';
+    clearLocalArticleAudio(ep.id).catch(() => {});
+  }
+  consecutivePlayFailures += 1;
+  const plan = failedEpisodePlan({
+    queue: playQueue.value.map((a) => a.id),
+    currentId: ep.id,
+    repeat: repeatMode.value,
+    shuffle: shuffleOn.value,
+    playedIds: playedInRound,
+    consecutiveFailures: consecutivePlayFailures,
+  });
+  if (plan.type === 'advance') {
+    const next = playQueue.value.find((a) => a.id === plan.id);
+    if (next) {
+      if (plan.resetPlayed) playedInRound = new Set();
+      playedInRound.add(next.id);
+      // 自動送りと同じく、遷移先の保存位置は使わず頭から。
+      loadEpisode(next, { resume: false });
+      if (staleDead) reloadLocal().catch(() => {});
+      return;
+    }
+  }
+  if (staleDead) {
+    // 次が無い場合の stale の従来動作 (PR #63): 音声を取り消した
+    // うえでプレイヤーを閉じる。
+    stopPlayer();
+    reloadLocal().catch(() => {});
+    return;
+  }
+  // 次が無い・連続失敗の上限: 終端の動作に合わせてその場で止める
+  // (エピソードは表示したまま、再生だけ止める)。
+  stopEndCheckTimer();
+  audio.pause();
+  isPlaying.value = false;
+}
 
 function handleEpisodeEnded() {
   if (endFlowDone) return;
