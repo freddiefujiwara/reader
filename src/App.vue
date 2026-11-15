@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onMounted, ref } from 'vue';
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { API_URL, GOOGLE_CLIENT_ID } from './config.js';
 import {
   deleteFeed,
@@ -32,8 +32,10 @@ import {
   feedDisplayName,
   markAllReadInList,
   markAllReadScope,
+  mergePendingReadMarks,
   patchArticle,
   patchFeedCategory,
+  shouldClearCategorySelection,
   sortArticlesDesc,
   visibleArticles,
   visibleFeedChips,
@@ -151,6 +153,75 @@ const genreSuggestionList = computed(() => genreSuggestions(genreOptions.value, 
 const adminFeeds = computed(() => filterAdminFeeds(mgmtFeeds.value, adminCategory.value));
 const hasMore = computed(() => visible.value.length > displayLimit.value);
 
+// 選択中のカテゴリ (ジャンル) を持つフィードが1つも無くなったら、
+// 選択を自動で解除して全件表示に戻す。最後の1件を別ジャンルへ
+// 編集・削除するとカテゴリのチップ自体が消え、手では解除できなく
+// なるため。一覧が空の間 (読み込み中・未取得) は解除しない
+// (判定は shouldClearCategorySelection に任せる)。
+//
+// 解除の判定は、一覧が変わった瞬間ではなく、関連する非同期処理が
+// 落ち着いた後の最新の一覧で行う。背景更新は保存前に取り始めた
+// 旧一覧で一時的に読み直すことがあり、その瞬間に解除すると、
+// 追随更新で最新の一覧 (カテゴリあり) に揃い直しても絞り込み
+// だけが外れたままになるため。
+let timelineCategoryClearCheck = null;
+function queueTimelineCategoryClearCheck() {
+  if (timelineCategoryClearCheck) return timelineCategoryClearCheck;
+  const run = (async () => {
+    while (refreshInFlight) {
+      const current = refreshInFlight;
+      await current.catch(() => {});
+      // 更新の完了処理 (後始末や、戻る際に予約される追随更新) が
+      // 次の更新を差し込む余地を残してから、継続を確認する。
+      await nextTick();
+    }
+    if (!shouldClearCategorySelection(state.value.feeds, state.value.category)) return;
+    // setCategory と同じく、カテゴリが外れるときはフィード選択も外す。
+    state.value = { ...state.value, category: '', feedId: '' };
+    displayLimit.value = DISPLAY_LIMIT;
+  })();
+  timelineCategoryClearCheck = run;
+  const done = () => {
+    if (timelineCategoryClearCheck === run) timelineCategoryClearCheck = null;
+  };
+  run.then(done, done);
+  return run;
+}
+
+let adminCategoryClearCheck = null;
+function queueAdminCategoryClearCheck() {
+  if (adminCategoryClearCheck) return adminCategoryClearCheck;
+  const run = (async () => {
+    // 一覧の取り直し・保存・削除の完了後に、最新の一覧で判定する。
+    while (mgmtLoading.value || formSaving.value || mgmtSavingId.value) {
+      await nextTick();
+    }
+    if (shouldClearCategorySelection(mgmtFeeds.value, adminCategory.value)) {
+      adminCategory.value = '';
+    }
+  })();
+  adminCategoryClearCheck = run;
+  const done = () => {
+    if (adminCategoryClearCheck === run) adminCategoryClearCheck = null;
+  };
+  run.then(done, done);
+  return run;
+}
+
+watch(
+  () => state.value.feeds,
+  (feeds) => {
+    if (shouldClearCategorySelection(feeds, state.value.category)) {
+      queueTimelineCategoryClearCheck();
+    }
+  }
+);
+watch(mgmtFeeds, (feeds) => {
+  if (shouldClearCategorySelection(feeds, adminCategory.value)) {
+    queueAdminCategoryClearCheck();
+  }
+});
+
 const FILTERS = [
   { key: 'all', label: 'すべて' },
   { key: 'unread', label: '未読' },
@@ -158,12 +229,24 @@ const FILTERS = [
 
 /* ---- ローカル (IndexedDB) が表示の正本 ---- */
 
+// 付けたばかりで、背景更新の読み直し (reloadLocal) が使う DB の
+// スナップショットに含まれているか分からない既読変更 (記事ID -> isRead)。
+// 読み直しは読み取り開始時点の中身で state を作り直すため、この間に
+// 付けた既読は DB へ書けていても未読へ巻き戻ってしまう。そこで変更を
+// ここに控えておき、reloadLocal が読み直した一覧へ重ね直す。
+// スナップショット側と一致した変更はその読み直しで控えから落ちる。
+const pendingReadMarks = new Map();
+
 // DB の中身を state へ読み直す。未読数はローカルの記事から数える。
 async function reloadLocal() {
   const [feeds, records] = await Promise.all([loadLocalFeeds(), loadLocalArticles()]);
   const titles = {};
   feeds.forEach((f) => { titles[f.id] = feedDisplayName(f); });
-  const views = sortArticlesDesc(records.map((r) => articleRecordToView(r, titles[r.feed_id])));
+  const loaded = sortArticlesDesc(records.map((r) => articleRecordToView(r, titles[r.feed_id])));
+  const merged = mergePendingReadMarks(loaded, pendingReadMarks);
+  pendingReadMarks.clear();
+  merged.keep.forEach((isRead, id) => { pendingReadMarks.set(id, isRead); });
+  const views = merged.articles;
   state.value = { ...state.value, feeds: withUnreadCounts(feeds, views), articles: views };
 }
 
@@ -357,6 +440,9 @@ async function goHome() {
 // 既読の付け外しはローカルのみ (サーバーへは送らない)。
 async function applyRead(article, isRead) {
   if (!isOwner.value) return;
+  // 実行中の背景更新の読み直しに巻き戻されないよう、先に控える
+  // (reloadLocal が読み直した一覧へ重ね直す)。
+  pendingReadMarks.set(article.id, isRead);
   const nextArticles = patchArticle(state.value.articles, article.id, { isRead });
   state.value = {
     ...state.value,
@@ -366,6 +452,9 @@ async function applyRead(article, isRead) {
   try {
     await setLocalArticleRead(article.id, isRead, new Date().toISOString());
   } catch (e) {
+    // 書けなかった変更は控えからも落とす (次の読み直しで DB の
+    // 中身どおりに戻る。従来の失敗時の振る舞いと同じ)。
+    pendingReadMarks.delete(article.id);
     listError.value = `保存できませんでした（${e.message}）。`;
   }
 }
@@ -384,10 +473,15 @@ async function onMarkAllRead() {
   const targetIds = state.value.articles
     .filter((a) => !a.isRead && scoped[a.feedId])
     .map((a) => a.id);
+  // 実行中の背景更新の読み直しに巻き戻されないよう、先に控える
+  // (reloadLocal が読み直した一覧へ重ね直す)。
+  targetIds.forEach((id) => { pendingReadMarks.set(id, true); });
   state.value = markAllReadInList(state.value, state.value.feedId, state.value.category);
   try {
     await markLocalArticlesRead(targetIds, new Date().toISOString());
   } catch (e) {
+    // 書けなかった変更は控えからも落とす (applyRead と同じ)。
+    targetIds.forEach((id) => { pendingReadMarks.delete(id); });
     listError.value = `保存できませんでした（${e.message}）。`;
   }
 }
