@@ -453,6 +453,128 @@ describe('表示位置ベースの終了判定 (実測モデルの要否)', () =
   });
 });
 
+// 偽タイマーを入れる前に、本物の setTimeout を控えておく (ポンプ用)。
+const realSetTimeout = globalThis.setTimeout;
+
+describe('終端停滞ウォッチドッグ (ended が来ない終端の検出)', () => {
+  // ウォッチドッグはインターバル駆動で、終端では timeupdate 自体が
+  // 止まるのが前提のため、この一群だけ偽タイマーで時間を進める。
+  // 実タイマー前提の flush は使わず、advanceTimersByTimeAsync で
+  // タイマーと非同期処理をまとめて進める。IndexedDB の内部
+  // スケジューリングは偽タイマー側へ寄るため、0ms ではなく少しずつ
+  // 進めるポンプでないとトランザクションが完了しない (実測)。
+  const flushFake = async () => {
+    for (let i = 0; i < 10; i += 1) {
+      await vi.advanceTimersByTimeAsync(10);
+      await new Promise((r) => realSetTimeout(r, 1));
+      await nextTick();
+    }
+  };
+
+  async function mountFake() {
+    let seeded = false;
+    const seeding = seed().then(() => { seeded = true; });
+    for (let i = 0; i < 50 && !seeded; i += 1) await flushFake();
+    await seeding;
+    el = document.createElement('div');
+    document.body.appendChild(el);
+    app = createApp(App);
+    app.config.errorHandler = (err) => { errors.push(err); };
+    app.mount(el);
+    for (let i = 0; i < 50 && el.querySelectorAll('.article-card').length < 2; i += 1) {
+      await flushFake();
+    }
+    expect(el.querySelectorAll('.article-card').length, '記事カードが2件出る').toBe(2);
+  }
+
+  async function startFake(idx) {
+    const card = el.querySelectorAll('.article-card')[idx];
+    card.querySelector('.play-btn').click();
+    await flushFake();
+    return el.querySelector('.player-bar');
+  }
+
+  // 終端 (実尺 1800 秒) の手前まで進めて、表示位置を同期する。
+  async function parkAt(audio, pos) {
+    audio.duration = 1800;
+    audio.dispatchEvent(new window.Event('loadedmetadata'));
+    audio.currentTime = pos;
+    audio.dispatchEvent(new window.Event('timeupdate'));
+    await flushFake();
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('終端付近で currentTime が止まったままなら、ended が来なくても次へ進む', async () => {
+    await mountFake();
+    await startFake(0);
+    const audio = latestAudio();
+    await parkAt(audio, 1799.5);
+    expect(audio.ended).toBe(false);
+
+    // ここから currentTime は止まったまま (iOS で 'ended' が来ない
+    // 状態)。インターバル監視が停滞を検出して終了フローへ進める。
+    await vi.advanceTimersByTimeAsync(10_000);
+    await flushFake();
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+    expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(true);
+    expect(errors).toEqual([]);
+  });
+
+  it('曲の途中で currentTime が止まっても (ネットワーク停滞)、終了フローは走らない', async () => {
+    await mountFake();
+    await startFake(0);
+    const audio = latestAudio();
+    await parkAt(audio, 900);
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    await flushFake();
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
+    expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(false);
+    expect(errors).toEqual([]);
+  });
+
+  it('終端付近でも currentTime が進み続けていれば、終了フローは走らない', async () => {
+    await mountFake();
+    await startFake(0);
+    const audio = latestAudio();
+    await parkAt(audio, 1799.0);
+
+    // 監視間隔 (2秒) のたびに少しずつ進み続ける。終端付近にいても、
+    // 進んでいる間は停滞として数えない。
+    for (let i = 0; i < 5; i += 1) {
+      audio.currentTime = Math.min(1799.0 + 0.2 * (i + 1), 1799.95);
+      audio.dispatchEvent(new window.Event('timeupdate'));
+      await vi.advanceTimersByTimeAsync(2000);
+    }
+    await flushFake();
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
+    expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(false);
+    expect(errors).toEqual([]);
+  });
+
+  it('終端付近でも一時停止中は終了フローは走らない', async () => {
+    await mountFake();
+    await startFake(0);
+    const audio = latestAudio();
+    await parkAt(audio, 1799.5);
+
+    audio.pause();
+    await flushFake();
+    await vi.advanceTimersByTimeAsync(15_000);
+    await flushFake();
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
+    expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(false);
+    expect(errors).toEqual([]);
+  });
+});
+
 describe('読み込み表示', () => {
   it('読み込み中は再生ボタンが blog と同じ「…」になり、再生可能になるとアイコンへ戻る', async () => {
     await mountPlayer();

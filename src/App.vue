@@ -65,6 +65,7 @@ import {
   durationMismatch,
   formatTime,
   interpretStoredPlayPos,
+  isEndStalled,
   isWithinEndGuard,
   loadPlayMode,
   loadTimeModel,
@@ -73,6 +74,7 @@ import {
   nextSpeed,
   progressRatio,
   reachedTrueEnd,
+  END_STALL_WATCH_INTERVAL_MS,
   REPEAT_LABELS,
   savePlayMode,
   saveTimeModel,
@@ -444,6 +446,58 @@ function samplePlaybackRate() {
     saveTimeModel(model);
   }
 }
+/* ---- 終端停滞ウォッチドッグ ----
+   iOS Safari が fMP4 の終端で 'ended' (と 'pause') を発火しない
+   ことがある。その場合は timeupdate も止まるため、表示位置ベース
+   の終了判定 (timeupdate 駆動) も届かず、再生中表示のまま終端で
+   固まってしまう。インターバルで要素の currentTime の進みを監視
+   し、終端付近で止まったままなら終了フローへ進める。再生開始は
+   すべて tryPlayAudio に集約されているので、そこで監視を始め、
+   stopPlayer と終了フローで確実に止める。 */
+let endWatchTimer = null;
+let endWatchLastCt = null;
+let endWatchFrozenSince = 0;
+// currentTime が「進んだ」とみなす最小の変化 (秒)。終端で止まった
+// 要素の報告値のわずかな揺れを、進みとして数えないための下限。
+const END_STALL_MOVE_EPSILON_SEC = 0.05;
+
+function startEndWatchdog() {
+  stopEndWatchdog();
+  endWatchFrozenSince = Date.now();
+  endWatchTimer = setInterval(checkEndStall, END_STALL_WATCH_INTERVAL_MS);
+}
+
+function stopEndWatchdog() {
+  if (endWatchTimer !== null) {
+    clearInterval(endWatchTimer);
+    endWatchTimer = null;
+  }
+  endWatchLastCt = null;
+}
+
+function checkEndStall() {
+  if (!currentEpisode.value) return;
+  const now = Date.now();
+  const ct = audio.currentTime || 0;
+  if (endWatchLastCt === null
+    || Math.abs(ct - endWatchLastCt) > END_STALL_MOVE_EPSILON_SEC) {
+    // 進んでいる (または監視の起点)。停滞の数え始めをここに置く。
+    endWatchLastCt = ct;
+    endWatchFrozenSince = now;
+    return;
+  }
+  if (!isPlaying.value || audio.paused || audio.ended || endFlowDone) {
+    // 止まっている間は「進んでいない時間」に数えない。一時停止を
+    // 挟んで再開した直後に、停止中の蓄積で誤って発火しないため。
+    endWatchFrozenSince = now;
+    return;
+  }
+  const frozenForSec = (now - endWatchFrozenSince) / 1000;
+  if (isEndStalled(displayTime.value, displayDuration.value, frozenForSec)) {
+    handleEpisodeEnded();
+  }
+}
+
 const speedLabel = computed(() => `${speed.value}×`);
 
 function isCurrentEpisode(article) {
@@ -451,6 +505,9 @@ function isCurrentEpisode(article) {
 }
 
 function tryPlayAudio() {
+  // 再生開始のたびに終端停滞の監視を数え直す (loadEpisode・再開・
+  // 単曲リピート・Media Session のいずれの経路でもここを通る)。
+  startEndWatchdog();
   try {
     const attempt = audio.play();
     if (attempt && typeof attempt.catch === 'function') attempt.catch(() => {});
@@ -603,6 +660,7 @@ function onSeekInput(event) {
 
 function stopPlayer() {
   savePlayPos();
+  stopEndWatchdog();
   audio.pause();
   audio.removeAttribute('src');
   audio.load();
@@ -676,6 +734,7 @@ audio.addEventListener('error', () => { isLoading.value = false; });
 function handleEpisodeEnded() {
   if (endFlowDone) return;
   endFlowDone = true;
+  stopEndWatchdog();
   isPlaying.value = false;
   isLoading.value = false;
   const ep = currentEpisode.value;
