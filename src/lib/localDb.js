@@ -15,6 +15,16 @@ import {
 export const RETENTION_DAYS = 60;
 export const MAX_ARTICLES = 5000;
 
+// 音声URLの保持期限。reader-gas は抽出から5時間以内のエントリにだけ
+// enclosure を付けるが、ストリームURL自体は抽出から約6時間は有効な
+// ことが多い。背景更新で enclosure が来なくなっても、最後に新鮮な
+// enclosure を受け取ってから6時間までは URL を保持し (stale の印を
+// 付ける)、6時間を超えたら消す。なおこの6時間は「最後に新鮮なURLを
+// 受け取った時点」からの概算で、本当の失効 (抽出時点から約6時間)
+// は最大で約1時間早い場合がある。その場合は再生タップ時のエラーで
+// 取り消す (App.vue の error ハンドラ)。
+export const AUDIO_URL_KEEP_MS = 6 * 60 * 60 * 1000;
+
 export function localDbName(env) {
   return isStagingBuild(env) ? 'reader:db:v1:staging' : 'reader:db:v1';
 }
@@ -38,11 +48,68 @@ async function resolveEntryIds(entries, feedId) {
   return resolved;
 }
 
+// 既存レコードと新しいエントリから、音声まわりのフィールド
+// (audio_url / audio_url_at / audio_stale / duration_sec) を決める。
+// - 新鮮な enclosure が来た: URL と受け取り時刻を更新し、印を下ろす。
+// - enclosure が来なかった: 既存URLが「最後に新鮮なURLを受け取った
+//   時点」から6時間未満なら保持して印を立てる (ボタンは消さない)。
+//   6時間以上なら消す (ボタンが消えるのはこの時点)。
+// - 既存レコードに受け取り時刻が無い (この仕組みより前のデータ):
+//   一度だけ猶予として受け取り時刻を今回に置き、印を立てて保持する。
+// 長さ (duration_sec) は enclosure と一緒に来るものなので、保持する
+// 場合は新しいエントリに無ければ前回分を保つ。
+function resolveAudioFields(prev, entry, fetchedAtIso) {
+  const freshUrl = String(entry.audioUrl || '');
+  if (freshUrl) {
+    return {
+      audio_url: freshUrl,
+      audio_url_at: fetchedAtIso,
+      audio_stale: false,
+      duration_sec: entry.durationSec ?? null,
+    };
+  }
+  const prevUrl = prev.audio_url || '';
+  if (!prevUrl) {
+    return {
+      audio_url: '',
+      audio_url_at: '',
+      audio_stale: false,
+      duration_sec: entry.durationSec ?? null,
+    };
+  }
+  const keptDuration = entry.durationSec ?? prev.duration_sec ?? null;
+  const prevAtMs = Date.parse(prev.audio_url_at || '');
+  if (!Number.isFinite(prevAtMs)) {
+    return {
+      audio_url: prevUrl,
+      audio_url_at: fetchedAtIso,
+      audio_stale: true,
+      duration_sec: keptDuration,
+    };
+  }
+  const fetchedAtMs = Date.parse(fetchedAtIso) || Date.now();
+  if (fetchedAtMs - prevAtMs < AUDIO_URL_KEEP_MS) {
+    return {
+      audio_url: prevUrl,
+      audio_url_at: prev.audio_url_at,
+      audio_stale: true,
+      duration_sec: keptDuration,
+    };
+  }
+  return {
+    audio_url: '',
+    audio_url_at: '',
+    audio_stale: false,
+    duration_sec: entry.durationSec ?? null,
+  };
+}
+
 // ID 解決済みエントリから、IndexedDB へ put する記事レコードを組み立てる。
 // 新規記事は未読。既存記事は既読状態 (is_read / read_at)・再生位置
 // (play_pos) と取り込み日時 (fetched_at: 経過日数の起点) を保ち、
 // メタデータだけ最新化する。existingById が新しいほど、この不変条件
 // (既読を未読へ戻さない・再生位置を減らさない) が実際に守られる。
+// 音声URLは resolveAudioFields の規則で保持・消去する。
 function buildUpsertRecords(existingById, resolved, feed, fetchedAtIso) {
   return resolved.map(({ id, entry }) => {
     const prev = existingById ? existingById[id] : null;
@@ -54,8 +121,7 @@ function buildUpsertRecords(existingById, resolved, feed, fetchedAtIso) {
         published_at: entry.publishedAt || prev.published_at || '',
         summary: entry.summary || '',
         author: entry.author || '',
-        audio_url: entry.audioUrl || '',
-        duration_sec: entry.durationSec ?? null,
+        ...resolveAudioFields(prev, entry, fetchedAtIso),
       };
     }
     return {
@@ -68,6 +134,8 @@ function buildUpsertRecords(existingById, resolved, feed, fetchedAtIso) {
       summary: entry.summary || '',
       author: entry.author || '',
       audio_url: entry.audioUrl || '',
+      audio_url_at: entry.audioUrl ? fetchedAtIso : '',
+      audio_stale: false,
       duration_sec: entry.durationSec ?? null,
       play_pos: 0,
       is_read: false,
@@ -203,7 +271,22 @@ export function pruneTransferredState(transfer, keepFeedIds) {
 }
 
 // DB レコードを表示用 (listState が扱う camelCase 形) へ変換する。
-export function articleRecordToView(record, feedTitle) {
+// 音声URLは、最後に新鮮な enclosure を受け取ってから6時間以上経って
+// いれば、次回の背景更新を待たずにここで音声なしとして扱う
+// (ボタンが出ない)。6時間未満で印 (audio_stale) が立っているものは、
+// URL を保持したまま audioStale として出す。
+export function articleRecordToView(record, feedTitle, nowMs = Date.now()) {
+  const rawUrl = record.audio_url || '';
+  const atMs = Date.parse(record.audio_url_at || '');
+  let audioUrl = rawUrl;
+  let audioStale = false;
+  if (rawUrl) {
+    if (Number.isFinite(atMs) && nowMs - atMs >= AUDIO_URL_KEEP_MS) {
+      audioUrl = '';
+    } else {
+      audioStale = !!record.audio_stale;
+    }
+  }
   return {
     id: record.id,
     feedId: record.feed_id,
@@ -214,7 +297,9 @@ export function articleRecordToView(record, feedTitle) {
     fetchedAt: record.fetched_at || '',
     summary: record.summary || '',
     author: record.author || '',
-    audioUrl: record.audio_url || '',
+    audioUrl,
+    audioUrlAt: audioUrl ? (record.audio_url_at || '') : '',
+    audioStale: audioUrl ? audioStale : false,
     durationSec: record.duration_sec ?? null,
     playPos: record.play_pos || 0,
     isRead: !!record.is_read,
@@ -371,6 +456,23 @@ export async function setLocalArticlePlayPos(id, posSec) {
 // 再生位置を消す (再生し終えたエピソード用)。
 export function clearLocalArticlePlayPos(id) {
   return setLocalArticlePlayPos(id, 0);
+}
+
+// 音声URLを取り消す。保持していた古いURLで再生を試みて即エラーに
+// なった (失効していた) ときに使い、ボタンが消える状態にする。
+// 対象が無ければ何もしない。
+export async function clearLocalArticleAudio(id) {
+  const db = await openLocalDb();
+  const tx = db.transaction('articles', 'readwrite');
+  const store = tx.objectStore('articles');
+  const record = await requestToPromise(store.get(id));
+  if (record) {
+    record.audio_url = '';
+    record.audio_url_at = '';
+    record.audio_stale = false;
+    store.put(record);
+  }
+  await txDone(tx);
 }
 
 // フィード一覧はサーバーの並び順が正本。sortOrder を付けて保存し、

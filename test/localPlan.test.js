@@ -42,6 +42,8 @@ describe('planUpserts', () => {
       summary: 'summary',
       author: 'author',
       audio_url: '',
+      audio_url_at: '',
+      audio_stale: false,
       duration_sec: null,
       play_pos: 0,
       is_read: false,
@@ -104,6 +106,127 @@ describe('planUpserts', () => {
   });
 });
 
+describe('planUpserts の音声URL保持 (stale)', () => {
+  const AT_3H_AGO = '2026-11-13T22:00:00.000Z'; // FETCHED の3時間前
+  const AT_7H_AGO = '2026-11-13T18:00:00.000Z'; // FETCHED の7時間前
+  const existingWithAudio = async (extra = {}) => {
+    const id = await articleId('nhk', 'g1');
+    return {
+      [id]: {
+        id, feed_id: 'nhk', title: 'old', link: 'https://example.com/g1',
+        published_at: '2026-11-01T00:00:00.000Z', fetched_at: '2026-11-05T00:00:00.000Z',
+        summary: '', author: '', audio_url: 'https://example.com/g1.mp3',
+        audio_url_at: AT_3H_AGO, audio_stale: false, duration_sec: 321,
+        play_pos: 10, is_read: false, read_at: '',
+        ...extra,
+      },
+    };
+  };
+
+  it('新規の音声つきエントリは受け取り時刻を持ち、印は付かない', async () => {
+    const [record] = await planUpserts({}, [entry('g1', { audioUrl: 'https://example.com/g1.mp3' })], FEED, FETCHED);
+    expect(record.audio_url).toBe('https://example.com/g1.mp3');
+    expect(record.audio_url_at).toBe(FETCHED);
+    expect(record.audio_stale).toBe(false);
+  });
+  it('新鮮な enclosure が来たら URL と受け取り時刻を更新し、印を下ろす', async () => {
+    const existing = await existingWithAudio({ audio_stale: true });
+    const [record] = await planUpserts(existing, [entry('g1', { audioUrl: 'https://example.com/fresh.mp3', durationSec: 300 })], FEED, FETCHED);
+    expect(record.audio_url).toBe('https://example.com/fresh.mp3');
+    expect(record.audio_url_at).toBe(FETCHED);
+    expect(record.audio_stale).toBe(false);
+    expect(record.duration_sec).toBe(300);
+  });
+  it('enclosure が来なくても6時間未満なら URL を保持し、印を立てる (時刻と長さは保つ)', async () => {
+    const existing = await existingWithAudio();
+    const [record] = await planUpserts(existing, [entry('g1')], FEED, FETCHED);
+    expect(record.audio_url).toBe('https://example.com/g1.mp3');
+    expect(record.audio_url_at).toBe(AT_3H_AGO);
+    expect(record.audio_stale).toBe(true);
+    expect(record.duration_sec).toBe(321);
+    expect(record.play_pos).toBe(10);
+  });
+  it('6時間以上経っていたら URL を消す', async () => {
+    const existing = await existingWithAudio({ audio_url_at: AT_7H_AGO });
+    const [record] = await planUpserts(existing, [entry('g1')], FEED, FETCHED);
+    expect(record.audio_url).toBe('');
+    expect(record.audio_url_at).toBe('');
+    expect(record.audio_stale).toBe(false);
+  });
+  it('ちょうど6時間で消え、6時間未満では保持する (境界)', async () => {
+    const just6h = await existingWithAudio({ audio_url_at: '2026-11-13T19:00:00.000Z' });
+    const [dropped] = await planUpserts(just6h, [entry('g1')], FEED, FETCHED);
+    expect(dropped.audio_url).toBe('');
+    const justUnder = await existingWithAudio({ audio_url_at: '2026-11-13T19:00:00.001Z' });
+    const [kept] = await planUpserts(justUnder, [entry('g1')], FEED, FETCHED);
+    expect(kept.audio_url).toBe('https://example.com/g1.mp3');
+    expect(kept.audio_stale).toBe(true);
+  });
+  it('受け取り時刻が無い旧データは、一度だけ猶予として今回の時刻で保持し印を立てる', async () => {
+    const legacy = await existingWithAudio();
+    delete legacy[Object.keys(legacy)[0]].audio_url_at;
+    delete legacy[Object.keys(legacy)[0]].audio_stale;
+    const [record] = await planUpserts(legacy, [entry('g1')], FEED, FETCHED);
+    expect(record.audio_url).toBe('https://example.com/g1.mp3');
+    expect(record.audio_url_at).toBe(FETCHED);
+    expect(record.audio_stale).toBe(true);
+    // 猶予は一度だけ: 次の取り込み (2時間後) では時刻は進まず保持され、
+    // さらにその6時間後には消える。
+    const later = '2026-11-14T03:00:00.000Z';
+    const [kept] = await planUpserts({ [record.id]: record }, [entry('g1')], FEED, later);
+    expect(kept.audio_url_at).toBe(FETCHED);
+    expect(kept.audio_url).toBe('https://example.com/g1.mp3');
+    const muchLater = '2026-11-14T08:00:00.000Z';
+    const [gone] = await planUpserts({ [record.id]: kept }, [entry('g1')], FEED, muchLater);
+    expect(gone.audio_url).toBe('');
+  });
+  it('もともと音声が無い記事は空のまま', async () => {
+    const id = await articleId('nhk', 'g1');
+    const existing = {
+      [id]: {
+        id, feed_id: 'nhk', title: 'old', link: 'https://example.com/g1',
+        published_at: '', fetched_at: '', summary: '', author: '',
+        audio_url: '', duration_sec: null, play_pos: 0, is_read: false, read_at: '',
+      },
+    };
+    const [record] = await planUpserts(existing, [entry('g1')], FEED, FETCHED);
+    expect(record.audio_url).toBe('');
+    expect(record.audio_url_at).toBe('');
+    expect(record.audio_stale).toBe(false);
+  });
+});
+
+describe('articleRecordToView の音声の期限切れ', () => {
+  const T0 = Date.parse('2026-11-14T00:00:00.000Z');
+  const base = {
+    id: 'v', feed_id: 'pod', title: 'ep', link: 'https://example.com/ep',
+    published_at: '', fetched_at: '', summary: '', author: '',
+    audio_url: 'https://example.com/ep.mp3',
+    audio_url_at: '2026-11-14T00:00:00.000Z', audio_stale: true,
+    duration_sec: 600, play_pos: 0, is_read: false, read_at: '',
+  };
+  it('6時間未満なら URL を保持し、印つきで出す', () => {
+    const view = articleRecordToView(base, 'Pod', T0 + 5 * 60 * 60 * 1000);
+    expect(view.audioUrl).toBe('https://example.com/ep.mp3');
+    expect(view.audioStale).toBe(true);
+    expect(view.audioUrlAt).toBe('2026-11-14T00:00:00.000Z');
+  });
+  it('6時間以上なら、更新を待たずに音声なしとして扱う', () => {
+    const view = articleRecordToView(base, 'Pod', T0 + 6 * 60 * 60 * 1000);
+    expect(view.audioUrl).toBe('');
+    expect(view.audioStale).toBe(false);
+    expect(view.audioUrlAt).toBe('');
+  });
+  it('受け取り時刻が無い旧レコードは、印の有無だけがそのまま出る', () => {
+    const legacy = { ...base };
+    delete legacy.audio_url_at;
+    delete legacy.audio_stale;
+    const view = articleRecordToView(legacy, 'Pod', T0 + 24 * 60 * 60 * 1000);
+    expect(view.audioUrl).toBe('https://example.com/ep.mp3');
+    expect(view.audioStale).toBe(false);
+  });
+});
+
 describe('planLocalPrune', () => {
   const NOW = '2026-11-14T00:00:00.000Z';
   const rec = (id, extra = {}) => ({
@@ -161,7 +284,8 @@ describe('planOrphanArticles / articleRecordToView', () => {
     expect(view).toEqual({
       id: 'x', feedId: 'nhk', feedTitle: 'NHK', title: 't', link: 'https://example.com',
       publishedAt: '2026-11-14T00:00:00.000Z', fetchedAt: '2026-11-14T01:00:00.000Z',
-      summary: 's', author: 'a', audioUrl: '', durationSec: null, playPos: 0, isRead: true,
+      summary: 's', author: 'a', audioUrl: '', audioUrlAt: '', audioStale: false,
+      durationSec: null, playPos: 0, isRead: true,
     });
   });
 });

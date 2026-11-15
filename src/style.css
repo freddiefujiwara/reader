@@ -681,6 +681,7 @@ button.ghost.active {
 /* カード上の再生ボタン: 円形で、再生中のエピソードだけ
    blog の再生ボタンと同じく基調色を着ける。 */
 .play-btn {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -694,6 +695,26 @@ button.ghost.active {
   cursor: pointer;
   touch-action: manipulation;
   flex: none;
+}
+
+/* stale (新鮮な enclosure が来なくなったが、URLの有効期限内として
+   保持している) の印: ボタン右上の小さなドット。再生中のボタンは
+   地が基調色になるため、ドットと縁の色を反転させる。 */
+.play-btn-badge {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--primary);
+  border: 1.5px solid var(--surface);
+  pointer-events: none;
+}
+
+.play-btn.is-current .play-btn-badge {
+  background: var(--surface);
+  border-color: var(--primary);
 }
 
 .play-btn:hover {
@@ -767,6 +788,18 @@ button.ghost.active {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* プレイヤー側の stale の印 (カードのボタンと同じ意味)。 */
+.player-stale {
+  flex: none;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 8px;
+  font-size: 11px;
+  line-height: 1.8;
+  white-space: nowrap;
 }
 
 .player-close {

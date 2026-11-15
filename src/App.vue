@@ -40,6 +40,7 @@ import {
 import {
   FEED_HASH_TRANSFER_KEY,
   articleRecordToView,
+  clearLocalArticleAudio,
   clearLocalArticlePlayPos,
   deleteLocalArticles,
   getLocalMeta,
@@ -58,7 +59,7 @@ import {
   setLocalMeta,
 } from './lib/localDb.js';
 import { normalizeFeedIds } from './lib/feedHash.js';
-import { fetchAllFeeds, fetchFeedXml } from './lib/feedFetch.js';
+import { fetchAllFeeds, fetchFeedXml, fetchOneFeed } from './lib/feedFetch.js';
 import { createScrollRestorer } from './lib/scrollRestore.js';
 import { formatPublishedAt } from './lib/format.js';
 import {
@@ -422,6 +423,15 @@ let playHistory = [];
 const playPosMemory = new Map();
 let pendingSeek = 0;
 let lastPosSaveAt = 0;
+// stale なエピソードのタップで、そのフィードだけを取り直している
+// 間の目印 (記事IDの集合)。取り直し中のボタンは読み込み表示にする。
+const audioRefreshingIds = ref(new Set());
+// 再生中の要素に載っているURLが「保持していた古いURL (stale)」かと、
+// そのURL自体。要素の error がこのURLに対して起きたときだけ、失効と
+// みなして取り消すために控える (src 差し替え時の遅れて来る error や、
+// 新鮮なURLの一時的なエラーでは取り消さない)。
+let currentSrcStale = false;
+let currentSrcUrl = '';
 
 /* ---- YouTube 音声の長さ二重化の補正 (player.js の純粋関数を使う) ----
    currentTime / duration は Audio 要素のスケールのまま保持し、表示と
@@ -685,6 +695,8 @@ function loadEpisode(article, { resume = true } = {}) {
   // ものをそのまま使う。
   const ep = state.value.articles.find((a) => a.id === article.id) || article;
   currentEpisode.value = ep;
+  currentSrcStale = !!ep.audioStale;
+  currentSrcUrl = ep.audioUrl || '';
   // 再生した順を覚える (ランダム時の「前へ」用。blog の startTrack
   // の履歴記録と同じ位置づけで、自動送りもここを通る)。
   playHistory.push(ep.id);
@@ -742,9 +754,55 @@ function togglePlay() {
   }
 }
 
-function toggleEpisode(article) {
-  if (isCurrentEpisode(article)) togglePlay();
-  else startEpisode(article);
+async function toggleEpisode(article) {
+  if (isCurrentEpisode(article)) {
+    togglePlay();
+    return;
+  }
+  if (article.audioStale) {
+    await startStaleEpisode(article);
+    return;
+  }
+  startEpisode(article);
+}
+
+// stale なエピソード (印つき) を選んだとき: まずそのフィードだけを
+// 取り直してレコードを更新する。新鮮な enclosure が来ていればその
+// URLで再生し、来ていなければ保持しているURL (6時間以内) で再生を
+// 試みる。取り直し自体に失敗しても、保持URLでの試行は行う。
+// 取り直しの結果URLが消えた (6時間を過ぎた) 場合は再生しない
+// (読み直しでボタンも消える)。
+async function startStaleEpisode(article) {
+  if (audioRefreshingIds.value.has(article.id)) return;
+  audioRefreshingIds.value = new Set(audioRefreshingIds.value).add(article.id);
+  try {
+    const feed = state.value.feeds.find((f) => f.id === article.feedId);
+    if (feed) {
+      const result = await fetchOneFeed(feed);
+      if (result.ok) {
+        await ingestFeedArticles(result.feed, result.entries, new Date().toISOString(), null);
+        await reloadLocal();
+      }
+    }
+  } catch {
+    // 取り直せなくても保持URLで試すため、ここでは何もしない。
+  } finally {
+    const next = new Set(audioRefreshingIds.value);
+    next.delete(article.id);
+    audioRefreshingIds.value = next;
+  }
+  const fresh = state.value.articles.find((a) => a.id === article.id) || article;
+  if (fresh.audioUrl) startEpisode(fresh);
+}
+
+// カードの再生ボタンの aria-label。取り直し中・読み込み中・再生中
+// の状態に、stale (古いURLを保持中) の断りを優先度順に付け分ける。
+function playButtonLabel(a) {
+  if (audioRefreshingIds.value.has(a.id)) return '音声URLを取り直しています';
+  if (isCurrentEpisode(a) && isLoading.value) return '読み込み中';
+  if (isCurrentEpisode(a) && isPlaying.value) return '一時停止';
+  if (a.audioStale) return '再生（音声URLが古くなっています。押すと取り直します）';
+  return '再生';
 }
 
 // 前へ／次へ: 現在の再生キュー内での移動。遷移先の決定は blog の
@@ -809,6 +867,8 @@ function stopPlayer() {
   audio.removeAttribute('src');
   audio.load();
   currentEpisode.value = null;
+  currentSrcStale = false;
+  currentSrcUrl = '';
   playHistory = [];
   isPlaying.value = false;
   isLoading.value = false;
@@ -872,7 +932,22 @@ audio.addEventListener('seeked', () => {
 });
 audio.addEventListener('playing', () => { isLoading.value = false; });
 audio.addEventListener('canplay', () => { isLoading.value = false; });
-audio.addEventListener('error', () => { isLoading.value = false; });
+audio.addEventListener('error', () => {
+  isLoading.value = false;
+  // 保持していた古いURL (stale) での再生が即エラーになった場合は、
+  // そのURLは失効していたとみなし、記事の音声を取り消してボタンが
+  // 消える状態にし、再生は失敗として扱う (プレイヤーを閉じる)。
+  // 新鮮なURLのエラーは一時的な通信事情もあり得るため対象にしない。
+  // また、対象は要素に載っている当のURLへのエラーだけに限る
+  // (src の差し替え・破棄に伴う error では取り消さない)。
+  const ep = currentEpisode.value;
+  if (!ep || !currentSrcStale || !currentSrcUrl || audio.src !== currentSrcUrl) return;
+  currentSrcStale = false;
+  currentSrcUrl = '';
+  clearLocalArticleAudio(ep.id).catch(() => {});
+  stopPlayer();
+  reloadLocal().catch(() => {});
+});
 
 function handleEpisodeEnded() {
   if (endFlowDone) return;
@@ -1385,13 +1460,14 @@ onMounted(async () => {
                 v-if="a.audioUrl"
                 type="button"
                 class="play-btn"
-                :class="{ 'is-current': isCurrentEpisode(a) }"
-                :aria-label="isCurrentEpisode(a) && isLoading ? '読み込み中' : (isCurrentEpisode(a) && isPlaying ? '一時停止' : '再生')"
+                :class="{ 'is-current': isCurrentEpisode(a), 'is-stale': a.audioStale }"
+                :aria-label="playButtonLabel(a)"
                 @click="toggleEpisode(a)"
               >
-                <span v-if="isCurrentEpisode(a) && isLoading" class="play-loading" aria-hidden="true">…</span>
+                <span v-if="audioRefreshingIds.has(a.id) || (isCurrentEpisode(a) && isLoading)" class="play-loading" aria-hidden="true">…</span>
                 <svg v-else-if="isCurrentEpisode(a) && isPlaying" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h4v14H6zM14 5h4v14h-4z" /></svg>
                 <svg v-else viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>
+                <span v-if="a.audioStale" class="play-btn-badge" aria-hidden="true"></span>
               </button>
               <span v-if="a.audioUrl && a.durationSec" class="audio-duration">{{ formatTime(a.durationSec) }}</span>
               <button
@@ -1571,6 +1647,7 @@ onMounted(async () => {
         <div class="player-now">
           <span class="player-title">{{ currentEpisode.title }}</span>
           <span v-if="currentEpisode.feedTitle" class="player-feed">{{ currentEpisode.feedTitle }}</span>
+          <span v-if="currentEpisode.audioStale" class="player-stale">古い音声URL</span>
           <button type="button" class="player-close" aria-label="プレイヤーを閉じる" @click="stopPlayer">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" /></svg>
           </button>
