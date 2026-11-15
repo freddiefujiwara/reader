@@ -1030,4 +1030,25 @@ describe('切り替わり時の開始位置 (次の曲の頭が飛ぶ不具合)'
     expect(errors).toEqual([]);
   });
 
+  it('冒頭数秒の保存位置は、直接選んでも再開位置として使わない', async () => {
+    // 数秒だけ再生して止めた程度の位置は「途中」ではなく頭。
+    // 終端間際 (RESUME_END_GUARD_SEC) と対称に、冒頭側も再開位置
+    // として扱わない。
+    await mountWithRecords([{ ...EP1 }, { ...EP2, play_pos: 3 }]);
+    const audio = await startAndSettle(1);
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+    expect(audio.currentTime).toBe(0);
+    expect(errors).toEqual([]);
+  });
+
+  it('冒頭数秒で止めても、再開位置として保存されない', async () => {
+    await mountPlayer();
+    const audio = await startAndSettle(0);
+    audio.currentTime = 3;
+    audio.pause();
+    await flush();
+    const saved = (await loadLocalArticles()).find((r) => r.id === 'ep-1');
+    expect(saved.play_pos).toBe(0);
+    expect(errors).toEqual([]);
+  });
 });

@@ -66,6 +66,7 @@ import {
   formatTime,
   interpretStoredPlayPos,
   isWithinEndGuard,
+  isWithinStartGuard,
   loadPlayMode,
   loadTimeModel,
   nextEpisodePlan,
@@ -619,7 +620,9 @@ function savePlayPos() {
   const pos = Math.floor(toDisplayPosition(audio.currentTime || 0, mappingCtx.value));
   // 終端間際 (残り5秒以内) の位置は再開位置として保存しない。開始
   // 直後に終了判定へ入る毒になるため、DB 側も 0 に倒しておく。
-  if (isWithinEndGuard(pos, displayDuration.value)) {
+  // 冒頭 (5秒以下) の位置も同じ扱いにする: 数秒だけ再生して止めた
+  // 位置が残ると、次に始めたとき冒頭が飛んだように見えるため。
+  if (isWithinEndGuard(pos, displayDuration.value) || isWithinStartGuard(pos)) {
     playPosMemory.set(ep.id, 0);
     clearLocalArticlePlayPos(ep.id).catch(() => {});
     return;
