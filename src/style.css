@@ -688,6 +688,15 @@ button.ghost.active {
   fill: currentColor;
 }
 
+/* 読み込み待ちの間は、プレイヤー本体の再生ボタンと同じく
+   アイコンの代わりに文字の「…」を出す (本体側は .player-loading)。
+   連動させるのは再生中のエピソードのボタンだけ。 */
+.play-btn .play-loading {
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+}
+
 .play-btn.is-current {
   color: var(--surface);
   background: var(--primary);

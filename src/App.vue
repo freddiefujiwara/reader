@@ -1279,10 +1279,11 @@ onMounted(async () => {
                 type="button"
                 class="play-btn"
                 :class="{ 'is-current': isCurrentEpisode(a) }"
-                :aria-label="isCurrentEpisode(a) && isPlaying ? '一時停止' : '再生'"
+                :aria-label="isCurrentEpisode(a) && isLoading ? '読み込み中' : (isCurrentEpisode(a) && isPlaying ? '一時停止' : '再生')"
                 @click="toggleEpisode(a)"
               >
-                <svg v-if="isCurrentEpisode(a) && isPlaying" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h4v14H6zM14 5h4v14h-4z" /></svg>
+                <span v-if="isCurrentEpisode(a) && isLoading" class="play-loading" aria-hidden="true">…</span>
+                <svg v-else-if="isCurrentEpisode(a) && isPlaying" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h4v14H6zM14 5h4v14h-4z" /></svg>
                 <svg v-else viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>
               </button>
               <span v-if="a.audioUrl && a.durationSec" class="audio-duration">{{ formatTime(a.durationSec) }}</span>
