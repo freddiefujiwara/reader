@@ -323,6 +323,18 @@ async function goUnreadAll() {
   displayLimit.value = DISPLAY_LIMIT;
 }
 
+// ヘッダーのブランド: アプリ内のホームボタン。以前は href="./" の
+// リンクだったため、タップするとフルリロードになり、読み込み済みの
+// 記事・再生状態・スクロール位置がすべて失われていた。ここでは
+// アプリ内でタイムラインへ戻し (管理画面からの場合は backToTimeline
+// と同じ後処理も行う)、タイムライン表示中なら先頭へスクロールする。
+async function goHome() {
+  if (view.value !== 'timeline') {
+    await backToTimeline();
+  }
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
 // 既読の付け外しはローカルのみ (サーバーへは送らない)。
 async function applyRead(article, isRead) {
   if (!isOwner.value) return;
@@ -1186,13 +1198,13 @@ onMounted(async () => {
 <template>
   <div>
     <nav class="site-nav">
-      <a class="brand" href="./" aria-label="リーダー トップへ">
+      <button class="brand" type="button" aria-label="タイムラインに戻る" @click="goHome">
         <span class="brand-mark">読</span>
         <span class="brand-text">
           <span class="brand-name">リーダー</span>
           <span class="brand-sub">RSSリーダー</span>
         </span>
-      </a>
+      </button>
       <span></span>
       <span class="session-note">
         <button
@@ -1321,7 +1333,7 @@ onMounted(async () => {
 
         <template v-else>
           <div class="feed-admin-head">
-            <button class="ghost" type="button" @click="backToTimeline">← タイムラインに戻る</button>
+            <!-- タイムラインへはヘッダーのブランド (ホームボタン) で戻る。 -->
             <button v-if="!formMode" class="primary" type="button" @click="startAddFeed">フィードを追加</button>
           </div>
 
@@ -1377,6 +1389,10 @@ onMounted(async () => {
           </p>
           <p v-else-if="mgmtLoading" class="panel center"><span class="spinner"></span>読み込み中...</p>
           <template v-else>
+            <!-- フィード編集中はフォームに集中できるよう、ジャンル選択と
+                 一覧は隠す。adminCategory 等の状態はそのまま保持し、
+                 保存/キャンセルで閉じれば元の絞り込み表示に戻る。 -->
+            <template v-if="formMode !== 'edit'">
             <div v-if="genreOptions.length" class="feed-chips category-chips" role="tablist" aria-label="ジャンルで絞り込み">
               <button
                 type="button"
@@ -1448,6 +1464,7 @@ onMounted(async () => {
                 <button class="ghost danger" type="button" @click="askDeleteFeed(f)">削除</button>
               </div>
             </article>
+            </template>
           </template>
         </template>
       </template>

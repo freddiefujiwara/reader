@@ -112,6 +112,14 @@ body {
   text-decoration: none;
   color: var(--text);
   flex: none;
+  /* ホームボタン (<button>) として使うため、UA 既定のボタンの見た目を
+     消して従来のリンク表示に揃える。 */
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
 .brand-mark {
@@ -994,7 +1002,9 @@ button.ghost.active {
   flex-wrap: wrap;
   gap: 10px;
   align-items: center;
-  justify-content: space-between;
+  /* 「タイムラインに戻る」を廃止し、中身は「フィードを追加」だけに
+     なったため、従来どおり右寄せにする。 */
+  justify-content: flex-end;
   margin-bottom: 16px;
 }
 

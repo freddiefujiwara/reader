@@ -74,6 +74,7 @@ import { saveFeed, listFeeds } from '../src/lib/api.js';
 import { fetchFeedXml } from '../src/lib/feedFetch.js';
 
 const scrollCalls = [];
+const scrollToCalls = [];
 let app = null;
 let el = null;
 let errors = [];
@@ -120,6 +121,10 @@ beforeEach(() => {
   // jsdom はスクロールを実装しないため、呼び出し自体を記録する。
   window.HTMLElement.prototype.scrollIntoView = function (opts) {
     scrollCalls.push({ el: this, opts });
+  };
+  scrollToCalls.length = 0;
+  window.scrollTo = function (opts) {
+    scrollToCalls.push(opts);
   };
   vi.clearAllMocks();
 });
@@ -188,6 +193,55 @@ describe('管理画面の編集フォーム', () => {
   });
 });
 
+describe('ヘッダーのブランド (ホームボタン)', () => {
+  const brand = () => el.querySelector('.brand');
+
+  it('ブランドはリンクではなくボタンで、href を持たない (フルリロードしない)', async () => {
+    await mountAdmin();
+    expect(errors).toEqual([]);
+    expect(brand(), 'ブランドが出る').toBeTruthy();
+    expect(brand().tagName).toBe('BUTTON');
+    expect(brand().getAttribute('href')).toBeNull();
+    expect(el.querySelector('a.brand')).toBeNull();
+  });
+
+  it('管理画面でブランドを押すと、リロードなしにタイムラインへ戻る', async () => {
+    await mountAdmin();
+    expect(el.querySelectorAll('.feed-card').length).toBe(FEEDS.length);
+    brand().click();
+    await flush();
+    expect(errors).toEqual([]);
+    // 管理の一覧は消え、タイムライン側の下部バー (表示切替) が出る。
+    expect(el.querySelectorAll('.feed-card').length).toBe(0);
+    expect(el.querySelector('.view-tabs'), 'タイムラインに戻っている').toBeTruthy();
+    expect(scrollToCalls.at(-1)).toMatchObject({ top: 0 });
+  });
+
+  it('管理画面に「← タイムラインに戻る」は無く、戻る手段はブランドだけ', async () => {
+    await mountAdmin();
+    expect(errors).toEqual([]);
+    expect(findButton(el, '← タイムラインに戻る')).toBeUndefined();
+    expect(brand(), 'ブランドは常に出ている').toBeTruthy();
+    expect(findButton(el, 'フィードを追加'), '追加ボタンは残る').toBeTruthy();
+  });
+
+  it('タイムライン表示中にブランドを押すと、先頭へスクロールするだけ', async () => {
+    el = document.createElement('div');
+    document.body.appendChild(el);
+    app = createApp(App);
+    app.config.errorHandler = (err) => { errors.push(err); };
+    app.mount(el);
+    await flush();
+    expect(el.querySelector('.view-tabs'), 'タイムライン表示中').toBeTruthy();
+    brand().click();
+    await flush();
+    expect(errors).toEqual([]);
+    expect(scrollToCalls).toEqual([{ top: 0, behavior: 'smooth' }]);
+    // 画面はタイムラインのまま。
+    expect(el.querySelector('.view-tabs')).toBeTruthy();
+  });
+});
+
 describe('管理画面のプライベート表示', () => {
   it('isPrivate なフィードでも「プライベート」バッジを表示しない', async () => {
     await mountAdmin();
@@ -245,7 +299,9 @@ describe('管理画面のジャンル絞り込み', () => {
     findButton(genreTablist(), 'ポッドキャスト').click();
     await flush();
     expect(el.querySelectorAll('.feed-card').length).toBe(2);
-    findButton(el, '← タイムラインに戻る').click();
+    // 戻る手段はヘッダーのブランド (ホームボタン) のみ。
+    expect(findButton(el, '← タイムラインに戻る')).toBeUndefined();
+    el.querySelector('.brand').click();
     await flush();
     findButton(el, '管理').click();
     await flush();
@@ -255,6 +311,63 @@ describe('管理画面のジャンル絞り込み', () => {
     expect(moveButtons().length).toBe(0);
     const active = genreTablist().querySelector('.chip.active');
     expect(active.textContent.trim()).toBe('ポッドキャスト');
+  });
+});
+
+describe('管理画面の編集中表示', () => {
+  const genreTablist = () => el.querySelector('[aria-label="ジャンルで絞り込み"]');
+
+  it('編集フォームを開くと、ジャンル選択とフィード一覧が隠れる', async () => {
+    await mountAdmin();
+    expect(genreTablist(), 'ジャンル選択が出ている').toBeTruthy();
+    expect(el.querySelectorAll('.feed-card').length).toBe(FEEDS.length);
+    const form = await openEdit(0);
+    expect(errors).toEqual([]);
+    expect(form, '編集フォームは出る').toBeTruthy();
+    expect(genreTablist(), '編集中はジャンル選択を隠す').toBeNull();
+    expect(el.querySelectorAll('.feed-card').length, '編集中は一覧を隠す').toBe(0);
+  });
+
+  it('ジャンルで絞った状態で編集し、キャンセルすると絞り込みがそのまま戻る', async () => {
+    await mountAdmin();
+    findButton(genreTablist(), 'ポッドキャスト').click();
+    await flush();
+    expect(el.querySelectorAll('.feed-card').length).toBe(2);
+    const form = await openEdit(0);
+    expect(el.querySelectorAll('.feed-card').length).toBe(0);
+    findButton(form, 'キャンセル').click();
+    await flush();
+    expect(errors).toEqual([]);
+    expect(el.querySelector('.feed-form'), 'フォームは閉じる').toBeNull();
+    expect(genreTablist(), 'ジャンル選択が戻る').toBeTruthy();
+    const active = genreTablist().querySelector('.chip.active');
+    expect(active.textContent.trim(), '絞り込みは保持される').toBe('ポッドキャスト');
+    expect(el.querySelectorAll('.feed-card').length).toBe(2);
+  });
+
+  it('編集を保存するとフォームが閉じて一覧が戻る', async () => {
+    await mountAdmin();
+    const form = await openEdit(0);
+    const input = form.querySelector('#feed-category');
+    input.value = '新しいジャンル';
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+    form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+    await flush();
+    await flush();
+    expect(errors).toEqual([]);
+    expect(el.querySelector('.feed-form'), '保存後はフォームが閉じる').toBeNull();
+    expect(genreTablist(), 'ジャンル選択が戻る').toBeTruthy();
+    expect(el.querySelectorAll('.feed-card').length, '一覧が戻る').toBe(FEEDS.length);
+  });
+
+  it('追加フォームではジャンル選択と一覧は隠さない (対象は編集時のみ)', async () => {
+    await mountAdmin();
+    findButton(el, 'フィードを追加').click();
+    await flush();
+    expect(errors).toEqual([]);
+    expect(el.querySelector('.feed-form'), '追加フォームは出る').toBeTruthy();
+    expect(genreTablist(), 'ジャンル選択は出たまま').toBeTruthy();
+    expect(el.querySelectorAll('.feed-card').length).toBe(FEEDS.length);
   });
 });
 
