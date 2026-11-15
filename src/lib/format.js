@@ -1,7 +1,7 @@
 // 記事の公開日時の表示整形 (端末のローカル時刻で判定する)。
 // 例: 今日 7:05 / 昨日 7:05 / 11/13 / 2025/12/3
 
-function pad2(n) {
+export function pad2(n) {
   return String(n).padStart(2, '0');
 }
 

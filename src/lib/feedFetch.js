@@ -4,6 +4,7 @@
 //   -> { url, content, error } (content がフィード XML の生テキスト)
 // 失敗したフィードはその回だけ諦め、ローカルの記事を残す (呼び出し側の判断)。
 import { parseFeedXml } from './feedParse.js';
+import { withRetry } from './retry.js';
 
 // url-fetch-gas の /exec URL (portfolio-treemap と同じデプロイ)。
 export const URL_FETCH_API_URL =
@@ -29,19 +30,14 @@ function isRetryable(err) {
 }
 
 export async function fetchFeedXml(fetchUrl, { fetcher = fetch, proxyBase = URL_FETCH_API_URL, token = URL_FETCH_TOKEN, retries = 1, retryDelayMs = 900 } = {}) {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      const res = await fetcher(proxyUrl(fetchUrl, proxyBase, token));
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      if (!data || data.error) throw new Error((data && data.error) || 'fetch_failed');
-      if (typeof data.content !== 'string' || !data.content) throw new Error('empty_content');
-      return data.content;
-    } catch (err) {
-      if (!isRetryable(err) || attempt >= retries) throw err;
-      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
-    }
-  }
+  return withRetry(async () => {
+    const res = await fetcher(proxyUrl(fetchUrl, proxyBase, token));
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (!data || data.error) throw new Error((data && data.error) || 'fetch_failed');
+    if (typeof data.content !== 'string' || !data.content) throw new Error('empty_content');
+    return data.content;
+  }, { retries, retryDelayMs, isRetryable });
 }
 
 // フィード1件を取得してエントリまで変換する。失敗しても投げず、
