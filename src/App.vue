@@ -294,7 +294,12 @@ function applyRoute(route) {
   if (view.value !== 'timeline') {
     backToTimeline();
   }
-  state.value = { ...state.value, category: route.category, feedId: route.feedId };
+  state.value = {
+    ...state.value,
+    category: route.category,
+    feedId: route.feedId,
+    filter: route.unread ? 'unread' : 'all',
+  };
   displayLimit.value = DISPLAY_LIMIT;
 }
 
@@ -308,6 +313,7 @@ function routePathForState() {
     view: view.value,
     category: view.value === 'feeds' ? adminCategory.value : state.value.category,
     feedId: view.value === 'feeds' ? '' : state.value.feedId,
+    unread: view.value === 'feeds' ? false : state.value.filter === 'unread',
   });
 }
 
@@ -316,7 +322,13 @@ function routePathForState() {
 // 組み立てたパスが現在のパスと一致するため書き換えが起きない。
 // ハッシュ (#share= 等) は引き継ぐ。
 watch(
-  [view, adminCategory, () => state.value.category, () => state.value.feedId],
+  [
+    view,
+    adminCategory,
+    () => state.value.category,
+    () => state.value.feedId,
+    () => state.value.filter,
+  ],
   () => {
     if (!routingEnabled) return;
     const path = routePathForState();
