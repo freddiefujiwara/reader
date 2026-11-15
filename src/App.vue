@@ -650,10 +650,10 @@ function loadEpisode(article) {
   tryPlayAudio();
 }
 
-// ユーザーがカードから選んだとき: その時点の表示リスト (フィルタ
-// 適用後) から同じフィードの音声つき記事をキューとして固定し、
-// ラウンドを数え直してから再生する。以後の自動送りはこのキューに
-// 対して行う。
+// ユーザーがカードから選んだとき: その時点の表示リスト (ジャンル・
+// チャンネル・既読状態の絞り込み適用後) の音声つき記事を、フィードを
+// 問わずキューとして固定し、ラウンドを数え直してから再生する。
+// 以後の自動送りはこのキューに対して行う。
 function startEpisode(article) {
   playQueue.value = buildQueue(visible.value, article);
   playedInRound = new Set([article.id]);
