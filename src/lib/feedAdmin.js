@@ -224,13 +224,20 @@ export function moveItemToIndex(list, fromIndex, toIndex) {
 }
 
 // ドラッグ中の行のピッチ (自分の上端から次の行の上端までの距離)。
-// 掴んだ行を取り除くと後続はこの量だけ詰まる (行の高さ＋下マージン)。
-// 末尾の行は1つ前の行のピッチで代用し、1行だけなら高さそのもの。
+// 掴んだ行を取り除くと後続はこの量だけ詰まる (行の高さ＋行間)。
+// 末尾の行には次の行が無いので、自分の高さ＋行間で求める。行間は
+// 直前の行ペアから取る。1つ前の行のピッチで代用すると、高さの違う
+// 行では詰め量が自分の高さとずれて、空いた場所と掴んだ行が重なる。
+// 1行だけなら高さそのもの。
 export function dragRowPitch(rects, index) {
   const rows = Array.isArray(rects) ? rects : [];
   if (index < 0 || index >= rows.length) return 0;
   if (index + 1 < rows.length) return rows[index + 1].top - rows[index].top;
-  if (index > 0) return rows[index].top - rows[index - 1].top;
+  if (index > 0) {
+    const prev = rows[index - 1];
+    const gap = rows[index].top - (prev.top + prev.height);
+    return rows[index].height + gap;
+  }
   return rows[index].height;
 }
 
@@ -240,10 +247,24 @@ export function dragRowPitch(rects, index) {
 // (ドラッグ開始時点の) 中点を越えた分だけ進み/戻る。中心が中点
 // ちょうどの場合は越えた数に入れない。基準は開始時点の並びで固定
 // するため、途中で他の行が詰めて動いても判定は揺れない。
+// ただし両端だけは例外: 呼び出し側は移動量を「掴んだ行の端が一覧の
+// 端に届く位置」でクランプするため、高さが均一だと中心は端の行の
+// 中点とちょうど重なって (越えたことにならず) 永遠に端へ入れない。
+// 掴んだ行より端の行が低ければ、中心は中点にすら届かない。その
+// 場合、端の行はどかず、掴んだ行がその上に重なって表示が崩れる。
+// そこで、移動量がクランプの下限/上限 (掴んだ行の上端が先頭行の
+// 上端、下端が末尾行の下端に一致する量) に達したら、端のインデッ
+// クスを返す。クランプと同じ式で比べるので、ちょうど端に届いた
+// ときに確実に一致する。
 export function dragInsertIndex(rects, fromIndex, offsetY) {
   const rows = Array.isArray(rects) ? rects : [];
   if (fromIndex < 0 || fromIndex >= rows.length) return fromIndex;
   const dragged = rows[fromIndex];
+  const minOffset = rows[0].top - dragged.top;
+  if (offsetY <= minOffset) return 0;
+  const last = rows[rows.length - 1];
+  const maxOffset = last.top + last.height - (dragged.top + dragged.height);
+  if (offsetY >= maxOffset) return rows.length - 1;
   const center = dragged.top + dragged.height / 2 + offsetY;
   let target = fromIndex;
   if (offsetY > 0) {

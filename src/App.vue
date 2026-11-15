@@ -2138,10 +2138,13 @@ onMounted(async () => {
                   >キャンセル</button>
                 </div>
               </div>
-              <div v-else class="feed-actions">
+              </div>
+              <!-- 編集・削除はカード右側の空きに置く (カード本体の
+                   フレックス行の3つ目の要素)。削除確認が出ている間は
+                   隠す (確認のボタンは本体側に出る)。 -->
+              <div v-if="confirmDeleteId !== f.id" class="feed-actions feed-card-actions">
                 <button class="ghost" type="button" @click="startEditFeed(f)">編集</button>
                 <button class="ghost danger" type="button" @click="askDeleteFeed(f)">削除</button>
-              </div>
               </div>
             </article>
             </template>
