@@ -152,6 +152,17 @@ export function markAllReadInList(state, feedId = '', category = '') {
   return { ...state, articles, feeds };
 }
 
+// すべて既読の対象になる記事 (スコープ内の未読) を返す。範囲の決め方は
+// markAllReadInList と一致させる。確認文言の件数表示と、実行時に
+// DB へ書く対象 ID を決めるために使う。
+export function markAllReadTargets(state, feedId = '', category = '') {
+  const scopedFeedIds = markAllReadScope(state, feedId, category);
+  const all = !feedId && !category;
+  return (state.articles || []).filter(
+    (a) => !a.isRead && (all || scopedFeedIds[a.feedId])
+  );
+}
+
 // フィードチップの表示対象。未読フィルタのときは未読があるフィードだけに
 // 絞る (未読ゼロならチップは出ない)。ただし選択中のフィードは、
 // 未読がゼロでも行き場が無くならないよう残す。
