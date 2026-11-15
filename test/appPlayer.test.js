@@ -232,6 +232,60 @@ describe('プレイヤーの自動送り (全体繰り返しと単曲繰り返�
   });
 });
 
+describe('前へ／次へボタン', () => {
+  it('blog と同じアイコンとラベルで、再生ボタンの左右に付く', async () => {
+    await mountPlayer();
+    const bar = await startCard(0);
+    const prev = bar.querySelector('button[aria-label="前へ"]');
+    const next = bar.querySelector('button[aria-label="次へ"]');
+    expect(prev, '前へボタン').toBeTruthy();
+    expect(next, '次へボタン').toBeTruthy();
+    expect(prev.getAttribute('title')).toBe('前へ');
+    expect(next.getAttribute('title')).toBe('次へ');
+    // blog の musicPlayer と同じ SVG パス (skip-previous / skip-next)。
+    expect(prev.querySelector('path').getAttribute('d')).toBe('M6 5h2v14H6zM20 5v14L9 12z');
+    expect(next.querySelector('path').getAttribute('d')).toBe('M16 5h2v14h-2zM4 5v14l11-7z');
+    // 並びは blog と同じく 前へ → 再生 → 次へ。
+    const controls = [...bar.querySelector('.player-controls').children];
+    const playIdx = controls.findIndex((b) => b.classList.contains('player-play'));
+    expect(controls[playIdx - 1]).toBe(prev);
+    expect(controls[playIdx + 1]).toBe(next);
+    expect(errors).toEqual([]);
+  });
+
+  it('次へで次のエピソードへ進み、末尾では先頭へ折り返す', async () => {
+    await mountPlayer();
+    const bar = await startCard(0);
+    const next = () => bar.querySelector('button[aria-label="次へ"]');
+    next().click();
+    await flush();
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+    expect(latestAudio().src).toBe('https://example.com/ep2.mp3');
+
+    next().click();
+    await flush();
+    expect(errors).toEqual([]);
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
+    expect(latestAudio().src).toBe('https://example.com/ep1.mp3');
+  });
+
+  it('前へで前のエピソードへ戻り、先頭では末尾へ折り返す', async () => {
+    await mountPlayer();
+    const bar = await startCard(0);
+    const prev = () => bar.querySelector('button[aria-label="前へ"]');
+    prev().click();
+    await flush();
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+    expect(latestAudio().src).toBe('https://example.com/ep2.mp3');
+
+    prev().click();
+    await flush();
+    expect(errors).toEqual([]);
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
+    expect(latestAudio().src).toBe('https://example.com/ep1.mp3');
+  });
+});
+
 describe('キューの範囲 (表示条件に合う全フィード)', () => {
   // https://example.com/feed2.xml のハッシュID (feedHash で固定済み)。
   const FEED2 = {

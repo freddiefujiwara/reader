@@ -7,6 +7,8 @@ import {
   progressRatio,
   buildQueue,
   nextEpisodePlan,
+  stepIndex,
+  skipPlan,
   nextRepeat,
   REPEAT_LABELS,
   loadPlayMode,
@@ -232,6 +234,66 @@ describe('nextEpisodePlan (ランダム再生)', () => {
       queue: ['a'], currentId: 'a', repeat: 'all', shuffle: true, playedIds: new Set(['a']), randomPick: lastPick,
     });
     expect(plan).toEqual({ type: 'advance', id: 'a', resetPlayed: true });
+  });
+});
+
+describe('stepIndex (blog と同じ折り返し)', () => {
+  it('両端で折り返す', () => {
+    expect(stepIndex(0, 3, 1)).toBe(1);
+    expect(stepIndex(2, 3, 1)).toBe(0);
+    expect(stepIndex(0, 3, -1)).toBe(2);
+    expect(stepIndex(2, 3, -1)).toBe(1);
+    expect(stepIndex(0, 1, 1)).toBe(0);
+    expect(stepIndex(0, 0, 1)).toBe(0);
+  });
+});
+
+describe('skipPlan (前へ／次へ)', () => {
+  const queue = ['a', 'b', 'c'];
+  it('通常時は表示順の前後へ進み、両端で折り返す', () => {
+    expect(skipPlan({ queue, currentId: 'a', delta: 1 })).toEqual({ id: 'b', historyCut: null });
+    expect(skipPlan({ queue, currentId: 'c', delta: 1 })).toEqual({ id: 'a', historyCut: null });
+    expect(skipPlan({ queue, currentId: 'a', delta: -1 })).toEqual({ id: 'c', historyCut: null });
+    expect(skipPlan({ queue, currentId: 'b', delta: -1 })).toEqual({ id: 'a', historyCut: null });
+  });
+  it('キューが1件なら同じエピソードに戻る', () => {
+    expect(skipPlan({ queue: ['a'], currentId: 'a', delta: 1 })).toEqual({ id: 'a', historyCut: null });
+    expect(skipPlan({ queue: ['a'], currentId: 'a', delta: -1 })).toEqual({ id: 'a', historyCut: null });
+  });
+  it('キューが空・現在位置不明なら null', () => {
+    expect(skipPlan({ queue: [], currentId: 'a', delta: 1 })).toBeNull();
+    expect(skipPlan({ queue, currentId: 'z', delta: 1 })).toBeNull();
+    expect(skipPlan({ queue, currentId: 'z', delta: -1 })).toBeNull();
+  });
+  it('ランダムの「次へ」は現在以外から randomPick で選ぶ', () => {
+    let seen = null;
+    const plan = skipPlan({
+      queue, currentId: 'b', delta: 1, shuffle: true,
+      randomPick: (candidates) => { seen = candidates; return candidates[1]; },
+    });
+    expect(seen).toEqual(['a', 'c']);
+    expect(plan).toEqual({ id: 'c', historyCut: null });
+  });
+  it('ランダムの「次へ」はキューが1件なら折り返しと同じになる', () => {
+    expect(skipPlan({ queue: ['a'], currentId: 'a', delta: 1, shuffle: true })).toEqual({ id: 'a', historyCut: null });
+  });
+  it('ランダムの「前へ」は履歴の直近の異なるエピソードへ戻り、切り詰め位置を返す', () => {
+    const plan = skipPlan({
+      queue, currentId: 'c', delta: -1, shuffle: true, history: ['a', 'b', 'c'],
+    });
+    expect(plan).toEqual({ id: 'b', historyCut: 1 });
+  });
+  it('ランダムの「前へ」は、履歴が無ければ表示順の前へ', () => {
+    expect(skipPlan({ queue, currentId: 'b', delta: -1, shuffle: true, history: ['b'] }))
+      .toEqual({ id: 'a', historyCut: null });
+    expect(skipPlan({ queue, currentId: 'b', delta: -1, shuffle: true, history: [] }))
+      .toEqual({ id: 'a', historyCut: null });
+  });
+  it('ランダムの「前へ」は、キューに残っていない履歴を飛ばす', () => {
+    const plan = skipPlan({
+      queue, currentId: 'c', delta: -1, shuffle: true, history: ['a', 'x', 'c'],
+    });
+    expect(plan).toEqual({ id: 'a', historyCut: 0 });
   });
 });
 
