@@ -453,3 +453,79 @@ describe('管理画面の YouTube チャンネル URL 追加', () => {
     expect(cardTitles()).toContain('rakutentech');
   });
 });
+
+describe('ジャンル候補 (datalist を使わない)', () => {
+  const suggestions = () => el.querySelector('.genre-suggestions');
+  const suggestionTexts = () =>
+    [...el.querySelectorAll('.genre-suggestions .chip')].map((b) => b.textContent.trim());
+
+  async function typeCategory(form, value) {
+    const input = form.querySelector('#feed-category');
+    input.value = value;
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await flush();
+    return input;
+  }
+
+  it('追加フォームでは候補がフォーム内の通常フロー (保存ボタンより前) に出て、datalist は無い', async () => {
+    await mountAdmin();
+    findButton(el, 'フィードを追加').click();
+    await flush();
+    const form = el.querySelector('.feed-form');
+    expect(form, '追加フォームが開く').toBeTruthy();
+    // ネイティブ datalist は使わない (iOS Safari のポップアップが
+    // 保存ボタンに被るため)。
+    expect(form.querySelector('datalist')).toBeNull();
+    expect(form.querySelector('#feed-category').getAttribute('list')).toBeNull();
+    // 空入力では既存ジャンル全件が候補として出る。
+    expect(suggestionTexts()).toEqual(['ポッドキャスト', '教養・ラジオ', 'private']);
+    // 候補はフォームの中にあり、保存/キャンセルの並び (.form-actions)
+    // より前に置かれる = 通常フローの要素で、重ね表示ではない。
+    const box = suggestions();
+    const actions = form.querySelector('.form-actions');
+    expect(form.contains(box)).toBe(true);
+    expect(box.compareDocumentPosition(actions) & window.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(errors).toEqual([]);
+  });
+
+  it('入力で候補が絞られ、タップで入力欄に反映され、一致したら候補は消える', async () => {
+    await mountAdmin();
+    findButton(el, 'フィードを追加').click();
+    await flush();
+    const form = el.querySelector('.feed-form');
+    const input = await typeCategory(form, 'ポッ');
+    expect(suggestionTexts()).toEqual(['ポッドキャスト']);
+
+    el.querySelector('.genre-suggestions .chip').click();
+    await flush();
+    expect(input.value).toBe('ポッドキャスト');
+    // 完全一致したので、もう候補は出ない。
+    expect(suggestions()).toBeNull();
+
+    // 一致する候補が無ければ候補UI自体が出ない。
+    await typeCategory(form, '存在しないジャンル');
+    expect(suggestions()).toBeNull();
+    expect(errors).toEqual([]);
+  });
+
+  it('編集フォームでも候補が出て、フォームを閉じれば候補も消える', async () => {
+    await mountAdmin();
+    const form = await openEdit(0);
+    // 開いた直後は現在のジャンル (ポッドキャスト) と完全一致する
+    // ため候補は出ない。空にすると全候補が出る。
+    expect(suggestions()).toBeNull();
+    const input = await typeCategory(form, '');
+    expect(suggestionTexts()).toEqual(['ポッドキャスト', '教養・ラジオ', 'private']);
+    const chip = [...el.querySelectorAll('.genre-suggestions .chip')]
+      .find((b) => b.textContent.trim() === '教養・ラジオ');
+    chip.click();
+    await flush();
+    expect(input.value).toBe('教養・ラジオ');
+
+    findButton(form, 'キャンセル').click();
+    await flush();
+    expect(el.querySelector('.feed-form')).toBeNull();
+    expect(suggestions()).toBeNull();
+    expect(errors).toEqual([]);
+  });
+});

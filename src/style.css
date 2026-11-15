@@ -1136,6 +1136,16 @@ button.ghost.danger {
   margin: 4px 0 0;
 }
 
+/* ジャンル候補: 入力欄の下に通常フローで並べる (絶対配置の重ね
+   表示はしない。datalist のポップアップがボタンに被る問題の
+   代替なので、この契約は崩さない)。 */
+.genre-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
 .form-actions {
   display: flex;
   flex-wrap: wrap;

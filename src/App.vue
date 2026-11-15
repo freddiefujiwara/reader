@@ -16,6 +16,7 @@ import {
   feedFormFromFeed,
   filterAdminFeeds,
   formatFeedStatus,
+  genreSuggestions,
   moveFeedOrder,
   createOrderSender,
   planFeedAdd,
@@ -133,6 +134,9 @@ const chipFeeds = computed(() => visibleFeedChips(state.value));
 const categoryList = computed(() => feedCategories(state.value.feeds));
 // 管理フォームのジャンル候補: 現在のフィード一覧にあるものを出現順に。
 const genreOptions = computed(() => feedCategories(mgmtFeeds.value));
+// 入力中の文字列で絞った候補。フォーム内の通常フローにチップで
+// 出し、タップで入力欄へ入れる (datalist は使わない)。
+const genreSuggestionList = computed(() => genreSuggestions(genreOptions.value, form.value.category));
 // 管理一覧の表示対象: 選択中のジャンルに合うフィードだけ。
 const adminFeeds = computed(() => filterAdminFeeds(mgmtFeeds.value, adminCategory.value));
 const hasMore = computed(() => visible.value.length > displayLimit.value);
@@ -1368,12 +1372,21 @@ onMounted(async () => {
                 v-model="form.category"
                 type="text"
                 autocomplete="off"
-                list="feed-genre-options"
                 placeholder="例: ニュース"
               />
-              <datalist id="feed-genre-options">
-                <option v-for="c in genreOptions" :key="c" :value="c"></option>
-              </datalist>
+              <!-- 候補は通常フロー内のチップで出す。ネイティブの
+                   datalist は、候補が1つに絞られたときに iOS Safari
+                   のポップアップが保存ボタンに被って押せなくなる
+                   ため使わない。 -->
+              <div v-if="genreSuggestionList.length" class="genre-suggestions" aria-label="ジャンルの候補">
+                <button
+                  v-for="c in genreSuggestionList"
+                  :key="c"
+                  type="button"
+                  class="chip"
+                  @click="form.category = c"
+                >{{ c }}</button>
+              </div>
             </div>
             <p v-if="formError" class="error">{{ formError }}</p>
             <div class="form-actions">

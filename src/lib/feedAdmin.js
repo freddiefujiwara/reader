@@ -179,6 +179,21 @@ export function filterAdminFeeds(feeds, category) {
   return list.filter((f) => String(f?.category || '').trim() === c);
 }
 
+// フォームのジャンル候補: 既存ジャンルのうち、入力中の文字列を
+// 含むものを出現順のまま返す。空入力なら全候補。入力と完全一致
+// する候補は、選んでも値が変わらないので出さない。候補の表示は
+// フォーム内の通常フローに置く (ネイティブ datalist のポップ
+// アップは iOS Safari で保存ボタンに被って押せなくなるため使わ
+// ない)。
+export function genreSuggestions(options, input) {
+  const list = (Array.isArray(options) ? options : [])
+    .filter((c) => typeof c === 'string' && c !== '');
+  const q = typeof input === 'string' ? input.trim() : '';
+  if (!q) return list;
+  const lower = q.toLowerCase();
+  return list.filter((c) => c !== q && c.toLowerCase().includes(lower));
+}
+
 // 並び替え: feeds の中で feedId を direction (-1=上, +1=下) へ1つ動かした
 // 新しい配列を返す。端で動かせない場合と対象が無い場合は null。
 export function moveFeedOrder(feeds, feedId, direction) {
