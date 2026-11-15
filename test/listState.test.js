@@ -9,6 +9,7 @@ import {
   sortArticlesDesc,
   markAllReadInList,
   markAllReadScope,
+  mergePendingReadMarks,
   visibleFeedChips,
   feedCategories,
   feedDisplayName,
@@ -263,5 +264,58 @@ describe('patchFeedCategory', () => {
     const out = patchFeedCategory(FEEDS_WITH_CAT, 'b', '');
     expect(out[1].category).toBe('');
     expect(feedCategories(out)).toEqual(['ニュース']);
+  });
+});
+
+describe('mergePendingReadMarks', () => {
+  const views = () => [
+    { id: 'a', isRead: false },
+    { id: 'b', isRead: true },
+    { id: 'c', isRead: false },
+  ];
+
+  it('控えが無ければ一覧はそのままで、keep は空', () => {
+    const v = views();
+    const out = mergePendingReadMarks(v, new Map());
+    expect(out.articles).toBe(v);
+    expect(out.keep.size).toBe(0);
+  });
+
+  it('スナップショットが古い (未読のまま) 記事は、控えの既読で上書きし、keep に残す', () => {
+    const out = mergePendingReadMarks(views(), new Map([['a', true]]));
+    expect(out.articles.map((x) => [x.id, x.isRead])).toEqual([
+      ['a', true],
+      ['b', true],
+      ['c', false],
+    ]);
+    expect([...out.keep.entries()]).toEqual([['a', true]]);
+  });
+
+  it('スナップショット側が既に控えと一致していれば、控えから落とす (keep に残さない)', () => {
+    const out = mergePendingReadMarks(views(), new Map([['b', true]]));
+    expect(out.articles.map((x) => x.isRead)).toEqual([false, true, false]);
+    expect(out.keep.size).toBe(0);
+  });
+
+  it('未読へ戻す変更も対称に扱う', () => {
+    const out = mergePendingReadMarks(views(), new Map([['b', false]]));
+    expect(out.articles.map((x) => [x.id, x.isRead])).toEqual([
+      ['a', false],
+      ['b', false],
+      ['c', false],
+    ]);
+    expect([...out.keep.entries()]).toEqual([['b', false]]);
+  });
+
+  it('一覧から消えた記事への控えは落とす', () => {
+    const out = mergePendingReadMarks(views(), new Map([['gone', true]]));
+    expect(out.keep.size).toBe(0);
+    expect(out.articles.map((x) => x.id)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('元の記事オブジェクトは壊さない', () => {
+    const v = views();
+    mergePendingReadMarks(v, new Map([['a', true]]));
+    expect(v[0].isRead).toBe(false);
   });
 });
