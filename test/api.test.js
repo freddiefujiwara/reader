@@ -8,6 +8,9 @@ import {
   saveFeed,
   deleteFeed,
   reorderFeeds,
+  issueShareLink,
+  getShareLinkStatus,
+  revokeShareLink,
 } from '../src/lib/api.js';
 
 const API = 'https://example.invalid/exec';
@@ -144,5 +147,26 @@ describe('フィード管理の action', () => {
     const fetcher = okFetcher({ ok: true });
     await reorderFeeds('tok', ['nhk', 'asahi'], { fetcher, apiUrl: API });
     expect(lastBody(fetcher)).toEqual({ action: 'reorderFeeds', sessionToken: 'tok', feedIds: ['nhk', 'asahi'] });
+  });
+});
+
+describe('共有リンクの action', () => {
+  it('issueShareLink は token と expiresAt を返す', async () => {
+    const fetcher = okFetcher({ ok: true, token: 'dummy-share-token', expiresAt: '2026-12-16T05:47:00.000Z' });
+    const data = await issueShareLink('tok', { fetcher, apiUrl: API });
+    expect(data.token).toBe('dummy-share-token');
+    expect(data.expiresAt).toBe('2026-12-16T05:47:00.000Z');
+    expect(lastBody(fetcher)).toEqual({ action: 'issueShareLink', sessionToken: 'tok' });
+  });
+  it('getShareLinkStatus', async () => {
+    const fetcher = okFetcher({ ok: true, active: true, expiresAt: '2026-12-16T05:47:00.000Z' });
+    const data = await getShareLinkStatus('tok', { fetcher, apiUrl: API });
+    expect(data.active).toBe(true);
+    expect(lastBody(fetcher)).toEqual({ action: 'getShareLinkStatus', sessionToken: 'tok' });
+  });
+  it('revokeShareLink', async () => {
+    const fetcher = okFetcher({ ok: true });
+    await revokeShareLink('tok', { fetcher, apiUrl: API });
+    expect(lastBody(fetcher)).toEqual({ action: 'revokeShareLink', sessionToken: 'tok' });
   });
 });
