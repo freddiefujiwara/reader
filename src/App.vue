@@ -381,9 +381,9 @@ async function reloadLocal() {
 // 実行中にもう一度呼ばれたら同じ Promise を返す (多重実行防止)。
 let refreshInFlight = null;
 
-// 管理でフィードを保存したかどうか。タイムラインへ戻るとき、実行中の
-// 背景更新があると保存前の一覧で上書きされる可能性があるため、完了後に
-// もう一度更新するための目印。
+// 管理でフィードを保存・削除したかどうか。タイムラインへ戻るとき、
+// 実行中の背景更新があると変更前の一覧で上書きされる可能性があるため、
+// 完了後にもう一度更新するための目印。
 let adminFeedsDirty = false;
 
 function refreshInBackground() {
@@ -1657,6 +1657,10 @@ async function onDeleteFeed(feed) {
   mgmtSavingId.value = feed.id;
   try {
     await deleteFeed(session.value.token, feed.id);
+    // 保存と同じ目印を立てる。削除前に始まった背景更新が実行中に
+    // タイムラインへ戻ると、その更新が削除前の一覧で完了して削除した
+    // フィードと記事がローカルに残るため、戻る際の追随更新で揃え直す。
+    adminFeedsDirty = true;
     mgmtFeeds.value = mgmtFeeds.value.filter((f) => f.id !== feed.id);
     if (formMode.value === 'edit' && formBase.value?.id === feed.id) {
       closeForm();
@@ -1669,6 +1673,7 @@ async function onDeleteFeed(feed) {
       expireSession();
     } else if (e.message === 'not_found') {
       // 既に消えていた場合は一覧からも落として整合させる。
+      adminFeedsDirty = true;
       mgmtFeeds.value = mgmtFeeds.value.filter((f) => f.id !== feed.id);
       confirmDeleteId.value = '';
       mgmtError.value = 'そのフィードは既に削除されています。';
