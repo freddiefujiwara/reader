@@ -35,6 +35,8 @@ jobs:
 
       - name: Build staging variant
         run: npm run build:staging
+        env:
+          VITE_URL_FETCH_TOKEN: ${{ secrets.URL_FETCH_TOKEN }}
 
       - name: Deploy staging preview to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
