@@ -139,6 +139,32 @@ async function seedAndMount(routePath) {
   app.mount(el);
 }
 
+// 記事の中身を指定して開く (既読混じりの絞り込み確認用)。
+async function seedAndMountArticles(routePath, articles) {
+  await saveLocalFeeds([{ ...FEED_A }, { ...FEED_B }]);
+  await putLocalArticles(articles);
+  window.history.pushState(null, '', routePath);
+  el = document.createElement('div');
+  document.body.appendChild(el);
+  app = createApp(App);
+  app.config.errorHandler = (err) => { errors.push(err); };
+  app.mount(el);
+}
+
+const filterTabs = () =>
+  [...el.querySelectorAll('[aria-label="表示切替"] button')];
+const activeFilterText = () =>
+  filterTabs().filter((b) => b.classList.contains('active')).map((b) => b.textContent.trim());
+
+// FEED_A に既読1件＋未読1件、FEED_B に未読1件。記事 ID は既存テストと
+// 同じものを上書きする (このファイルは DB を消さずに使い回すため、
+// 別 ID を足すと前テストの記事が残って混ざる)。
+const MIXED_ARTICLES = () => [
+  { ...rec('art-a', FEED_A.id, '記事A'), is_read: true, published_at: '2026-11-15T00:00:00.000Z' },
+  { ...rec('art-a2', FEED_A.id, '記事A2'), published_at: '2026-11-14T00:00:00.000Z' },
+  { ...rec('art-b', FEED_B.id, '記事B'), published_at: '2026-11-13T00:00:00.000Z' },
+];
+
 beforeEach(() => {
   errors = [];
   serverFeeds = [{ ...FEED_A }, { ...FEED_B }];
@@ -283,6 +309,77 @@ describe('操作に合わせた URL の書き換え', () => {
     expect(errors).toEqual([]);
     expect(articleTitles()).toEqual(['記事A', '記事B']);
     expect(categoryChips().some((b) => b.classList.contains('active'))).toBe(false);
+    await settleApp();
+  });
+});
+
+describe('/unread (未読のみ表示) のパーマリンク', () => {
+  it('/reader/すべて/<フィードID>/unread で開くと、そのフィードの未読だけが出る', async () => {
+    await seedAndMountArticles(`/reader/${enc('すべて')}/${FEED_A.id}/unread`, MIXED_ARTICLES());
+    await flushUntil(() => JSON.stringify(articleTitles()) === JSON.stringify(['記事A2']));
+    expect(errors).toEqual([]);
+    expect(articleTitles()).toEqual(['記事A2']);
+    expect(activeFilterText()).toEqual(['未読']);
+    // 開いた URL はそのまま (書き換えで履歴を汚さない)。
+    expect(path()).toBe(`/reader/${enc('すべて')}/${FEED_A.id}/unread`);
+    await settleApp();
+  });
+
+  it('/reader/unread で開くと、全フィードの未読だけが出る', async () => {
+    await seedAndMountArticles('/reader/unread', MIXED_ARTICLES());
+    await flushUntil(
+      () => JSON.stringify(articleTitles()) === JSON.stringify(['記事A2', '記事B'])
+    );
+    expect(errors).toEqual([]);
+    expect(articleTitles()).toEqual(['記事A2', '記事B']);
+    expect(activeFilterText()).toEqual(['未読']);
+    await settleApp();
+  });
+
+  it('未読のみから「すべて」へ切り替えると URL から /unread が消える', async () => {
+    await seedAndMountArticles(`/reader/${enc('すべて')}/${FEED_A.id}/unread`, MIXED_ARTICLES());
+    await flushUntil(() => JSON.stringify(articleTitles()) === JSON.stringify(['記事A2']));
+    findButton(el.querySelector('[aria-label="表示切替"]'), 'すべて').click();
+    await flushUntil(
+      () =>
+        JSON.stringify(articleTitles()) === JSON.stringify(['記事A', '記事A2']) &&
+        path() === `/reader/${enc('すべて')}/${FEED_A.id}`
+    );
+    expect(errors).toEqual([]);
+    expect(articleTitles()).toEqual(['記事A', '記事A2']);
+    expect(path()).toBe(`/reader/${enc('すべて')}/${FEED_A.id}`);
+    expect(activeFilterText()).toEqual(['すべて']);
+    await settleApp();
+  });
+
+  it('通常表示から「未読」を押すと URL に /unread が付く', async () => {
+    await seedAndMountArticles('/reader/', MIXED_ARTICLES());
+    await flushUntil(
+      () => JSON.stringify(articleTitles()) === JSON.stringify(['記事A', '記事A2', '記事B'])
+    );
+    findButton(el.querySelector('[aria-label="表示切替"]'), '未読').click();
+    await flushUntil(
+      () =>
+        JSON.stringify(articleTitles()) === JSON.stringify(['記事A2', '記事B']) &&
+        path() === `/reader/${enc('すべて')}/unread`
+    );
+    expect(errors).toEqual([]);
+    expect(articleTitles()).toEqual(['記事A2', '記事B']);
+    expect(path()).toBe(`/reader/${enc('すべて')}/unread`);
+    await settleApp();
+  });
+
+  it('popstate で /unread 付き URL の状態が画面へ反映される', async () => {
+    await seedAndMountArticles('/reader/', MIXED_ARTICLES());
+    await flushUntil(
+      () => JSON.stringify(articleTitles()) === JSON.stringify(['記事A', '記事A2', '記事B'])
+    );
+    window.history.pushState(null, '', `/reader/${enc('すべて')}/${FEED_A.id}/unread`);
+    window.dispatchEvent(new window.PopStateEvent('popstate'));
+    await flushUntil(() => JSON.stringify(articleTitles()) === JSON.stringify(['記事A2']));
+    expect(errors).toEqual([]);
+    expect(articleTitles()).toEqual(['記事A2']);
+    expect(activeFilterText()).toEqual(['未読']);
     await settleApp();
   });
 });

@@ -8,17 +8,24 @@
 //   /reader/すべて/<フィードID>      タイムライン (ジャンル無選択＋フィード)
 //   /reader/admin                   管理画面 (ジャンル無選択)
 //   /reader/admin/<ジャンル>        管理画面 (ジャンル選択)
+// タイムラインの末尾には未読のみ表示を表す '/unread' を付けられる:
+//   /reader/<ジャンル>/unread
+//   /reader/<ジャンル>/<フィードID>/unread
+//   /reader/すべて/unread、/reader/すべて/<フィードID>/unread
+//   /reader/unread                  ジャンル無選択＋未読のみ
 // ステージングはベースの直後に staging が入る (/reader/staging/...)。
 // フィードの指定はタイトルではなくフィード ID (URL の SHA-256 先頭
 // 16桁の16進文字列) で行う。タイトル変更に左右されず安定するため。
 //
 // 予約語: 'すべて' (ジャンル無選択の明示) と 'admin' (管理画面) は
 // ジャンル名として扱わない。'staging' もベース直後では環境の印に
-// なるため、ジャンル名には使えない。
+// なるため、ジャンル名には使えない。'unread' も末尾 (および先頭) の
+// 印として優先し、ジャンル名には使えない。
 
 export const ALL_SEGMENT = 'すべて';
 export const ADMIN_SEGMENT = 'admin';
 export const STAGING_SEGMENT = 'staging';
+export const UNREAD_SEGMENT = 'unread';
 
 // フィード ID の形 (feedHash.js が作る16桁の小文字16進文字列)。
 const FEED_ID_PATTERN = /^[0-9a-f]{16}$/;
@@ -70,12 +77,30 @@ export function parseRoute(segments, feeds) {
       view: 'feeds',
       category: knownCategory(category) ? category : '',
       feedId: '',
+      unread: false,
     };
   }
 
-  const genre = list[0] || '';
+  // タイムライン: 末尾の 'unread' は未読のみ表示の印 (予約語として
+  // ジャンル名には扱わない)。'/reader/unread' や
+  // '/reader/unread/<フィードID>' のように先頭に来た場合も同じ印
+  // として読み、ジャンル無選択として扱う。
+  const rest = list.slice();
+  let unread = false;
+  if (rest[rest.length - 1] === UNREAD_SEGMENT) {
+    unread = true;
+    rest.pop();
+  }
+  let genre = '';
+  let feedSegment = '';
+  if (rest[0] === UNREAD_SEGMENT) {
+    unread = true;
+    feedSegment = rest[1] || '';
+  } else {
+    genre = rest[0] || '';
+    feedSegment = rest[1] || '';
+  }
   const category = genre === ALL_SEGMENT ? '' : genre;
-  const feedSegment = list[1] || '';
   const feedId = FEED_ID_PATTERN.test(feedSegment) ? feedSegment : '';
   return {
     staging,
@@ -83,6 +108,7 @@ export function parseRoute(segments, feeds) {
     category: knownCategory(category) ? category : '',
     feedId:
       feedId && known && !known.some((f) => f.id === feedId) ? '' : feedId,
+    unread,
   };
 }
 
@@ -103,8 +129,13 @@ export function buildRoutePath(route) {
   }
 
   const feedId = FEED_ID_PATTERN.test(route?.feedId || '') ? route.feedId : '';
-  if (!category && !feedId) return `/${base.join('/')}/`;
+  // 未読のみ表示は末尾の '/unread' で表す (管理画面には付けない)。
+  // ジャンル・フィード無選択で未読のみのときは、印の置き場所として
+  // 'すべて' を明示した形 (/reader/すべて/unread) を正規形にする。
+  const unread = route?.unread === true;
+  if (!category && !feedId && !unread) return `/${base.join('/')}/`;
   const segments = [...base, encodeURIComponent(category || ALL_SEGMENT)];
   if (feedId) segments.push(feedId);
+  if (unread) segments.push(UNREAD_SEGMENT);
   return `/${segments.join('/')}`;
 }
