@@ -217,6 +217,14 @@ describe('ヘッダーのブランド (ホームボタン)', () => {
     expect(scrollToCalls.at(-1)).toMatchObject({ top: 0 });
   });
 
+  it('管理画面に「← タイムラインに戻る」は無く、戻る手段はブランドだけ', async () => {
+    await mountAdmin();
+    expect(errors).toEqual([]);
+    expect(findButton(el, '← タイムラインに戻る')).toBeUndefined();
+    expect(brand(), 'ブランドは常に出ている').toBeTruthy();
+    expect(findButton(el, 'フィードを追加'), '追加ボタンは残る').toBeTruthy();
+  });
+
   it('タイムライン表示中にブランドを押すと、先頭へスクロールするだけ', async () => {
     el = document.createElement('div');
     document.body.appendChild(el);
@@ -291,7 +299,9 @@ describe('管理画面のジャンル絞り込み', () => {
     findButton(genreTablist(), 'ポッドキャスト').click();
     await flush();
     expect(el.querySelectorAll('.feed-card').length).toBe(2);
-    findButton(el, '← タイムラインに戻る').click();
+    // 戻る手段はヘッダーのブランド (ホームボタン) のみ。
+    expect(findButton(el, '← タイムラインに戻る')).toBeUndefined();
+    el.querySelector('.brand').click();
     await flush();
     findButton(el, '管理').click();
     await flush();

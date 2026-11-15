@@ -1333,7 +1333,7 @@ onMounted(async () => {
 
         <template v-else>
           <div class="feed-admin-head">
-            <button class="ghost" type="button" @click="backToTimeline">← タイムラインに戻る</button>
+            <!-- タイムラインへはヘッダーのブランド (ホームボタン) で戻る。 -->
             <button v-if="!formMode" class="primary" type="button" @click="startAddFeed">フィードを追加</button>
           </div>
 
