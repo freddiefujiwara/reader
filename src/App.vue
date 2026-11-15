@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { API_URL, GOOGLE_CLIENT_ID } from './config.js';
 import {
   deleteFeed,
@@ -62,6 +62,7 @@ import {
   setLocalMeta,
 } from './lib/localDb.js';
 import { normalizeFeedIds } from './lib/feedHash.js';
+import { buildRoutePath, parseRoute, routeSegmentsFromPathname } from './lib/route.js';
 import { fetchAllFeeds, fetchFeedXml, fetchOneFeed } from './lib/feedFetch.js';
 import { createScrollRestorer } from './lib/scrollRestore.js';
 import { formatPublishedAt } from './lib/format.js';
@@ -227,6 +228,92 @@ watch(mgmtFeeds, (feeds) => {
     queueAdminCategoryClearCheck();
   }
 });
+
+// フィード選択が実在しないフィードを指していたら解除する (カテゴリの
+// 自動解除と同じ考え方)。パーマリンクで開いた直後は一覧がまだ無く
+// 検証できないため、一覧が揃った時点でここで落とす。削除された
+// フィードへの選択が残ると、一覧が空のまま手で解除できなくなる。
+watch(
+  () => state.value.feeds,
+  (feeds) => {
+    const feedId = state.value.feedId;
+    if (!feedId || !feeds.length) return;
+    if (!feeds.some((f) => f.id === feedId)) {
+      state.value = { ...state.value, feedId: '' };
+    }
+  }
+);
+
+/* ---- URL パーマリンク (パス) と画面状態の同期 ---- */
+
+// 起動時の URL が指す状態 (route.js 参照)。アプリのベース配下で
+// 開かれていない場合 (テスト環境など) は bootSegments が null に
+// なり、ルーティング自体を無効にする。
+// ここではフィード一覧がまだ無いため、未知ジャンル・未知フィードの
+// 検証はせずに初期状態として取り込む。検証は一覧が揃った後の
+// watcher (カテゴリ自動解除・上のフィード選択解除) が担う。
+// 保存済みの表示状態より URL を優先する (このアプリは絞り込みを
+// 端末へ保存していないため、既定値より優先という意味になる)。
+const bootSegments = routeSegmentsFromPathname(window.location.pathname);
+const routingEnabled = bootSegments !== null;
+const initialRoute = routingEnabled ? parseRoute(bootSegments) : null;
+let routeStaging = initialRoute ? initialRoute.staging : false;
+
+// URL が指す状態を画面へ反映する。管理画面はオーナーのみ
+// (openFeedAdmin と同じ制限。読み取り専用ではタイムラインのまま)。
+function applyRoute(route) {
+  if (!route) return;
+  routeStaging = route.staging;
+  if (route.view === 'feeds') {
+    if (!isOwner.value) return;
+    openFeedAdmin();
+    adminCategory.value = route.category;
+    return;
+  }
+  if (view.value !== 'timeline') {
+    backToTimeline();
+  }
+  state.value = { ...state.value, category: route.category, feedId: route.feedId };
+  displayLimit.value = DISPLAY_LIMIT;
+}
+
+if (initialRoute) applyRoute(initialRoute);
+
+// 画面状態から現在の URL パスを組み立てる (管理画面では管理側の
+// ジャンル、タイムラインではカテゴリ＋フィード選択を見る)。
+function routePathForState() {
+  return buildRoutePath({
+    staging: routeStaging,
+    view: view.value,
+    category: view.value === 'feeds' ? adminCategory.value : state.value.category,
+    feedId: view.value === 'feeds' ? '' : state.value.feedId,
+  });
+}
+
+// 状態が変わったら URL を書き換える。コピーした URL を開けば
+// いまの表示が再現できる状態を保つ。URL から反映した変更は、
+// 組み立てたパスが現在のパスと一致するため書き換えが起きない。
+// ハッシュ (#share= 等) は引き継ぐ。
+watch(
+  [view, adminCategory, () => state.value.category, () => state.value.feedId],
+  () => {
+    if (!routingEnabled) return;
+    const path = routePathForState();
+    if (path === window.location.pathname) return;
+    history.pushState(null, '', path + window.location.search + window.location.hash);
+  }
+);
+
+// ブラウザの戻る・進むでは、URL が指す状態を画面へ反映し直す。
+// 一覧が揃っていれば parseRoute の実在チェックも効く。
+function onPopState() {
+  if (!routingEnabled) return;
+  const segments = routeSegmentsFromPathname(window.location.pathname);
+  if (!segments) return;
+  applyRoute(parseRoute(segments, state.value.feeds));
+}
+window.addEventListener('popstate', onPopState);
+onUnmounted(() => window.removeEventListener('popstate', onPopState));
 
 const FILTERS = [
   { key: 'all', label: 'すべて' },
@@ -1508,6 +1595,8 @@ async function onCredential(response) {
     const data = await exchangeSession(response.credential);
     adoptSession(data);
     state.value = createListState();
+    // 状態のリセットで消えた分を、開いた URL の指定から戻す。
+    applyRoute(initialRoute);
     await initTimeline();
   } catch (e) {
     bootError.value = `サインインできませんでした（${e.message}）。許可されたアカウントでお試しください。`;
