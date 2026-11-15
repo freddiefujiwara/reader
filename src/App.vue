@@ -19,6 +19,7 @@ import {
   genreSuggestions,
   dragInsertIndex,
   dragRowPitch,
+  isFeedFormDirty,
   moveItemToIndex,
   createOrderSender,
   planFeedAdd,
@@ -134,6 +135,11 @@ const formFetching = ref(false);
 // 短くなり、閉じるとブラウザの位置復元で一覧の最下部へ飛ぶため、開く前に
 // 覚えておき、閉じて一覧が戻った後に復元する。
 const formScroll = createScrollRestorer(window);
+// 編集フォームの内容が、開いた時点のフィードから変わっているか。
+// 保存ボタンは変更があるときだけ押せる (未変更の保存は何も生まない)。
+// 追加フォームでは formBase が無いため常に「変更あり」になるが、
+// 非活性の条件は編集フォームだけに効かせる。
+const formDirty = computed(() => isFeedFormDirty(formBase.value, form.value));
 
 const isReadonly = computed(() => session.value?.role === 'readonly');
 const isOwner = computed(() => session.value?.role === 'owner');
@@ -1407,6 +1413,9 @@ async function submitFeedForm() {
   if (formSaving.value || formFetching.value) return;
   // 編集はジャンルと有効/無効だけ (ID・タイトル・URL は変更できない)。
   if (formMode.value === 'edit') {
+    // 未変更では保存しない (ボタンも非活性だが、入力欄からの
+    // Enter 送信でも同じにそろえる)。
+    if (!formDirty.value) return;
     await saveFeedForm(buildSaveFeedPayload(form.value, formBase.value));
     return;
   }
@@ -1736,7 +1745,7 @@ onMounted(async () => {
             </div>
             <p v-if="formError" class="error">{{ formError }}</p>
             <div class="form-actions">
-              <button class="primary" type="submit" :disabled="formSaving || formFetching">
+              <button class="primary" type="submit" :disabled="formSaving || formFetching || (formMode === 'edit' && !formDirty)">
                 {{ formFetching ? '取得中...' : formSaving ? '保存中...' : '保存' }}
               </button>
               <button class="ghost" type="button" :disabled="formSaving || formFetching" @click="cancelForm">キャンセル</button>
