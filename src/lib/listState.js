@@ -47,6 +47,13 @@ export function visibleArticles(state) {
   return out;
 }
 
+// フィード1件のカテゴリだけを差し替えた新しい配列を返す (元の配列は
+// 壊さない)。管理画面でのジャンル保存を、タイムライン側の共有状態へ
+// 即座に反映するために使う。
+export function patchFeedCategory(feeds, feedId, category) {
+  return (feeds || []).map((f) => (f.id === feedId ? { ...f, category } : f));
+}
+
 // 1件の既読を差し替えた新しい articles を返す (元の配列は壊さない)。
 export function patchArticle(articles, articleId, patch) {
   return articles.map((a) => {

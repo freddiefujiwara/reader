@@ -1,0 +1,212 @@
+// 管理画面でジャンルを編集しても、タイムラインに戻ると反映されて
+// いない不具合の回帰テスト。
+//
+// タイムラインのジャンルは、メモリ内の状態と IndexedDB のフィード
+// キャッシュから作られる。背景更新が共有状態を読み直すのは全フィード
+// 再取得の完了後で、しかも実行中の更新があると新しい取得は始まら
+// ないため、保存前に始まった更新が残っていると、戻っても古い
+// ジャンルのままになっていた (以前はヘッダーがフルリロードだった
+// ため表面化しなかった)。
+//
+// ここでは「初回の背景更新が保存をまたいで実行中のまま」という
+// 実機の状態を再現し、(1) 保存した時点で共有状態へ反映されること、
+// (2) 実行中だった更新が旧一覧で上書きしても、戻る際の追随更新で
+// 最新に揃い直すこと、を固定する。
+import 'fake-indexeddb/auto';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { createApp, nextTick } from 'vue';
+
+const FEED_A = {
+  id: 'b81e59da11f890d2', // https://feeds.rebuild.fm/rebuildfm のハッシュID
+  title: 'Rebuild',
+  url: 'https://feeds.rebuild.fm/rebuildfm',
+  category: 'ポッドキャスト',
+  isPrivate: false,
+  lastStatus: '200',
+  lastError: '',
+  lastFetchedAt: '2026-11-15T01:00:00.000Z',
+  unreadCount: 1,
+};
+const FEED_B = {
+  id: '35797c975382389f', // https://a.ze.gs/x.freddie.xml のハッシュID
+  title: 'X freddie',
+  url: 'https://a.ze.gs/x.freddie.xml',
+  category: 'private',
+  isPrivate: true,
+  lastStatus: '200',
+  lastError: '',
+  lastFetchedAt: '2026-11-15T01:00:00.000Z',
+  unreadCount: 1,
+};
+
+// サーバー側の正本。saveFeed で書き換わり、list 系はここから返す。
+let serverFeeds = [];
+// 初回の listArticles を保留するかどうか (実行中の背景更新の再現)。
+let holdList = false;
+let listArticlesCalls = 0;
+let releaseHeldList = null;
+
+vi.mock('../src/lib/api.js', () => ({
+  deleteFeed: vi.fn(async () => ({ ok: true })),
+  exchangeSession: vi.fn(async () => ({ ok: true })),
+  exchangeShare: vi.fn(async () => ({ ok: true })),
+  listArticles: vi.fn(() => {
+    listArticlesCalls += 1;
+    if (holdList && listArticlesCalls === 1) {
+      // 呼び出し時点 (保存前) の一覧を捕まえ、解放されるまで返さない。
+      const snapshot = serverFeeds.map((f) => ({ ...f }));
+      return new Promise((resolve) => {
+        releaseHeldList = () => resolve({ ok: true, feeds: snapshot, articles: [] });
+      });
+    }
+    return Promise.resolve({ ok: true, feeds: serverFeeds.map((f) => ({ ...f })), articles: [] });
+  }),
+  listFeeds: vi.fn(async () => ({ ok: true, feeds: serverFeeds.map((f) => ({ ...f })) })),
+  reorderFeeds: vi.fn(async () => ({ ok: true })),
+  saveFeed: vi.fn(async (token, payload) => {
+    serverFeeds = serverFeeds.map((f) => (f.id === payload.id ? { ...f, ...payload } : f));
+    return { ok: true, feed: serverFeeds.find((f) => f.id === payload.id) };
+  }),
+}));
+
+vi.mock('../src/lib/feedFetch.js', () => ({
+  fetchAllFeeds: vi.fn(async () => []),
+  fetchFeedXml: vi.fn(async () => ''),
+}));
+
+// ローカルでは API_URL はプレースホルダで空になり、起動処理が
+// 止まってしまうため、値が入った形に差し替える (appPlayer と同様)。
+vi.mock('../src/config.js', () => ({
+  API_URL: 'https://example.com/exec',
+  GOOGLE_CLIENT_ID: 'test-client-id',
+}));
+
+import App from '../src/App.vue';
+import { loadLocalFeeds, saveLocalFeeds, putLocalArticles } from '../src/lib/localDb.js';
+
+const rec = (id, feedId, title) => ({
+  id,
+  feed_id: feedId,
+  title,
+  link: `https://example.com/${id}`,
+  published_at: '2026-11-14T00:00:00.000Z',
+  fetched_at: '2026-11-15T00:00:00.000Z',
+  summary: '',
+  author: '',
+  audio_url: '',
+  duration_sec: 0,
+  play_pos: 0,
+  is_read: false,
+  read_at: '',
+});
+
+let app = null;
+let el = null;
+let errors = [];
+
+const flush = async (rounds = 8) => {
+  for (let i = 0; i < rounds; i += 1) {
+    await new Promise((r) => setTimeout(r, 0));
+    await nextTick();
+  }
+};
+
+function findButton(root, text) {
+  return [...root.querySelectorAll('button')].find((b) => b.textContent.trim() === text);
+}
+
+const categoryChips = () =>
+  [...el.querySelectorAll('[aria-label="カテゴリで絞り込み"] .chip')].map((b) => b.textContent.trim());
+const articleTitles = () =>
+  [...el.querySelectorAll('.article-card .article-title')].map((n) => n.textContent.trim());
+
+async function seedAndMount() {
+  await saveLocalFeeds([{ ...FEED_A }, { ...FEED_B }]);
+  await putLocalArticles([rec('art-a', FEED_A.id, '記事A'), rec('art-b', FEED_B.id, '記事B')]);
+  el = document.createElement('div');
+  document.body.appendChild(el);
+  app = createApp(App);
+  app.config.errorHandler = (err) => { errors.push(err); };
+  app.mount(el);
+  await flush();
+  expect(articleTitles(), 'タイムラインに記事が2件出る').toEqual(['記事A', '記事B']);
+  expect(categoryChips()).toEqual(['ポッドキャスト', 'private']);
+}
+
+async function editFirstFeedCategory(category) {
+  findButton(el, '管理').click();
+  await flush();
+  const card = el.querySelectorAll('.feed-card')[0];
+  findButton(card, '編集').click();
+  await flush();
+  const form = el.querySelector('.feed-form');
+  const input = form.querySelector('#feed-category');
+  input.value = category;
+  input.dispatchEvent(new window.Event('input', { bubbles: true }));
+  form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await flush();
+  expect(el.querySelector('.feed-form'), '保存後はフォームが閉じる').toBeNull();
+}
+
+beforeEach(() => {
+  errors = [];
+  serverFeeds = [{ ...FEED_A }, { ...FEED_B }];
+  holdList = false;
+  listArticlesCalls = 0;
+  releaseHeldList = null;
+  document.body.innerHTML = '';
+  window.scrollTo = () => {};
+  localStorage.clear();
+  localStorage.setItem(
+    'reader:session:v1',
+    JSON.stringify({ token: 'tok', role: 'owner', expiresAt: null })
+  );
+  vi.clearAllMocks();
+});
+
+afterEach(() => {
+  if (app) app.unmount();
+  app = null;
+  el = null;
+});
+
+describe('管理でのジャンル編集のタイムライン反映', () => {
+  it('保存した時点で、共有状態 (IndexedDB のフィードキャッシュ) へ反映される', async () => {
+    await seedAndMount();
+    await editFirstFeedCategory('新ジャンル');
+    expect(errors).toEqual([]);
+    // まだ管理画面にいる時点で、タイムライン側のキャッシュも新しい
+    // ジャンルになっている (戻った後の読み直しで古くならない)。
+    const cached = await loadLocalFeeds();
+    expect(cached.find((f) => f.id === FEED_A.id).category).toBe('新ジャンル');
+    // タイムラインへ戻ると、新しいジャンルのチップで絞れる。
+    el.querySelector('.brand').click();
+    await flush();
+    expect(errors).toEqual([]);
+    expect(categoryChips()).toEqual(['新ジャンル', 'private']);
+    findButton(el.querySelector('[aria-label="カテゴリで絞り込み"]'), '新ジャンル').click();
+    await flush();
+    expect(articleTitles()).toEqual(['記事A']);
+  });
+
+  it('保存前に始まった背景更新が実行中でも、戻れば新しいジャンルになり、旧一覧で上書きされても揃い直す', async () => {
+    holdList = true; // 初回の背景更新を保存後まで実行中に保つ
+    await seedAndMount();
+    await editFirstFeedCategory('新ジャンル');
+    el.querySelector('.brand').click();
+    await flush();
+    expect(errors).toEqual([]);
+    // 実行中の更新は保存前の一覧しか持っていないが、保存時の反映で
+    // タイムラインは既に新しいジャンルになっている。
+    expect(categoryChips()).toEqual(['新ジャンル', 'private']);
+    // 実行中だった更新が終わる (旧一覧でキャッシュと状態が上書き
+    // される) と、戻る際に予約した追随更新が最新の一覧を取り直す。
+    releaseHeldList();
+    await flush(14);
+    expect(errors).toEqual([]);
+    expect(listArticlesCalls).toBeGreaterThanOrEqual(2);
+    expect(categoryChips()).toEqual(['新ジャンル', 'private']);
+    const cached = await loadLocalFeeds();
+    expect(cached.find((f) => f.id === FEED_A.id).category).toBe('新ジャンル');
+  });
+});

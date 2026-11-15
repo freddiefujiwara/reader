@@ -3,6 +3,7 @@ import {
   createListState,
   visibleArticles,
   patchArticle,
+  patchFeedCategory,
   withUnreadCounts,
   sortArticlesDesc,
   markAllReadInList,
@@ -202,5 +203,36 @@ describe('feedDisplayName', () => {
   it('URL も解釈できなければ ID を出す', () => {
     expect(feedDisplayName({ id: 'abc123', title: '', url: 'not-a-url' })).toBe('abc123');
     expect(feedDisplayName(null)).toBe('');
+  });
+});
+
+describe('patchFeedCategory', () => {
+  const FEEDS_WITH_CAT = [
+    { id: 'a', title: 'A', category: 'ニュース' },
+    { id: 'b', title: 'B', category: '技術' },
+  ];
+
+  it('対象フィードのカテゴリだけを差し替え、元の配列は壊さない', () => {
+    const out = patchFeedCategory(FEEDS_WITH_CAT, 'a', '川口');
+    expect(out.map((f) => [f.id, f.category])).toEqual([
+      ['a', '川口'],
+      ['b', '技術'],
+    ]);
+    expect(FEEDS_WITH_CAT[0].category).toBe('ニュース');
+    expect(out[1]).toBe(FEEDS_WITH_CAT[1]);
+  });
+
+  it('対象が無ければ中身は同じ (カテゴリは付けない)', () => {
+    const out = patchFeedCategory(FEEDS_WITH_CAT, 'missing', '川口');
+    expect(out.map((f) => [f.id, f.category])).toEqual([
+      ['a', 'ニュース'],
+      ['b', '技術'],
+    ]);
+  });
+
+  it('空カテゴリへの変更 (ジャンル解除) もそのまま反映する', () => {
+    const out = patchFeedCategory(FEEDS_WITH_CAT, 'b', '');
+    expect(out[1].category).toBe('');
+    expect(feedCategories(out)).toEqual(['ニュース']);
   });
 });

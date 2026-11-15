@@ -31,6 +31,7 @@ import {
   markAllReadInList,
   markAllReadScope,
   patchArticle,
+  patchFeedCategory,
   sortArticlesDesc,
   visibleArticles,
   visibleFeedChips,
@@ -123,6 +124,10 @@ const formBase = ref(null);
 const formError = ref('');
 const formSaving = ref(false);
 const formFetching = ref(false);
+// 管理でフィードを保存したかどうか。タイムラインへ戻るとき、実行中の
+// 背景更新があると保存前の一覧で上書きされる可能性があるため、完了後に
+// もう一度更新するための目印。
+let adminFeedsDirty = false;
 
 const isReadonly = computed(() => session.value?.role === 'readonly');
 const isOwner = computed(() => session.value?.role === 'owner');
@@ -950,7 +955,15 @@ async function backToTimeline() {
   // 管理で変わったフィード構成をタイムラインへ反映するため、並び替え保存の
   // 完了を待ってから背景更新 (フィード一覧の取り直し＋再取得) を行う。
   await waitReorderSettled();
-  refreshInBackground();
+  // 既に背景更新が実行中だと、新しい取得は始まらず、その更新は管理での
+  // 保存より前に取り始めた一覧で共有状態を上書きし直す。保存があった
+  // 場合は、その更新の完了後にもう一度更新して最新の一覧で揃え直す。
+  const wasInFlight = refreshInFlight !== null;
+  const run = refreshInBackground();
+  if (adminFeedsDirty) {
+    adminFeedsDirty = false;
+    if (wasInFlight) run.then(() => refreshInBackground(), () => refreshInBackground());
+  }
 }
 
 const orderSender = createOrderSender((ids) => reorderFeeds(session.value.token, ids));
@@ -1055,14 +1068,36 @@ function closeForm() {
   formError.value = '';
 }
 
+// 管理で保存したフィードのジャンルを、タイムライン側の共有状態
+// (メモリ内の state と IndexedDB のフィードキャッシュ) へ即座に
+// 反映する。タイムラインのジャンルチップ・絞り込みはこの共有状態
+// から作られるが、背景更新が状態を読み直すのは全フィード再取得の
+// 完了後で、実行中の更新があると新しい取得自体も始まらないため、
+// 保存だけではタイムラインに戻っても古いジャンルのままになる。
+// サーバーの一覧が正本なので、次回の背景更新で置き換わる
+// (これはそれまでの繋ぎ)。対象は編集 (ID 付きの保存) のみで、
+// 追加したフィードは従来どおり次回の背景更新で現れる。
+async function reflectSavedFeedToTimeline(payload) {
+  const id = payload?.id;
+  if (!id) return;
+  const category = String(payload.category || '');
+  state.value = { ...state.value, feeds: patchFeedCategory(state.value.feeds, id, category) };
+  const cached = await loadLocalFeeds();
+  if (cached.some((f) => f.id === id)) {
+    await saveLocalFeeds(patchFeedCategory(cached, id, category));
+  }
+}
+
 // フォームの保存本体 (追加・編集共通)。成功したらフォームを閉じて
 // 一覧を取り直す。
 async function saveFeedForm(payload) {
   formSaving.value = true;
   try {
     await saveFeed(session.value.token, payload);
+    adminFeedsDirty = true;
     closeForm();
     await loadFeeds();
+    await reflectSavedFeedToTimeline(payload);
   } catch (e) {
     if (e.message === 'unauthorized') expireSession();
     else if (e.message === 'invalid') formError.value = e.serverMessage || '入力内容を確認してください。';
