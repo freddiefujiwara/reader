@@ -186,6 +186,33 @@ export function reachedTrueEnd(displayPos, trueSec) {
   return displayPos >= trueSec - 0.3;
 }
 
+/* ---- 終端停滞の検出 (ウォッチドッグ) ----
+   iOS Safari が fMP4 の終端で 'ended' を発火しないことがある。その
+   場合は timeupdate 自体も止まるため、reachedTrueEnd のような
+   timeupdate 駆動の判定は届かない。インターバル駆動の監視 (App.vue
+   側) が要素の currentTime の進みを数え、終端付近で止まったままなら
+   終了とみなす。判定材料はこの純粋関数に寄せる。 */
+
+// ウォッチドッグの監視間隔 (ミリ秒)。
+export const END_STALL_WATCH_INTERVAL_MS = 2000;
+// 表示位置が実効終端の残りこの秒数以内にあれば「終端付近」。
+export const END_STALL_WINDOW_SEC = 1;
+// 要素の currentTime がこの秒数以上まったく進まなければ「停滞」。
+// インターバルが2秒のため、実際の検出は終端到達から約4秒になる。
+export const END_STALL_FROZEN_SEC = 3;
+
+// 終端付近に駐留し、currentTime が END_STALL_FROZEN_SEC 秒以上
+// 進んでいないか。実効終端 (effectiveDuration) は表示スケールの
+// 全長 (表示位置と同じスケールで渡す)。長さ不明・位置が 0 以下・
+// 停滞時間が不明なら false (従来どおり 'ended' を待つ)。
+export function isEndStalled(displayPos, effectiveDuration, frozenForSec) {
+  if (!Number.isFinite(effectiveDuration) || effectiveDuration <= 0) return false;
+  if (!Number.isFinite(displayPos) || displayPos <= 0) return false;
+  if (!Number.isFinite(frozenForSec)) return false;
+  return displayPos >= effectiveDuration - END_STALL_WINDOW_SEC
+    && frozenForSec >= END_STALL_FROZEN_SEC;
+}
+
 /* ---- 再生モードの端末保存 (セッションキーと同じ環境分け) ---- */
 
 export function playModeKey(env) {
