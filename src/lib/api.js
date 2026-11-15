@@ -84,3 +84,23 @@ export function deleteFeed(sessionToken, feedId, opts) {
 export function reorderFeeds(sessionToken, feedIds, opts) {
   return postJson({ action: 'reorderFeeds', sessionToken, feedIds }, opts);
 }
+
+// 共有リンク (マジックリンク) の発行 (オーナーセッションのみ)。
+// リンクは30日有効で、発行するとそれまでのリンクは無効になる。
+// -> { ok, token, expiresAt } (token は平文。この応答でしか得られない)
+export function issueShareLink(sessionToken, opts) {
+  return postJson({ action: 'issueShareLink', sessionToken }, opts);
+}
+
+// 共有リンクの状態 (オーナーセッションのみ)。サーバーはトークンの
+// ハッシュしか持たないため、ここで分かるのは有効かどうかと期限だけ。
+// -> { ok, active, expiresAt }
+export function getShareLinkStatus(sessionToken, opts) {
+  return postJson({ action: 'getShareLinkStatus', sessionToken }, opts);
+}
+
+// 共有リンクの無効化 (オーナーセッションのみ)。
+// -> { ok }
+export function revokeShareLink(sessionToken, opts) {
+  return postJson({ action: 'revokeShareLink', sessionToken }, opts);
+}
