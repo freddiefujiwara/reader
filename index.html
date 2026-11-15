@@ -15,6 +15,29 @@
     <meta property="og:description" content="登録フィードをまとめて読むWeb版RSSリーダー。開いたときに最新記事を取りに行き、既読は端末に保存します。" />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://freddiefujiwara.com/reader/" />
+    <script>
+      // spa-github-pages 方式の復元: 404.html が深リンクを
+      // "/reader/?/<パス>" の形へ畳んで寄せてくるので、アプリが
+      // 起動する前に元のパスへ戻す (履歴は replaceState で置き換え、
+      // 余分な履歴を残さない)。ハッシュはそのまま残す。
+      (function () {
+        var l = window.location;
+        if (l.search[1] === '/') {
+          var decoded = l.search
+            .slice(1)
+            .split('&')
+            .map(function (s) {
+              return s.replace(/~and~/g, '&');
+            })
+            .join('?');
+          window.history.replaceState(
+            null,
+            null,
+            l.pathname.slice(0, -1) + decoded + l.hash
+          );
+        }
+      })();
+    </script>
     <script src="https://accounts.google.com/gsi/client" async defer></script>
   </head>
   <body>

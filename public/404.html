@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <title>リーダー｜藤原史和</title>
+    <script>
+      // spa-github-pages 方式の深リンク受け。GitHub Pages は存在しない
+      // パスへこの 404.html を返すので、パスをクエリ (?/<パス>) へ
+      // 畳んでアプリの入り口へ送り直し、index.html 側のスクリプトで
+      // 元のパスへ復元する。
+      // 残すセグメント数: 通常は先頭の 'reader' だけ。2番目が
+      // 'staging' のときは2つ残す。1つだけだとステージングの深リンク
+      // が本番アプリへ書き換わってしまう (blog で踏んだ既知の落とし穴)。
+      // ハッシュ (#share=... 等) はそのまま引き継ぐ。
+      (function () {
+        var l = window.location;
+        var segments = l.pathname.split('/').filter(function (s) {
+          return s !== '';
+        });
+        if (segments[0] !== 'reader') {
+          l.replace('/reader/' + l.hash);
+          return;
+        }
+        var keep = segments[1] === 'staging' ? 2 : 1;
+        var base = '/' + segments.slice(0, keep).join('/') + '/';
+        var rest = segments
+          .slice(keep)
+          .join('/')
+          .replace(/&/g, '~and~');
+        if (!rest) {
+          l.replace(base + l.hash);
+          return;
+        }
+        var search = l.search
+          ? '&' + l.search.slice(1).replace(/&/g, '~and~')
+          : '';
+        l.replace(base + '?/' + rest + search + l.hash);
+      })();
+    </script>
+  </head>
+  <body></body>
+</html>
