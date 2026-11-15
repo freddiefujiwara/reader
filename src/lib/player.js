@@ -193,8 +193,10 @@ export function reachedTrueEnd(displayPos, trueSec) {
    側) が要素の currentTime の進みを数え、終端付近で止まったままなら
    終了とみなす。判定材料はこの純粋関数に寄せる。 */
 
-// ウォッチドッグの監視間隔 (ミリ秒)。
-export const END_STALL_WATCH_INTERVAL_MS = 1000;
+// ウォッチドッグの監視間隔 (ミリ秒)。バッファ基準の経路が駐留から
+// 約1秒で発火できるよう、1秒より細かく刻む。表示位置ベースの経路の
+// 判定は実時間 (秒) で行うため、間隔を細かくしても意味は変わらない。
+export const END_STALL_WATCH_INTERVAL_MS = 500;
 // 表示位置が実効終端の残りこの秒数以内にあれば「終端付近」。
 // 終端の少し手前で駐留するケースも拾うため余裕を持たせている
 // (通常再生の最終数秒は位置が進み続けるので誤発火しない)。
@@ -204,7 +206,7 @@ export const END_STALL_WINDOW_SEC = 5;
 // よりはるかに遅い微小な前進を、進みとして数えないための下限。
 export const END_STALL_PROGRESS_EPSILON_SEC = 0.05;
 // 「前進していない」状態がこの秒数以上続いたら「停滞」。
-// インターバルが1秒のため、実際の検出は駐留から約1〜2秒になる。
+// 監視間隔が 0.5 秒のため、実際の検出は駐留から約1〜1.5秒になる。
 export const END_STALL_FROZEN_SEC = 1;
 
 // 終端付近に駐留し、「前進していない」状態が END_STALL_FROZEN_SEC
@@ -219,6 +221,57 @@ export function isEndStalled(displayPos, effectiveDuration, frozenForSec) {
   if (!Number.isFinite(frozenForSec)) return false;
   return displayPos >= effectiveDuration - END_STALL_WINDOW_SEC
     && frozenForSec >= END_STALL_FROZEN_SEC;
+}
+
+/* ---- 終端停滞の検出 (バッファ基準) ----
+   表示位置ベースの判定は、実機では終端駐留が数十秒続くケースを
+   捕まえきれなかった (PR #48 まで調整を重ねても再現が続いた)。
+   こちらは要素自身のタイムラインだけで完結する判定: メディア全体
+   がダウンロード済み (buffered の最終区間の end が duration の
+   間際まで届いている) で、再生位置がその末尾にいて、約1秒の
+   正味前進がほぼ無いなら、残りのデータはもう来ないのだから
+   終端で止まっているとみなす。表示位置・時間モデル・durationSec
+   には一切依存しない。全量バッファされていない場合 (大容量の
+   ポッドキャストや低速回線) はこの判定は決して真にならず、
+   'ended' イベントと表示位置ベースの判定が受け持つ。 */
+
+// buffered の最終区間の end が duration の残りこの秒数以内まで
+// 届いていれば「全量バッファ済み」とみなす。
+export const END_BUFFER_TAIL_GAP_SEC = 0.5;
+// currentTime が buffered の末尾の残りこの秒数以内にあれば
+// 「データの末尾にいる」とみなす。
+export const END_BUFFER_NEAR_SEC = 0.5;
+// 正味前進を測るルックバックの幅 (秒)。監視間隔 0.5 秒と合わせ、
+// 駐留から約1秒 (最大でも 1.5 秒程度) で発火する。
+export const END_BUFFER_LOOKBACK_SEC = 1;
+// ルックバック幅での前進がこの秒数未満なら「停滞」。終端付近で
+// currentTime が微振動しても、正味前進はほぼ 0 になるため、
+// tick ごとのリセット方式と違って誤って数え直しにならない。
+export const END_BUFFER_MIN_PROGRESS_SEC = 0.1;
+
+// TimeRanges (audio.buffered) の最終区間の end。区間が無い・
+// 値が不正なら null。
+export function lastBufferedEnd(buffered) {
+  if (!buffered || !Number.isFinite(buffered.length) || buffered.length <= 0) return null;
+  try {
+    const end = buffered.end(buffered.length - 1);
+    return Number.isFinite(end) ? end : null;
+  } catch {
+    return null;
+  }
+}
+
+// バッファ基準で終端に停滞しているか。progress は約
+// END_BUFFER_LOOKBACK_SEC 秒前の位置との差 (正味前進量) で、
+// 呼び出し側 (App.vue のウォッチドッグ) がサンプルから求める。
+// 条件が1つでも欠ければ false。
+export function isBufferedEndStalled({ duration, bufferedEnd, currentTime, progress } = {}) {
+  if (!Number.isFinite(duration) || duration <= 0) return false;
+  if (!Number.isFinite(bufferedEnd)) return false;
+  if (bufferedEnd < duration - END_BUFFER_TAIL_GAP_SEC) return false;
+  if (!Number.isFinite(currentTime) || currentTime < bufferedEnd - END_BUFFER_NEAR_SEC) return false;
+  if (!Number.isFinite(progress)) return false;
+  return progress < END_BUFFER_MIN_PROGRESS_SEC;
 }
 
 /* ---- 次の曲の先読み ---- */

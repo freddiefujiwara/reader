@@ -65,8 +65,10 @@ import {
   durationMismatch,
   formatTime,
   interpretStoredPlayPos,
+  isBufferedEndStalled,
   isEndStalled,
   isWithinEndGuard,
+  lastBufferedEnd,
   loadPlayMode,
   loadTimeModel,
   nextEpisodePlan,
@@ -74,6 +76,7 @@ import {
   nextSpeed,
   progressRatio,
   reachedTrueEnd,
+  END_BUFFER_LOOKBACK_SEC,
   END_STALL_PROGRESS_EPSILON_SEC,
   END_STALL_WATCH_INTERVAL_MS,
   PRELOAD_REMAINING_SEC,
@@ -452,19 +455,29 @@ function samplePlaybackRate() {
    iOS Safari が fMP4 の終端で 'ended' (と 'pause') を発火しない
    ことがある。その場合は timeupdate も止まるため、表示位置ベース
    の終了判定 (timeupdate 駆動) も届かず、再生中表示のまま終端で
-   固まってしまう。インターバルで要素の currentTime の進みを監視
-   し、終端付近でほぼ止まったままなら終了フローへ進める。再生開始
-   はすべて tryPlayAudio に集約されているので、そこで監視を始め、
+   固まってしまう。インターバルで要素の状態を監視し、終端で
+   止まったままなら終了フローへ進める。再生開始はすべて
+   tryPlayAudio に集約されているので、そこで監視を始め、
    stopPlayer と終了フローで確実に止める。
    再生中かどうかの正は、要素の paused ではなくアプリ側の
    isPlaying とする。ユーザーの一時停止 (ボタン・Media Session)
    は必ず 'pause' イベント経由で isPlaying=false になる一方、
    iOS が終端でイベントを出さないまま要素を paused にするケース
    では isPlaying が true のまま残る。要素の paused を見ると、
-   後者の間は停滞時間が一切貯まらず発火しなくなってしまう。 */
+   後者の間は停滞時間が一切貯まらず発火しなくなってしまう。
+   発火経路は2つ:
+     第一 (バッファ基準): メディア全体がダウンロード済みで、
+       再生位置がデータの末尾にいて、約1秒の正味前進がほぼ無い
+       なら終端とみなす。要素自身のタイムラインだけで完結し、
+       駐留から約1秒で発火する (player.js の isBufferedEndStalled)。
+     第二 (表示位置ベース、PR #48 までの従来経路): 全量バッファ
+       されていない場合の網として残す。 */
 let endWatchTimer = null;
 let endWatchLastCt = null;
 let endWatchFrozenSince = 0;
+// バッファ基準の正味前進を測るための位置サンプル ({ at, ct })。
+// ルックバックに必要な直近分だけを保持する。
+let endWatchSamples = [];
 
 function startEndWatchdog() {
   stopEndWatchdog();
@@ -478,33 +491,70 @@ function stopEndWatchdog() {
     endWatchTimer = null;
   }
   endWatchLastCt = null;
+  endWatchSamples = [];
+}
+
+// 第一の経路 (バッファ基準)。サンプルを記録し、約
+// END_BUFFER_LOOKBACK_SEC 秒前の位置との正味前進で判定する。
+// tick ごとのリセット方式ではないため、終端付近で currentTime
+// が微振動しても誤って数え直しにならない。
+function checkBufferedEndStall(now, ct) {
+  endWatchSamples.push({ at: now, ct });
+  const horizon = now - (END_BUFFER_LOOKBACK_SEC * 1000 + END_STALL_WATCH_INTERVAL_MS * 2);
+  while (endWatchSamples.length && endWatchSamples[0].at < horizon) endWatchSamples.shift();
+  const bufferedEnd = lastBufferedEnd(audio.buffered);
+  if (bufferedEnd === null) return false;
+  // ルックバック時点 (約1秒前) のサンプル。監視を始めてから
+  // その分だけの履歴が無ければ、まだ判定できない。
+  const target = now - END_BUFFER_LOOKBACK_SEC * 1000;
+  let past = null;
+  for (const s of endWatchSamples) {
+    if (s.at > target) break;
+    past = s;
+  }
+  if (!past) return false;
+  return isBufferedEndStalled({
+    duration: audio.duration,
+    bufferedEnd,
+    currentTime: ct,
+    progress: ct - past.ct,
+  });
 }
 
 function checkEndStall() {
   if (!currentEpisode.value) return;
   const now = Date.now();
   const ct = audio.currentTime || 0;
+  if (!isPlaying.value || audio.ended || endFlowDone) {
+    // アプリ側が再生中でない間は「前進していない時間」に数えない。
+    // 一時停止を挟んで再開した直後に、停止中の蓄積で誤って発火
+    // しないため。要素の paused は見ない (上記のとおり、終端で
+    // 無言で paused になった要素こそ停滞として数える)。位置の
+    // 基準とサンプルもここで数え直し、再開後は新たに測る。
+    endWatchLastCt = ct;
+    endWatchFrozenSince = now;
+    endWatchSamples = [];
+    return;
+  }
+  // 第一の経路 (バッファ基準) を先に見る。
+  if (checkBufferedEndStall(now, ct)) {
+    handleEpisodeEnded();
+    return;
+  }
+  // 第二の経路 (表示位置ベース)。前回 tick からの前進量で判定
+  // する (前回「進んだ位置」からの累積ではない)。微小な前進が
+  // 続く場合は毎 tick とも下限未満になるため、累積で下限を
+  // 超えて数え直しになることがない。
   if (endWatchLastCt === null) {
     // 監視の起点。ここから tick ごとの前進量を測る。
     endWatchLastCt = ct;
     endWatchFrozenSince = now;
     return;
   }
-  // 前回 tick からの前進量で判定する (前回「進んだ位置」からの
-  // 累積ではない)。微小な前進が続く場合は毎 tick とも下限未満に
-  // なるため、累積で下限を超えて数え直しになることがない。
   const delta = ct - endWatchLastCt;
   endWatchLastCt = ct;
   if (Math.abs(delta) >= END_STALL_PROGRESS_EPSILON_SEC) {
     // 十分に前進した (または大きくシークした)。停滞の数え直し。
-    endWatchFrozenSince = now;
-    return;
-  }
-  if (!isPlaying.value || audio.ended || endFlowDone) {
-    // アプリ側が再生中でない間は「前進していない時間」に数えない。
-    // 一時停止を挟んで再開した直後に、停止中の蓄積で誤って発火
-    // しないため。要素の paused は見ない (上記のとおり、終端で
-    // 無言で paused になった要素こそ停滞として数える)。
     endWatchFrozenSince = now;
     return;
   }

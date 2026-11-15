@@ -24,6 +24,12 @@ import {
   END_STALL_WINDOW_SEC,
   END_STALL_PROGRESS_EPSILON_SEC,
   END_STALL_FROZEN_SEC,
+  isBufferedEndStalled,
+  lastBufferedEnd,
+  END_BUFFER_TAIL_GAP_SEC,
+  END_BUFFER_NEAR_SEC,
+  END_BUFFER_LOOKBACK_SEC,
+  END_BUFFER_MIN_PROGRESS_SEC,
   PRELOAD_REMAINING_SEC,
   loadTimeModel,
   saveTimeModel,
@@ -285,7 +291,7 @@ describe('isWithinEndGuard', () => {
 
 describe('isEndStalled', () => {
   it('終端の残り5秒以内にあり、ほぼ前進しない状態が1秒以上続いていれば停滞とする', () => {
-    expect(END_STALL_WATCH_INTERVAL_MS).toBe(1000);
+    expect(END_STALL_WATCH_INTERVAL_MS).toBe(500);
     expect(END_STALL_WINDOW_SEC).toBe(5);
     expect(END_STALL_PROGRESS_EPSILON_SEC).toBe(0.05);
     expect(END_STALL_FROZEN_SEC).toBe(1);
@@ -305,6 +311,64 @@ describe('isEndStalled', () => {
     expect(isEndStalled(0, 1800, 10)).toBe(false);
     expect(isEndStalled(Number.NaN, 1800, 10)).toBe(false);
     expect(isEndStalled(1799.5, 1800, Number.NaN)).toBe(false);
+  });
+});
+
+describe('バッファ基準の終端停滞 (isBufferedEndStalled / lastBufferedEnd)', () => {
+  // テスト用の TimeRanges もどき。
+  const ranges = (list) => ({
+    length: list.length,
+    start: (i) => list[i][0],
+    end: (i) => list[i][1],
+  });
+
+  it('閾値は、末尾判定 0.5 秒・ルックバック約1秒・正味前進 0.1 秒', () => {
+    expect(END_BUFFER_TAIL_GAP_SEC).toBe(0.5);
+    expect(END_BUFFER_NEAR_SEC).toBe(0.5);
+    expect(END_BUFFER_LOOKBACK_SEC).toBe(1);
+    expect(END_BUFFER_MIN_PROGRESS_SEC).toBe(0.1);
+  });
+
+  it('lastBufferedEnd は最終区間の end を返し、無ければ null', () => {
+    expect(lastBufferedEnd(ranges([[0, 600], [600, 1800]]))).toBe(1800);
+    expect(lastBufferedEnd(ranges([[0, 42]]))).toBe(42);
+    expect(lastBufferedEnd(ranges([]))).toBeNull();
+    expect(lastBufferedEnd(null)).toBeNull();
+    expect(lastBufferedEnd(undefined)).toBeNull();
+    expect(lastBufferedEnd(ranges([[0, Number.NaN]]))).toBeNull();
+  });
+
+  it('全量バッファ済みで末尾にいて正味前進がほぼ無ければ停滞とする', () => {
+    // 微振動で位置がわずかに動いていても、正味前進が 0.1 秒未満
+    // なら停滞 (tick ごとのリセット方式との違い)。
+    expect(isBufferedEndStalled({ duration: 1800, bufferedEnd: 1800, currentTime: 1799.8, progress: 0 })).toBe(true);
+    expect(isBufferedEndStalled({ duration: 1800, bufferedEnd: 1800, currentTime: 1799.9, progress: 0.03 })).toBe(true);
+    expect(isBufferedEndStalled({ duration: 1800, bufferedEnd: 1799.6, currentTime: 1799.6, progress: 0 })).toBe(true);
+    expect(isBufferedEndStalled({ duration: 1800, bufferedEnd: 1800, currentTime: 1800, progress: -0.02 })).toBe(true);
+  });
+
+  it('バッファが終端まで届いていなければ停滞にしない', () => {
+    expect(isBufferedEndStalled({ duration: 1800, bufferedEnd: 1200, currentTime: 1199.8, progress: 0 })).toBe(false);
+    expect(isBufferedEndStalled({ duration: 1800, bufferedEnd: 1799.4, currentTime: 1799.4, progress: 0 })).toBe(false);
+  });
+
+  it('末尾より手前 (途中) では停滞にしない', () => {
+    expect(isBufferedEndStalled({ duration: 1800, bufferedEnd: 1800, currentTime: 900, progress: 0 })).toBe(false);
+    expect(isBufferedEndStalled({ duration: 1800, bufferedEnd: 1800, currentTime: 1799.4, progress: 0 })).toBe(false);
+  });
+
+  it('正味前進が十分にあれば停滞にしない', () => {
+    expect(isBufferedEndStalled({ duration: 1800, bufferedEnd: 1800, currentTime: 1799.9, progress: 0.1 })).toBe(false);
+    expect(isBufferedEndStalled({ duration: 1800, bufferedEnd: 1800, currentTime: 1799.9, progress: 1 })).toBe(false);
+  });
+
+  it('長さ不明・バッファ不明・前進量不明なら停滞にしない', () => {
+    expect(isBufferedEndStalled({ duration: Number.NaN, bufferedEnd: 1800, currentTime: 1799.9, progress: 0 })).toBe(false);
+    expect(isBufferedEndStalled({ duration: 0, bufferedEnd: 1800, currentTime: 1799.9, progress: 0 })).toBe(false);
+    expect(isBufferedEndStalled({ duration: 1800, bufferedEnd: null, currentTime: 1799.9, progress: 0 })).toBe(false);
+    expect(isBufferedEndStalled({ duration: 1800, bufferedEnd: 1800, currentTime: Number.NaN, progress: 0 })).toBe(false);
+    expect(isBufferedEndStalled({ duration: 1800, bufferedEnd: 1800, currentTime: 1799.9, progress: Number.NaN })).toBe(false);
+    expect(isBufferedEndStalled()).toBe(false);
   });
 });
 
