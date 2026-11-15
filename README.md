@@ -41,8 +41,10 @@ IndexedDB の DB 名も同じ分け方で、本番 `reader:db:v1` /
 
 ## CI
 
-ワークフローファイル (`.github/workflows/`) は GitHub MCP では push できないため、
-このリポジトリには含めていない。`WORKFLOW-DRAFT.md` の内容をブラウザで
-`.github/workflows/node.js.yml` と `.github/workflows/staging.yml` として追加すること
-(xuexi の実物ワークフローが手本: PR ではステージングだけにデプロイされ単体テスト＋E2E が
-ゲートになり、マージで本番に公開される)。
+ワークフローファイルは `.github/workflows/` に含めている。
+
+- `node.js.yml` (Node.js CI): main への push と PR で単体テスト＋ビルドが走り、
+  main への push のときだけ gh-pages へ本番デプロイする (ステージング版も
+  `dist/staging` に同梱する)。
+- `staging.yml` (Deploy Staging Preview): main 以外のブランチへの push で
+  ステージングへデプロイされ、E2E (Playwright) がゲートになる。

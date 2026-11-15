@@ -24,8 +24,6 @@
   --link-active: #8f2a12;
   --error: #b91c1c;
   --primary: #b23a1f;
-  --ok: #2e7d46;
-  --ok-bg: #e9f4ec;
   --accent-deep: color-mix(in srgb, var(--link) 68%, #000);
   --track: color-mix(in srgb, var(--text) 7%, var(--bg));
   --shadow: 0 10px 30px rgba(64, 42, 20, 0.1), 0 2px 6px rgba(64, 42, 20, 0.06);
@@ -47,8 +45,6 @@
     --link-active: #f0936f;
     --error: #fca5a5;
     --primary: #ec7a52;
-    --ok: #7bc98d;
-    --ok-bg: #1e2f22;
     --shadow: 0 10px 30px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.35);
     --shadow-sm: 0 3px 10px rgba(0, 0, 0, 0.35);
   }
@@ -1119,10 +1115,6 @@ button.ghost.active {
   color: var(--muted);
 }
 
-.feed-card.is-disabled {
-  opacity: 0.72;
-}
-
 .feed-url {
   color: var(--muted-2);
   font-size: 0.85rem;
@@ -1136,21 +1128,6 @@ button.ghost.active {
   color: var(--muted);
   font-size: 0.88rem;
   margin: 4px 0 0;
-}
-
-.private-badge {
-  background: var(--surface-elevated);
-  color: var(--link-active);
-  font-weight: 700;
-  font-size: 0.78rem;
-  letter-spacing: 0.03em;
-  border-radius: 999px;
-  padding: 2px 10px;
-}
-
-.private-badge.off {
-  background: var(--track);
-  color: var(--muted);
 }
 
 .feed-actions {
@@ -1271,17 +1248,6 @@ button.ghost.danger {
   border-radius: 12px;
   background: var(--surface);
   word-break: break-all;
-}
-
-.field .field-check {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 400;
-}
-
-.field .field-check input {
-  width: auto;
 }
 
 .field-note {
