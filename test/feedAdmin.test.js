@@ -361,6 +361,18 @@ describe('dragRowPitch', () => {
   it('末尾は1つ前のピッチで代用する', () => {
     expect(dragRowPitch(rects, 3)).toBe(100);
   });
+  it('末尾は自分の高さ＋行間で求める (前の行と高さが違ってもずれない)', () => {
+    // 行間20。高さが 80 / 120 / 60 とばらばらな3行。
+    const uneven = [
+      { top: 0, height: 80 },
+      { top: 100, height: 120 },
+      { top: 240, height: 60 },
+    ];
+    // 末尾のピッチは自分の高さ60＋行間20 = 80 (前の行のピッチ140ではない)。
+    expect(dragRowPitch(uneven, 2)).toBe(80);
+    // 途中は次の行までの距離のまま。
+    expect(dragRowPitch(uneven, 1)).toBe(140);
+  });
   it('1行だけなら高さ、範囲外は0', () => {
     expect(dragRowPitch([{ top: 0, height: 80 }], 0)).toBe(80);
     expect(dragRowPitch(rects, 4)).toBe(0);
@@ -403,6 +415,34 @@ describe('dragInsertIndex', () => {
     // 行0の中心40 +100 = 140 は行1の中点140とちょうど同じ。
     expect(dragInsertIndex(rects, 0, 100)).toBe(0);
     expect(dragInsertIndex(rects, 0, 101)).toBe(1);
+  });
+  it('両端: 移動量がクランプ端ちょうどで端のインデックスになる', () => {
+    // 行1の上端が先頭行の上端に一致する移動量は -100。中心 (140-100=40)
+    // は先頭行の中点40とちょうど重なり、中点の判定だけでは届かない。
+    expect(dragInsertIndex(rects, 1, -100)).toBe(0);
+    // 行2の下端が末尾行の下端に一致する移動量は +100。中心 (240+100=340)
+    // は末尾行の中点340とちょうど重なる。
+    expect(dragInsertIndex(rects, 2, 100)).toBe(3);
+    // 端まであと少しでは端にならない。
+    expect(dragInsertIndex(rects, 1, -99)).toBe(1);
+    expect(dragInsertIndex(rects, 2, 99)).toBe(2);
+  });
+  it('両端: 掴んだ行が端の行より高くても、端まで運べば端に入る', () => {
+    // 行間20、先頭と末尾は高さ60、真ん中は高さ120の3行。
+    const uneven = [
+      { top: 0, height: 60 },
+      { top: 80, height: 120 },
+      { top: 220, height: 60 },
+    ];
+    // 行1の中心は140。上端一致の移動量-80では中心60となり、先頭行の
+    // 中点30には届かないが、先頭に入る。
+    expect(dragInsertIndex(uneven, 1, -80)).toBe(0);
+    // 下端一致の移動量+80では中心220となり、末尾行の中点250には
+    // 届かないが、末尾に入る。
+    expect(dragInsertIndex(uneven, 1, 80)).toBe(2);
+    // 端の手前では元の位置のまま。
+    expect(dragInsertIndex(uneven, 1, -79)).toBe(1);
+    expect(dragInsertIndex(uneven, 1, 79)).toBe(1);
   });
   it('範囲外の fromIndex はそのまま返す', () => {
     expect(dragInsertIndex(rects, 9, 100)).toBe(9);

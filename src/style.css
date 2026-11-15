@@ -1160,6 +1160,16 @@ button.ghost.active {
   margin-top: 12px;
 }
 
+/* カード右側に置く編集・削除ボタン。カード本体 (.feed-card) の
+   フレックス行の最後の要素として、右端に縦中央で並べる。本体側の
+   削除確認内の .feed-actions には効かないよう、専用クラスで分ける。 */
+.feed-card-actions {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  align-self: center;
+  margin-top: 0;
+}
+
 button.ghost.danger {
   color: var(--error);
   border-color: var(--error);
