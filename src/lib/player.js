@@ -49,15 +49,17 @@ export function nextRepeat(current) {
   return REPEAT_CYCLE[current] || 'none';
 }
 
-// 再生開始時点の表示リスト (フィルタ適用後) から、開始エピソードと
-// 同じフィードの音声つき記事だけを表示順のまま抜き出したキュー。
-// 開始エピソードがリストに無ければ、その1件だけのキューにする。
+// 再生開始時点の表示リスト (ジャンル・チャンネル・既読状態の絞り込み
+// 適用後) から、音声つき記事だけを表示順のまま抜き出したキュー。
+// 絞り込みは表示リスト側 (visibleArticles) が担うので、ここでは
+// フィードを問わず、再生ボタンの表示条件と同じ audioUrl の有無だけで
+// 選ぶ。開始エピソードがリストに無ければ、その1件だけのキューにする。
 // 呼び出し側はこの結果をスナップショットとして保持し、再生中の
 // 既読化などで表示が変わっても並びを変えない。
 export function buildQueue(articles, current) {
   if (!current) return [];
   const list = Array.isArray(articles) ? articles : [];
-  const queue = list.filter((a) => a && a.feedId === current.feedId && a.audioUrl);
+  const queue = list.filter((a) => a && a.audioUrl);
   if (!queue.some((a) => a.id === current.id)) return [current];
   return queue;
 }
