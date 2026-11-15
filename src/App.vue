@@ -75,7 +75,7 @@ import {
   nextRepeat,
   nextSpeed,
   progressRatio,
-  reachedTrueEnd,
+  reachedKnownDurationEnd,
   END_BUFFER_LOOKBACK_SEC,
   END_STALL_PROGRESS_EPSILON_SEC,
   END_STALL_WATCH_INTERVAL_MS,
@@ -465,12 +465,17 @@ function samplePlaybackRate() {
    iOS が終端でイベントを出さないまま要素を paused にするケース
    では isPlaying が true のまま残る。要素の paused を見ると、
    後者の間は停滞時間が一切貯まらず発火しなくなってしまう。
-   発火経路は2つ:
-     第一 (バッファ基準): メディア全体がダウンロード済みで、
+   発火経路は3つ:
+     第一 (既知の長さへの到達): durationSec が判明している曲で、
+       表示位置がその長さに達したら終了とみなす (player.js の
+       reachedKnownDurationEnd)。timeupdate からも呼ばれるが、
+       終端では timeupdate 自体が止まることがあるため、tick から
+       も要素の現在位置を変換して判定する。
+     第二 (バッファ基準): メディア全体がダウンロード済みで、
        再生位置がデータの末尾にいて、約1秒の正味前進がほぼ無い
        なら終端とみなす。要素自身のタイムラインだけで完結し、
        駐留から約1秒で発火する (player.js の isBufferedEndStalled)。
-     第二 (表示位置ベース、PR #48 までの従来経路): 全量バッファ
+     第三 (表示位置ベース、PR #48 までの従来経路): 全量バッファ
        されていない場合の網として残す。 */
 let endWatchTimer = null;
 let endWatchLastCt = null;
@@ -478,6 +483,25 @@ let endWatchFrozenSince = 0;
 // バッファ基準の正味前進を測るための位置サンプル ({ at, ct })。
 // ルックバックに必要な直近分だけを保持する。
 let endWatchSamples = [];
+
+// 第一の経路 (既知の長さへの到達)。timeupdate とウォッチドッグ
+// の tick の両方から呼ばれる。位置は要素の現在値から変換して
+// 求める (終端で timeupdate が止まると、currentTime ref は最後の
+// イベントの値のままになり、要素側だけが終端まで進んでいる
+// ことがあるため)。到達していれば即座に終了フローへ進むので、
+// tick (0.5秒間隔) 経由でも到達から1秒以内に遷移する。
+function checkKnownDurationEnd() {
+  if (!currentEpisode.value || !isPlaying.value || endFlowDone) return false;
+  const pos = toDisplayPosition(audio.currentTime || 0, mappingCtx.value);
+  if (!reachedKnownDurationEnd({
+    displayPos: pos,
+    trueSec: trueDuration.value,
+    elementDuration: duration.value,
+    hasMeasuredModel: !!measuredModel,
+  })) return false;
+  handleEpisodeEnded();
+  return true;
+}
 
 function startEndWatchdog() {
   stopEndWatchdog();
@@ -494,7 +518,7 @@ function stopEndWatchdog() {
   endWatchSamples = [];
 }
 
-// 第一の経路 (バッファ基準)。サンプルを記録し、約
+// 第二の経路 (バッファ基準)。サンプルを記録し、約
 // END_BUFFER_LOOKBACK_SEC 秒前の位置との正味前進で判定する。
 // tick ごとのリセット方式ではないため、終端付近で currentTime
 // が微振動しても誤って数え直しにならない。
@@ -536,12 +560,14 @@ function checkEndStall() {
     endWatchSamples = [];
     return;
   }
-  // 第一の経路 (バッファ基準) を先に見る。
+  // 第一の経路 (既知の長さへの到達) を先に見る。
+  if (checkKnownDurationEnd()) return;
+  // 第二の経路 (バッファ基準)。
   if (checkBufferedEndStall(now, ct)) {
     handleEpisodeEnded();
     return;
   }
-  // 第二の経路 (表示位置ベース)。前回 tick からの前進量で判定
+  // 第三の経路 (表示位置ベース)。前回 tick からの前進量で判定
   // する (前回「進んだ位置」からの累積ではない)。微小な前進が
   // 続く場合は毎 tick とも下限未満になるため、累積で下限を
   // 超えて数え直しになることがない。
@@ -825,18 +851,15 @@ audio.addEventListener('timeupdate', () => {
     lastPosSaveAt = Date.now();
     savePlayPos();
   }
-  // 二重化した時間軸では、実メディアの終わりで要素が止まって
-  // 'ended' が来ないことがある。表示位置が実質の終端に達したら
-  // 終了フローへ進める ('ended' と二重には走らない)。ただしこの
-  // 判定は、その曲の再生中に実測したモデルがあるときだけ有効に
-  // する。端末に保存された前回分のモデル (learned) の流用だけでは
-  // 有効にしない (誤った learned が残っていると、他の曲で表示位置
-  // が終端へ変換されて早期終了してしまう)。位置表示の変換自体は
-  // 従来どおり learned も使う (mappingCtx / mappingOn 側)。
-  if (!endFlowDone && measuredModel && durationMismatch(trueDuration.value, duration.value)
-    && reachedTrueEnd(displayTime.value, trueDuration.value)) {
-    handleEpisodeEnded();
-  }
+  // 既知の長さ (durationSec) が判明している曲では、表示位置が
+  // その長さに達した時点で終了フローへ進める ('ended' と二重に
+  // は走らない)。iOS では fMP4 の終端で要素が止まって 'ended'
+  // が来ないことがあり、要素 duration と一致する通常の曲でも
+  // これが唯一の到達判定になる。要素 duration とずれている曲
+  // では、モデル変換の誤りで早期終了しないよう、この曲で実測
+  // したモデルがある場合に限る (端末保存の learned の流用だけ
+  // では有効にしない。reachedKnownDurationEnd 側で判定)。
+  checkKnownDurationEnd();
 });
 audio.addEventListener('play', () => { isPlaying.value = true; });
 audio.addEventListener('pause', () => {

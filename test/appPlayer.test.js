@@ -464,6 +464,132 @@ describe('表示位置ベースの終了判定 (実測モデルの要否)', () =
   });
 });
 
+describe('既知の長さへの到達による終了判定 (durationSec 到達)', () => {
+  const knownRec = (base) => ({ ...base, duration_sec: 100 });
+
+  // 実尺 100 秒・要素の報告も 100 秒 (一致する通常の曲) で開始する。
+  async function startKnown(records) {
+    await mountWithRecords(records);
+    await startCard(0);
+    const audio = latestAudio();
+    audio.duration = 100;
+    audio.dispatchEvent(new window.Event('loadedmetadata'));
+    await flush();
+    return audio;
+  }
+
+  it('要素の長さが実尺と一致する曲で、表示位置が実尺に到達したら ended が来なくても次へ進む', async () => {
+    const audio = await startKnown([knownRec(EP1), knownRec(EP2)]);
+    // 手前 (95) では進まない。
+    audio.currentTime = 95;
+    audio.dispatchEvent(new window.Event('timeupdate'));
+    await flush();
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
+
+    // 実尺に到達 → 'ended' イベントなしで終了フローが走る
+    // (従来は、要素 duration と実尺が一致する曲では 'ended' が
+    // 唯一の頼りで、このケースでは進まなかった)。
+    audio.currentTime = 100;
+    audio.dispatchEvent(new window.Event('timeupdate'));
+    await flush();
+    expect(audio.ended).toBe(false);
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+    expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(true);
+    expect(errors).toEqual([]);
+  });
+
+  it('既知の長さの手前 (95) では、到達判定では終了しない', async () => {
+    const audio = await startKnown([knownRec(EP1), knownRec(EP2)]);
+    audio.currentTime = 95;
+    audio.dispatchEvent(new window.Event('timeupdate'));
+    await flush();
+    audio.dispatchEvent(new window.Event('timeupdate'));
+    await flush();
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
+    expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(false);
+    expect(errors).toEqual([]);
+  });
+
+  it('durationSec が無い曲では、位置が要素の終端に達しても到達判定では進まない', async () => {
+    await mountWithRecords([{ ...EP1, duration_sec: null }, { ...EP2, duration_sec: null }]);
+    await startCard(0);
+    const audio = latestAudio();
+    audio.duration = 100;
+    audio.dispatchEvent(new window.Event('loadedmetadata'));
+    await flush();
+    audio.currentTime = 100;
+    audio.dispatchEvent(new window.Event('timeupdate'));
+    await flush();
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
+    expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(false);
+    expect(errors).toEqual([]);
+  });
+
+  it('一時停止中は、位置が既知の長さに達していても終了しない', async () => {
+    const audio = await startKnown([knownRec(EP1), knownRec(EP2)]);
+    audio.currentTime = 100;
+    audio.pause();
+    await flush();
+    audio.dispatchEvent(new window.Event('timeupdate'));
+    await flush();
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
+    expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(false);
+    expect(errors).toEqual([]);
+  });
+
+  it('終端で timeupdate が止まっても、ウォッチドッグの tick が到達を拾って次へ進む', async () => {
+    vi.useFakeTimers();
+    try {
+      // 偽タイマー用のポンプとマウント (ウォッチドッグの
+      // describe と同じ流儀)。
+      const flushFake = async () => {
+        for (let i = 0; i < 10; i += 1) {
+          await vi.advanceTimersByTimeAsync(10);
+          await new Promise((r) => realSetTimeout(r, 1));
+          await nextTick();
+        }
+      };
+      let seeded = false;
+      const seeding = (async () => {
+        await saveLocalFeeds([FEED]);
+        await putLocalArticles([knownRec(EP1), knownRec(EP2)]);
+        seeded = true;
+      })();
+      for (let i = 0; i < 50 && !seeded; i += 1) await flushFake();
+      await seeding;
+      el = document.createElement('div');
+      document.body.appendChild(el);
+      app = createApp(App);
+      app.config.errorHandler = (err) => { errors.push(err); };
+      app.mount(el);
+      for (let i = 0; i < 50 && el.querySelectorAll('.article-card').length < 2; i += 1) {
+        await flushFake();
+      }
+      expect(el.querySelectorAll('.article-card').length, '記事カードが2件出る').toBe(2);
+      el.querySelectorAll('.article-card')[0].querySelector('.play-btn').click();
+      await flushFake();
+      const audio = latestAudio();
+      audio.duration = 100;
+      audio.dispatchEvent(new window.Event('loadedmetadata'));
+      await flushFake();
+
+      // timeupdate を送らず、要素の位置だけを実尺に置く (終端で
+      // イベントが止まった状態)。タイマーが進むまでは進まない。
+      audio.currentTime = 100;
+      expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
+      // ウォッチドッグの tick (0.5秒) が要素の位置を見て到達を
+      // 拾い、次へ進む。
+      await vi.advanceTimersByTimeAsync(500);
+      await flushFake();
+      expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+      expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(true);
+      expect(errors).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 // 偽タイマーを入れる前に、本物の setTimeout を控えておく (ポンプ用)。
 const realSetTimeout = globalThis.setTimeout;
 
@@ -644,9 +770,11 @@ describe('終端停滞ウォッチドッグ (ended が来ない終端の検出)'
     await parkAt(audio, 1799.0);
 
     // 監視間隔 (0.5秒) のたびに少しずつ進み続ける。終端付近に
-    // いても、進んでいる間は停滞として数えない。
+    // いても、進んでいる間は停滞として数えない。進む範囲は、
+    // 既知の長さへの到達 (残り0.3秒以内) に入らないところまで
+    // に留める (到達すれば終了するのが新しい仕様のため)。
     for (let i = 0; i < 5; i += 1) {
-      audio.currentTime = Math.min(1799.0 + 0.18 * (i + 1), 1799.95);
+      audio.currentTime = Math.min(1799.0 + 0.13 * (i + 1), 1799.65);
       audio.dispatchEvent(new window.Event('timeupdate'));
       await vi.advanceTimersByTimeAsync(1000);
     }
@@ -676,7 +804,10 @@ describe('終端停滞ウォッチドッグ (ended が来ない終端の検出)'
     await startFake(0);
     const audio = latestAudio();
     audio.setBuffered([[0, 1800]]);
-    await parkAt(audio, 1799.9);
+    // 駐留位置は、既知の長さへの到達 (残り0.3秒以内) に入らない
+    // 1799.6 に置く (到達判定が先に発火すると、バッファ経路の
+    // タイミングを検証できないため)。
+    await parkAt(audio, 1799.6);
     expect(audio.ended).toBe(false);
 
     // 駐留から約0.5秒ではまだ進まない (ルックバック約1秒分の
@@ -696,7 +827,10 @@ describe('終端停滞ウォッチドッグ (ended が来ない終端の検出)'
     await startFake(0);
     const audio = latestAudio();
     audio.setBuffered([[0, 1800]]);
-    await parkAt(audio, 1799.8);
+    // 駐留位置と振動範囲は、既知の長さへの到達 (残り0.3秒以内)
+    // に入らない範囲に置く (到達判定が先に発火すると、バッファ
+    // 経路を検証できないため)。
+    await parkAt(audio, 1799.6);
 
     // tick (0.5秒) ごとに ±0.06 秒を行き来する微振動。表示位置
     // ベースの経路は、tick あたりの前進量が下限 (0.05 秒) 以上
@@ -707,7 +841,7 @@ describe('終端停滞ウォッチドッグ (ended が来ない終端の検出)'
     for (let i = 0; i < 5; i += 1) {
       if (el.querySelector('.player-title').textContent === 'エピソード2') break;
       high = !high;
-      audio.currentTime = high ? 1799.86 : 1799.8;
+      audio.currentTime = high ? 1799.66 : 1799.6;
       await vi.advanceTimersByTimeAsync(500);
     }
     await flushFake();
@@ -753,7 +887,10 @@ describe('終端停滞ウォッチドッグ (ended が来ない終端の検出)'
     await startFake(0);
     const audio = latestAudio();
     audio.setBuffered([[0, 1800]]);
-    await parkAt(audio, 1799.9);
+    // 駐留位置は、既知の長さへの到達 (残り0.3秒以内) に入らない
+    // 1799.6 に置く (到達判定が先に発火すると、一時停止中に
+    // 進まないことを検証できないため)。
+    await parkAt(audio, 1799.6);
 
     audio.pause();
     await flushFake();
