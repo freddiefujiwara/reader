@@ -59,6 +59,7 @@ import {
 } from './lib/localDb.js';
 import { normalizeFeedIds } from './lib/feedHash.js';
 import { fetchAllFeeds, fetchFeedXml } from './lib/feedFetch.js';
+import { createScrollRestorer } from './lib/scrollRestore.js';
 import { formatPublishedAt } from './lib/format.js';
 import {
   buildQueue,
@@ -128,6 +129,11 @@ const formFetching = ref(false);
 // 背景更新があると保存前の一覧で上書きされる可能性があるため、完了後に
 // もう一度更新するための目印。
 let adminFeedsDirty = false;
+
+// フォームを開く前のスクロール位置。編集中は一覧が隠れてドキュメントが
+// 短くなり、閉じるとブラウザの位置復元で一覧の最下部へ飛ぶため、開く前に
+// 覚えておき、閉じて一覧が戻った後に復元する。
+const formScroll = createScrollRestorer(window);
 
 const isReadonly = computed(() => session.value?.role === 'readonly');
 const isOwner = computed(() => session.value?.role === 'owner');
@@ -935,15 +941,18 @@ async function loadFeeds() {
   }
 }
 
-// 管理画面のジャンル絞り込みの切り替え (タイムラインの setCategory と対)。
+// 管理画面のジャンル絞り込みの切り替え。タイムラインの setCategory と
+// 同じトグル方式: 選択中のジャンルを再タップしたら解除し、全件表示に
+// 戻す (「すべて」チップは置かない)。
 function setAdminCategory(category) {
-  adminCategory.value = category;
+  adminCategory.value = adminCategory.value === category ? '' : category;
 }
 
 function openFeedAdmin() {
   if (!isOwner.value) return;
   view.value = 'feeds';
   formMode.value = '';
+  formScroll.clear();
   confirmDeleteId.value = '';
   loadFeeds();
 }
@@ -951,6 +960,7 @@ function openFeedAdmin() {
 async function backToTimeline() {
   view.value = 'timeline';
   formMode.value = '';
+  formScroll.clear();
   confirmDeleteId.value = '';
   // 管理で変わったフィード構成をタイムラインへ反映するため、並び替え保存の
   // 完了を待ってから背景更新 (フィード一覧の取り直し＋再取得) を行う。
@@ -1014,7 +1024,10 @@ async function onDeleteFeed(feed) {
   try {
     await deleteFeed(session.value.token, feed.id);
     mgmtFeeds.value = mgmtFeeds.value.filter((f) => f.id !== feed.id);
-    if (formMode.value === 'edit' && formBase.value?.id === feed.id) closeForm();
+    if (formMode.value === 'edit' && formBase.value?.id === feed.id) {
+      closeForm();
+      restoreFormScroll();
+    }
     confirmDeleteId.value = '';
     mgmtError.value = '';
   } catch (e) {
@@ -1045,6 +1058,7 @@ async function revealForm() {
 }
 
 function startAddFeed() {
+  formScroll.save();
   formMode.value = 'add';
   formBase.value = null;
   form.value = createFeedForm();
@@ -1054,6 +1068,7 @@ function startAddFeed() {
 }
 
 function startEditFeed(feed) {
+  formScroll.save();
   formMode.value = 'edit';
   formBase.value = feed;
   form.value = feedFormFromFeed(feed);
@@ -1088,6 +1103,19 @@ async function reflectSavedFeedToTimeline(payload) {
   }
 }
 
+
+// 一覧の再描画が終わってから、フォームを開く前のスクロール位置へ戻す。
+async function restoreFormScroll() {
+  await nextTick();
+  formScroll.restore();
+}
+
+// キャンセル: フォームを閉じて元の位置へ戻る。
+function cancelForm() {
+  closeForm();
+  restoreFormScroll();
+}
+
 // フォームの保存本体 (追加・編集共通)。成功したらフォームを閉じて
 // 一覧を取り直す。
 async function saveFeedForm(payload) {
@@ -1097,6 +1125,11 @@ async function saveFeedForm(payload) {
     adminFeedsDirty = true;
     closeForm();
     await loadFeeds();
+    // 一覧を取り直し終わってから戻す (読み込み中は一覧が隠れて
+    // ドキュメントが短いため、先に戻すと位置がずれる)。
+    // タイムラインへの反映 (IndexedDB への書き込みを伴う) より先に
+    // 戻す。両者は独立で、位置の復元を DB 待ちにしないため。
+    await restoreFormScroll();
     await reflectSavedFeedToTimeline(payload);
   } catch (e) {
     if (e.message === 'unauthorized') expireSession();
@@ -1442,7 +1475,7 @@ onMounted(async () => {
               <button class="primary" type="submit" :disabled="formSaving || formFetching">
                 {{ formFetching ? '取得中...' : formSaving ? '保存中...' : '保存' }}
               </button>
-              <button class="ghost" type="button" :disabled="formSaving || formFetching" @click="closeForm">キャンセル</button>
+              <button class="ghost" type="button" :disabled="formSaving || formFetching" @click="cancelForm">キャンセル</button>
             </div>
           </form>
 
@@ -1456,12 +1489,6 @@ onMounted(async () => {
                  保存/キャンセルで閉じれば元の絞り込み表示に戻る。 -->
             <template v-if="formMode !== 'edit'">
             <div v-if="genreOptions.length" class="feed-chips category-chips" role="tablist" aria-label="ジャンルで絞り込み">
-              <button
-                type="button"
-                class="chip"
-                :class="{ active: adminCategory === '' }"
-                @click="setAdminCategory('')"
-              >すべて</button>
               <button
                 v-for="c in genreOptions"
                 :key="c"
