@@ -155,18 +155,67 @@ const hasMore = computed(() => visible.value.length > displayLimit.value);
 // 編集・削除するとカテゴリのチップ自体が消え、手では解除できなく
 // なるため。一覧が空の間 (読み込み中・未取得) は解除しない
 // (判定は shouldClearCategorySelection に任せる)。
-watch(
-  () => state.value.feeds,
-  (feeds) => {
-    if (!shouldClearCategorySelection(feeds, state.value.category)) return;
+//
+// 解除の判定は、一覧が変わった瞬間ではなく、関連する非同期処理が
+// 落ち着いた後の最新の一覧で行う。背景更新は保存前に取り始めた
+// 旧一覧で一時的に読み直すことがあり、その瞬間に解除すると、
+// 追随更新で最新の一覧 (カテゴリあり) に揃い直しても絞り込み
+// だけが外れたままになるため。
+let timelineCategoryClearCheck = null;
+function queueTimelineCategoryClearCheck() {
+  if (timelineCategoryClearCheck) return timelineCategoryClearCheck;
+  const run = (async () => {
+    while (refreshInFlight) {
+      const current = refreshInFlight;
+      await current.catch(() => {});
+      // 更新の完了処理 (後始末や、戻る際に予約される追随更新) が
+      // 次の更新を差し込む余地を残してから、継続を確認する。
+      await nextTick();
+    }
+    if (!shouldClearCategorySelection(state.value.feeds, state.value.category)) return;
     // setCategory と同じく、カテゴリが外れるときはフィード選択も外す。
     state.value = { ...state.value, category: '', feedId: '' };
     displayLimit.value = DISPLAY_LIMIT;
+  })();
+  timelineCategoryClearCheck = run;
+  const done = () => {
+    if (timelineCategoryClearCheck === run) timelineCategoryClearCheck = null;
+  };
+  run.then(done, done);
+  return run;
+}
+
+let adminCategoryClearCheck = null;
+function queueAdminCategoryClearCheck() {
+  if (adminCategoryClearCheck) return adminCategoryClearCheck;
+  const run = (async () => {
+    // 一覧の取り直し・保存・削除の完了後に、最新の一覧で判定する。
+    while (mgmtLoading.value || formSaving.value || mgmtSavingId.value) {
+      await nextTick();
+    }
+    if (shouldClearCategorySelection(mgmtFeeds.value, adminCategory.value)) {
+      adminCategory.value = '';
+    }
+  })();
+  adminCategoryClearCheck = run;
+  const done = () => {
+    if (adminCategoryClearCheck === run) adminCategoryClearCheck = null;
+  };
+  run.then(done, done);
+  return run;
+}
+
+watch(
+  () => state.value.feeds,
+  (feeds) => {
+    if (shouldClearCategorySelection(feeds, state.value.category)) {
+      queueTimelineCategoryClearCheck();
+    }
   }
 );
 watch(mgmtFeeds, (feeds) => {
   if (shouldClearCategorySelection(feeds, adminCategory.value)) {
-    adminCategory.value = '';
+    queueAdminCategoryClearCheck();
   }
 });
 
