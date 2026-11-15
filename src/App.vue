@@ -30,6 +30,7 @@ import {
   feedDisplayName,
   markAllReadInList,
   markAllReadScope,
+  mergePendingReadMarks,
   patchArticle,
   patchFeedCategory,
   sortArticlesDesc,
@@ -156,12 +157,24 @@ const FILTERS = [
 
 /* ---- ローカル (IndexedDB) が表示の正本 ---- */
 
+// 付けたばかりで、背景更新の読み直し (reloadLocal) が使う DB の
+// スナップショットに含まれているか分からない既読変更 (記事ID -> isRead)。
+// 読み直しは読み取り開始時点の中身で state を作り直すため、この間に
+// 付けた既読は DB へ書けていても未読へ巻き戻ってしまう。そこで変更を
+// ここに控えておき、reloadLocal が読み直した一覧へ重ね直す。
+// スナップショット側と一致した変更はその読み直しで控えから落ちる。
+const pendingReadMarks = new Map();
+
 // DB の中身を state へ読み直す。未読数はローカルの記事から数える。
 async function reloadLocal() {
   const [feeds, records] = await Promise.all([loadLocalFeeds(), loadLocalArticles()]);
   const titles = {};
   feeds.forEach((f) => { titles[f.id] = feedDisplayName(f); });
-  const views = sortArticlesDesc(records.map((r) => articleRecordToView(r, titles[r.feed_id])));
+  const loaded = sortArticlesDesc(records.map((r) => articleRecordToView(r, titles[r.feed_id])));
+  const merged = mergePendingReadMarks(loaded, pendingReadMarks);
+  pendingReadMarks.clear();
+  merged.keep.forEach((isRead, id) => { pendingReadMarks.set(id, isRead); });
+  const views = merged.articles;
   state.value = { ...state.value, feeds: withUnreadCounts(feeds, views), articles: views };
 }
 
@@ -355,6 +368,9 @@ async function goHome() {
 // 既読の付け外しはローカルのみ (サーバーへは送らない)。
 async function applyRead(article, isRead) {
   if (!isOwner.value) return;
+  // 実行中の背景更新の読み直しに巻き戻されないよう、先に控える
+  // (reloadLocal が読み直した一覧へ重ね直す)。
+  pendingReadMarks.set(article.id, isRead);
   const nextArticles = patchArticle(state.value.articles, article.id, { isRead });
   state.value = {
     ...state.value,
@@ -364,6 +380,9 @@ async function applyRead(article, isRead) {
   try {
     await setLocalArticleRead(article.id, isRead, new Date().toISOString());
   } catch (e) {
+    // 書けなかった変更は控えからも落とす (次の読み直しで DB の
+    // 中身どおりに戻る。従来の失敗時の振る舞いと同じ)。
+    pendingReadMarks.delete(article.id);
     listError.value = `保存できませんでした（${e.message}）。`;
   }
 }
@@ -382,10 +401,15 @@ async function onMarkAllRead() {
   const targetIds = state.value.articles
     .filter((a) => !a.isRead && scoped[a.feedId])
     .map((a) => a.id);
+  // 実行中の背景更新の読み直しに巻き戻されないよう、先に控える
+  // (reloadLocal が読み直した一覧へ重ね直す)。
+  targetIds.forEach((id) => { pendingReadMarks.set(id, true); });
   state.value = markAllReadInList(state.value, state.value.feedId, state.value.category);
   try {
     await markLocalArticlesRead(targetIds, new Date().toISOString());
   } catch (e) {
+    // 書けなかった変更は控えからも落とす (applyRead と同じ)。
+    targetIds.forEach((id) => { pendingReadMarks.delete(id); });
     listError.value = `保存できませんでした（${e.message}）。`;
   }
 }

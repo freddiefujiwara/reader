@@ -64,6 +64,29 @@ export function patchArticle(articles, articleId, patch) {
   });
 }
 
+// 読み直した記事一覧 (views) へ、まだ DB のスナップショットに
+// 反映されていると確認できていない既読変更 (marks: Map<記事ID, isRead>)
+// を重ねる。背景更新の読み直しは「読み取り開始時点」の中身で状態を
+// 作り直すため、読み取りの最中に付けた既読は、DB へ書けていても
+// そのままでは未読へ巻き戻る。ここで重ね直し、スナップショット側と
+// 一致した変更 (書き込みが読み取りより先に済んでいたもの) と、
+// 一覧から消えた記事への変更は marks から落とす (keep には残らない)。
+// 一致しなかった変更だけが keep に残り、次の読み直しでも重ね直される。
+// views は全記事の一覧であること (部分一覧では使わない)。
+export function mergePendingReadMarks(views, marks) {
+  const pending = marks instanceof Map ? marks : new Map();
+  if (!pending.size) return { articles: views || [], keep: new Map() };
+  const keep = new Map();
+  const articles = (views || []).map((a) => {
+    if (!pending.has(a.id)) return a;
+    const want = pending.get(a.id);
+    if (a.isRead === want) return a;
+    keep.set(a.id, want);
+    return { ...a, isRead: want };
+  });
+  return { articles, keep };
+}
+
 // ローカルの記事から数えた未読数をフィードへ付け直す。
 // サーバー応答の unreadCount は使わず、端末に居る記事だけが数えられる。
 export function withUnreadCounts(feeds, articles) {
