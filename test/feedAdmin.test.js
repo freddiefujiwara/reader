@@ -11,6 +11,7 @@ import {
   planFeedAdd,
   resolveFeedAddForm,
   buildSaveFeedPayload,
+  isFeedFormDirty,
   filterAdminFeeds,
   genreSuggestions,
   formatFeedStatus,
@@ -254,6 +255,37 @@ describe('buildSaveFeedPayload', () => {
     const payload = buildSaveFeedPayload({ category: 'news', enabled: false }, base);
     expect('enabled' in payload).toBe(false);
     expect(payload.category).toBe('news');
+  });
+});
+
+describe('isFeedFormDirty (編集フォームの変更判定)', () => {
+  const original = { title: 'Rebuild', category: 'ポッドキャスト' };
+
+  it('タイトルもジャンルも同じなら未変更', () => {
+    expect(isFeedFormDirty(original, { title: 'Rebuild', category: 'ポッドキャスト' })).toBe(false);
+  });
+
+  it('タイトルが変われば変更あり', () => {
+    expect(isFeedFormDirty(original, { title: 'Rebuild 2', category: 'ポッドキャスト' })).toBe(true);
+  });
+
+  it('ジャンルが変われば変更あり', () => {
+    expect(isFeedFormDirty(original, { title: 'Rebuild', category: 'ニュース' })).toBe(true);
+  });
+
+  it('前後の空白だけの差は未変更 (保存時に trim される値で比べる)', () => {
+    expect(isFeedFormDirty(original, { title: ' Rebuild ', category: 'ポッドキャスト ' })).toBe(false);
+    expect(isFeedFormDirty({ title: 'Rebuild', category: '' }, { title: 'Rebuild', category: '  ' })).toBe(false);
+  });
+
+  it('変えて元に戻せば未変更に戻る', () => {
+    const changed = { title: 'Rebuild', category: 'ニュース' };
+    expect(isFeedFormDirty(original, changed)).toBe(true);
+    expect(isFeedFormDirty(original, { ...changed, category: 'ポッドキャスト' })).toBe(false);
+  });
+
+  it('original が無ければ、保存を妨げないよう変更ありとして扱う', () => {
+    expect(isFeedFormDirty(null, { title: '', category: '' })).toBe(true);
   });
 });
 
