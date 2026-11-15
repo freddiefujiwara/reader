@@ -169,6 +169,21 @@ export function buildSaveFeedPayload(form, base = null) {
   };
 }
 
+// 編集フォームが編集開始時点から変わっているか (保存ボタンの
+// 活性化判定)。比べるのは保存される値 (タイトルとジャンル) で、
+// 前後の空白を取り除いてから比べる (保存時にも trim されるため、
+// 空白だけの差は変更に数えない)。値を変えて元に戻せば未変更に
+// 戻る。original が無い場合は比べようがないので、保存を妨げない
+// よう変更ありとして扱う。
+export function isFeedFormDirty(original, form) {
+  if (!original || !form) return true;
+  const norm = (v) => String(v ?? '').trim();
+  return (
+    norm(original.title) !== norm(form.title) ||
+    norm(original.category) !== norm(form.category)
+  );
+}
+
 // 管理画面のジャンル (カテゴリ) 絞り込み。カテゴリは前後の空白を除いて
 // 完全一致で比べる (タイムラインのカテゴリ絞り込みと同じ意味)。
 // カテゴリ未指定 (空) は全件をそのまま返す。

@@ -194,6 +194,76 @@ describe('管理画面の編集フォーム', () => {
   });
 });
 
+describe('管理画面の編集フォームの保存ボタン', () => {
+  const saveButton = (form) => form.querySelector('.form-actions .primary');
+
+  async function typeCategoryValue(form, value) {
+    const input = form.querySelector('#feed-category');
+    input.value = value;
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await flush();
+    return input;
+  }
+
+  it('開いた直後は保存ボタンが非活性で、未変更のまま送信しても保存されない', async () => {
+    await mountAdmin();
+    const form = await openEdit(0);
+    expect(errors).toEqual([]);
+    expect(saveButton(form).disabled, '未変更では非活性').toBe(true);
+    // ボタンが非活性でも、入力欄からの Enter 等で submit が飛んだ
+    // 場合は保存しない (ボタンの活性条件とそろえる)。
+    form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+    await flush();
+    expect(saveFeed).not.toHaveBeenCalled();
+    expect(el.querySelector('.feed-form'), 'フォームは開いたまま').toBeTruthy();
+  });
+
+  it('ジャンルを変更すると活性化し、元に戻すと再び非活性になる', async () => {
+    await mountAdmin();
+    const form = await openEdit(0);
+    const btn = saveButton(form);
+    expect(btn.disabled).toBe(true);
+    await typeCategoryValue(form, '新しいジャンル');
+    expect(btn.disabled, '変更すると活性化').toBe(false);
+    await typeCategoryValue(form, 'ポッドキャスト');
+    expect(btn.disabled, '元に戻すと再び非活性').toBe(true);
+    expect(errors).toEqual([]);
+  });
+
+  it('前後に空白を足しただけでは活性化しない', async () => {
+    await mountAdmin();
+    const form = await openEdit(0);
+    await typeCategoryValue(form, 'ポッドキャスト ');
+    expect(saveButton(form).disabled).toBe(true);
+    expect(errors).toEqual([]);
+  });
+
+  it('ジャンル候補チップのタップでも活性化する', async () => {
+    await mountAdmin();
+    const form = await openEdit(0);
+    expect(saveButton(form).disabled).toBe(true);
+    await typeCategoryValue(form, '');
+    const chip = [...form.querySelectorAll('.genre-suggestions .chip')]
+      .find((b) => b.textContent.trim() === '教養・ラジオ');
+    expect(chip, '候補チップが出る').toBeTruthy();
+    chip.click();
+    await flush();
+    expect(form.querySelector('#feed-category').value).toBe('教養・ラジオ');
+    expect(saveButton(form).disabled, 'チップで変更しても活性化').toBe(false);
+    expect(errors).toEqual([]);
+  });
+
+  it('追加フォームの保存ボタンは従来どおり最初から押せる', async () => {
+    await mountAdmin();
+    findButton(el, 'フィードを追加').click();
+    await flush();
+    const form = el.querySelector('.feed-form');
+    expect(form, '追加フォームが開く').toBeTruthy();
+    expect(saveButton(form).disabled, '追加では非活性にしない').toBe(false);
+    expect(errors).toEqual([]);
+  });
+});
+
 describe('ヘッダーのブランド (ホームボタン)', () => {
   const brand = () => el.querySelector('.brand');
 
