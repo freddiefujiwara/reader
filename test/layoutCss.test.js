@@ -37,3 +37,18 @@ describe('ジャンル候補の配置', () => {
     expect(body).not.toContain('position: fixed');
   });
 });
+
+describe('共有リンクのボタンの配置', () => {
+  it('発行・無効化の行 (.share-actions) は折り返さず横並びにする', () => {
+    const body = ruleBody('.share-actions');
+    expect(body, '共有リンクのボタン行のルールがある').not.toBe('');
+    expect(body).toContain('flex-wrap: nowrap');
+  });
+
+  it('ボタンは均等幅で、狭い画面でもはみ出さない', () => {
+    const body = ruleBody('.share-actions > button');
+    expect(body, 'ボタンの幅配分のルールがある').not.toBe('');
+    expect(body).toContain('flex: 1 1 0');
+    expect(body).toContain('min-width: 0');
+  });
+});

@@ -2243,7 +2243,7 @@ onMounted(async () => {
                   >キャンセル</button>
                 </div>
               </div>
-              <div v-else class="feed-actions">
+              <div v-else class="feed-actions share-actions">
                 <button class="primary" type="button" :disabled="shareSaving || shareLoading" @click="askIssueShare">リンクを発行する</button>
                 <button
                   v-if="shareStatus && shareStatus.active"
