@@ -190,6 +190,48 @@ describe('プレイヤーの自動送り (連続再生)', () => {
   });
 });
 
+describe('プレイヤーの自動送り (全体繰り返しと単曲繰り返し)', () => {
+  // 「リピートON」= 全体繰り返し: 末尾まで行ったら先頭に戻って続ける。
+  it('全体繰り返しでは、末尾の次は先頭に戻って再生が続く', async () => {
+    await mountPlayer();
+    const bar = await startCard(0);
+    const repeatBtn = () => bar.querySelector('button[aria-label^="リピート"]');
+    repeatBtn().click();
+    await flush();
+    expect(repeatBtn().getAttribute('aria-label')).toBe('リピート：全曲');
+
+    await fireEnded();
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+
+    await fireEnded();
+    // 末尾の次は止まらず、先頭のエピソード1へ戻る。
+    expect(errors).toEqual([]);
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
+    expect(latestAudio().src).toBe('https://example.com/ep1.mp3');
+  });
+
+  // 単曲繰り返しは OFF／ON の言い方の対象外で、従来どおり同じ
+  // エピソードを先頭から再生し直す。
+  it('単曲繰り返しでは、終わっても同じエピソードを再生し直す', async () => {
+    await mountPlayer();
+    const bar = await startCard(0);
+    const repeatBtn = () => bar.querySelector('button[aria-label^="リピート"]');
+    repeatBtn().click();
+    await flush();
+    repeatBtn().click();
+    await flush();
+    expect(repeatBtn().getAttribute('aria-label')).toBe('リピート：1曲');
+
+    await fireEnded();
+    expect(errors).toEqual([]);
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
+    expect(latestAudio().src).toBe('https://example.com/ep1.mp3');
+    // 先頭から再生が再開している (要素は再生中)。
+    expect(latestAudio().paused).toBe(false);
+    expect(latestAudio().currentTime).toBe(0);
+  });
+});
+
 describe('キューの範囲 (表示条件に合う全フィード)', () => {
   // https://example.com/feed2.xml のハッシュID (feedHash で固定済み)。
   const FEED2 = {
