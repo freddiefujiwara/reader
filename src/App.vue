@@ -31,6 +31,7 @@ import {
   markAllReadInList,
   markAllReadScope,
   patchArticle,
+  patchFeedCategory,
   sortArticlesDesc,
   visibleArticles,
   visibleFeedChips,
@@ -167,6 +168,11 @@ async function reloadLocal() {
 // クライアントから取得して取り込む。失敗したフィードは前回の記事を残す。
 // 実行中にもう一度呼ばれたら同じ Promise を返す (多重実行防止)。
 let refreshInFlight = null;
+
+// 管理でフィードを保存したかどうか。タイムラインへ戻るとき、実行中の
+// 背景更新があると保存前の一覧で上書きされる可能性があるため、完了後に
+// もう一度更新するための目印。
+let adminFeedsDirty = false;
 
 function refreshInBackground() {
   if (refreshInFlight) return refreshInFlight;
@@ -959,7 +965,35 @@ async function backToTimeline() {
   // 管理で変わったフィード構成をタイムラインへ反映するため、並び替え保存の
   // 完了を待ってから背景更新 (フィード一覧の取り直し＋再取得) を行う。
   await waitReorderSettled();
-  refreshInBackground();
+  // 既に背景更新が実行中だと、新しい取得は始まらず、その更新は管理での
+  // 保存より前に取り始めた一覧で共有状態を上書きし直す。保存があった
+  // 場合は、その更新の完了後にもう一度更新して最新の一覧で揃え直す。
+  const wasInFlight = refreshInFlight !== null;
+  const run = refreshInBackground();
+  if (adminFeedsDirty) {
+    adminFeedsDirty = false;
+    if (wasInFlight) run.then(() => refreshInBackground(), () => refreshInBackground());
+  }
+}
+
+// 管理で保存したフィードのジャンルを、タイムライン側の共有状態
+// (メモリ内の state と IndexedDB のフィードキャッシュ) へ即座に
+// 反映する。タイムラインのジャンルチップ・絞り込みはこの共有状態
+// から作られるが、背景更新が状態を読み直すのは全フィード再取得の
+// 完了後で、実行中の更新があると新しい取得自体も始まらないため、
+// 保存だけではタイムラインに戻っても古いジャンルのままになる。
+// サーバーの一覧が正本なので、次回の背景更新で置き換わる
+// (これはそれまでの繋ぎ)。対象は編集 (ID 付きの保存) のみで、
+// 追加したフィードは従来どおり次回の背景更新で現れる。
+async function reflectSavedFeedToTimeline(payload) {
+  const id = payload?.id;
+  if (!id) return;
+  const category = String(payload.category || '');
+  state.value = { ...state.value, feeds: patchFeedCategory(state.value.feeds, id, category) };
+  const cached = await loadLocalFeeds();
+  if (cached.some((f) => f.id === id)) {
+    await saveLocalFeeds(patchFeedCategory(cached, id, category));
+  }
 }
 
 const orderSender = createOrderSender((ids) => reorderFeeds(session.value.token, ids));
@@ -1085,8 +1119,11 @@ function cancelForm() {
 // 一覧を取り直す。
 async function saveFeedForm(payload) {
   formSaving.value = true;
+  let saved = false;
   try {
     await saveFeed(session.value.token, payload);
+    adminFeedsDirty = true;
+    saved = true;
     closeForm();
     await loadFeeds();
     // 一覧を取り直し終わってから戻す (読み込み中は一覧が隠れて
@@ -1098,6 +1135,17 @@ async function saveFeedForm(payload) {
     else formError.value = `保存できませんでした（${e.message}）。`;
   } finally {
     formSaving.value = false;
+  }
+  // タイムラインへの反映は、フォームを閉じ一覧を取り直した後に行う
+  // (閉じる動作を IndexedDB への書き込み待ちにしないため)。反映は
+  // 繋ぎの処理で、失敗しても保存自体は成功している (次回の背景更新で
+  // サーバーの一覧に揃う) ため、失敗は握りつぶす。
+  if (saved) {
+    try {
+      await reflectSavedFeedToTimeline(payload);
+    } catch {
+      // 反映に失敗しても保存は成功しているため何もしない。
+    }
   }
 }
 
