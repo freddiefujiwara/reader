@@ -281,17 +281,43 @@ describe('管理画面のジャンル絞り込み', () => {
     expect(findButton(card, '削除'), '削除ボタンは残る').toBeTruthy();
   });
 
-  it('「すべて」に戻すと全件と移動ボタンが戻る', async () => {
+  it('「すべて」チップは無く、未選択 (既定) では全件表示でアクティブなチップも無い', async () => {
+    await mountAdmin();
+    expect(errors).toEqual([]);
+    // タイムラインと同じトグル方式: 「すべて」は置かず、ジャンルだけが並ぶ。
+    expect(findButton(genreTablist(), 'すべて')).toBeUndefined();
+    const chips = [...genreTablist().querySelectorAll('.chip')].map((b) => b.textContent.trim());
+    expect(chips).toEqual(['ポッドキャスト', '教養・ラジオ', 'private']);
+    expect(genreTablist().querySelector('.chip.active')).toBeNull();
+    expect(el.querySelectorAll('.feed-card').length).toBe(FEEDS.length);
+  });
+
+  it('選択中のジャンルを再タップすると解除され、全件と移動ボタンが戻る', async () => {
     await mountAdmin();
     findButton(genreTablist(), '教養・ラジオ').click();
     await flush();
     expect(el.querySelectorAll('.feed-card').length).toBe(1);
     expect(moveButtons().length).toBe(0);
-    findButton(genreTablist(), 'すべて').click();
+    expect(genreTablist().querySelector('.chip.active').textContent.trim()).toBe('教養・ラジオ');
+    findButton(genreTablist(), '教養・ラジオ').click();
     await flush();
     expect(errors).toEqual([]);
+    expect(genreTablist().querySelector('.chip.active')).toBeNull();
     expect(el.querySelectorAll('.feed-card').length).toBe(FEEDS.length);
     expect(moveButtons().length).toBe(FEEDS.length * 2);
+  });
+
+  it('別のジャンルをタップすると、解除ではなくそのジャンルへ切り替わる', async () => {
+    await mountAdmin();
+    findButton(genreTablist(), 'ポッドキャスト').click();
+    await flush();
+    expect(el.querySelectorAll('.feed-card').length).toBe(2);
+    findButton(genreTablist(), '教養・ラジオ').click();
+    await flush();
+    expect(errors).toEqual([]);
+    expect(genreTablist().querySelector('.chip.active').textContent.trim()).toBe('教養・ラジオ');
+    // 教養・ラジオのフィードはタイトル未取得のため、表示名はホスト名になる。
+    expect(cardTitles()).toEqual(['www.youtube.com']);
   });
 
   it('絞り込みは管理画面側の状態として保持され、タイムラインと行き来しても残る', async () => {

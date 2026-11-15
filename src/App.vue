@@ -930,9 +930,11 @@ async function loadFeeds() {
   }
 }
 
-// 管理画面のジャンル絞り込みの切り替え (タイムラインの setCategory と対)。
+// 管理画面のジャンル絞り込みの切り替え。タイムラインの setCategory と
+// 同じトグル方式: 選択中のジャンルを再タップしたら解除し、全件表示に
+// 戻す (「すべて」チップは置かない)。
 function setAdminCategory(category) {
-  adminCategory.value = category;
+  adminCategory.value = adminCategory.value === category ? '' : category;
 }
 
 function openFeedAdmin() {
@@ -1421,12 +1423,6 @@ onMounted(async () => {
                  保存/キャンセルで閉じれば元の絞り込み表示に戻る。 -->
             <template v-if="formMode !== 'edit'">
             <div v-if="genreOptions.length" class="feed-chips category-chips" role="tablist" aria-label="ジャンルで絞り込み">
-              <button
-                type="button"
-                class="chip"
-                :class="{ active: adminCategory === '' }"
-                @click="setAdminCategory('')"
-              >すべて</button>
               <button
                 v-for="c in genreOptions"
                 :key="c"
