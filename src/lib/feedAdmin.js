@@ -24,10 +24,8 @@ export function feedFormFromFeed(feed) {
 
 // URL だけの検証 (追加では他の項目より先に URL を確かめる)。
 export function validateFeedUrl(url) {
-  let parsed;
-  try {
-    parsed = new URL(String(url || '').trim());
-  } catch {
+  const parsed = tryParseUrl(url);
+  if (!parsed) {
     return 'URLの形式が正しくありません。';
   }
   if (parsed.protocol !== 'https:') {
@@ -36,19 +34,25 @@ export function validateFeedUrl(url) {
   return '';
 }
 
+// URL として解釈できなければ null を返す (URL 判定系の共通入口)。
+function tryParseUrl(url) {
+  try {
+    return new URL(String(url || '').trim());
+  } catch {
+    return null;
+  }
+}
+
+const YOUTUBE_HOSTS = ['www.youtube.com', 'youtube.com', 'm.youtube.com'];
+
 // YouTube 疑似フィード URL (youtube.com/feeds/videos.xml?channel_id=...)。
 // 公式 RSS は 404 のため追加時に直接は読めず、タイトルはサーバーが
 // 定期取得の際に Data API から補完する。追加時はタイトル '' で保存する。
 export function isYouTubeFeedUrl(url) {
-  let parsed;
-  try {
-    parsed = new URL(String(url || '').trim());
-  } catch {
-    return false;
-  }
-  const hosts = ['www.youtube.com', 'youtube.com', 'm.youtube.com'];
+  const parsed = tryParseUrl(url);
+  if (!parsed) return false;
   return (
-    hosts.includes(parsed.hostname) &&
+    YOUTUBE_HOSTS.includes(parsed.hostname) &&
     parsed.pathname === '/feeds/videos.xml' &&
     !!parsed.searchParams.get('channel_id')
   );
@@ -58,14 +62,8 @@ export function isYouTubeFeedUrl(url) {
 // youtube.com/@handle)。末尾のパス (/@handle/videos など) も許す。
 // チャンネル ID の形はサーバー側の判定 (UC + 10文字以上) に合わせる。
 export function isYouTubeChannelUrl(url) {
-  let parsed;
-  try {
-    parsed = new URL(String(url || '').trim());
-  } catch {
-    return false;
-  }
-  const hosts = ['www.youtube.com', 'youtube.com', 'm.youtube.com'];
-  if (!hosts.includes(parsed.hostname)) return false;
+  const parsed = tryParseUrl(url);
+  if (!parsed || !YOUTUBE_HOSTS.includes(parsed.hostname)) return false;
   return (
     /^\/channel\/UC[\w-]{10,}(\/.*)?$/.test(parsed.pathname) ||
     /^\/@[\w.-]+(\/.*)?$/.test(parsed.pathname)
@@ -77,14 +75,8 @@ export function isYouTubeChannelUrl(url) {
 // の両方に対応し、どちらでもなければ '' を返す。ID の形は
 // isYouTubeChannelUrl と同じ (UC + 10文字以上) にそろえる。
 export function youtubeChannelIdFromUrl(url) {
-  let parsed;
-  try {
-    parsed = new URL(String(url || '').trim());
-  } catch {
-    return '';
-  }
-  const hosts = ['www.youtube.com', 'youtube.com', 'm.youtube.com'];
-  if (!hosts.includes(parsed.hostname)) return '';
+  const parsed = tryParseUrl(url);
+  if (!parsed || !YOUTUBE_HOSTS.includes(parsed.hostname)) return '';
   if (parsed.pathname === '/feeds/videos.xml') {
     const id = parsed.searchParams.get('channel_id') || '';
     return /^UC[\w-]{10,}$/.test(id) ? id : '';
@@ -97,13 +89,9 @@ export function youtubeChannelIdFromUrl(url) {
 // /shorts/ に対応し、取り出せなければ '' を返す。記事 ID の付け替え
 // (ID = ハッシュ(フィードID + 動画ID)) に使う。
 export function youtubeVideoIdFromLink(link) {
-  let parsed;
-  try {
-    parsed = new URL(String(link || '').trim());
-  } catch {
-    return '';
-  }
-  const hosts = ['www.youtube.com', 'youtube.com', 'm.youtube.com', 'music.youtube.com'];
+  const parsed = tryParseUrl(link);
+  if (!parsed) return '';
+  const hosts = [...YOUTUBE_HOSTS, 'music.youtube.com'];
   if (parsed.hostname === 'youtu.be') {
     const id = parsed.pathname.slice(1).split('/')[0];
     return /^[\w-]+$/.test(id) ? id : '';

@@ -192,49 +192,44 @@ const hasMore = computed(() => visible.value.length > displayLimit.value);
 // 旧一覧で一時的に読み直すことがあり、その瞬間に解除すると、
 // 追随更新で最新の一覧 (カテゴリあり) に揃い直しても絞り込み
 // だけが外れたままになるため。
-let timelineCategoryClearCheck = null;
-function queueTimelineCategoryClearCheck() {
-  if (timelineCategoryClearCheck) return timelineCategoryClearCheck;
-  const run = (async () => {
-    while (refreshInFlight) {
-      const current = refreshInFlight;
-      await current.catch(() => {});
-      // 更新の完了処理 (後始末や、戻る際に予約される追随更新) が
-      // 次の更新を差し込む余地を残してから、継続を確認する。
-      await nextTick();
-    }
-    if (!shouldClearCategorySelection(state.value.feeds, state.value.category)) return;
-    // setCategory と同じく、カテゴリが外れるときはフィード選択も外す。
-    state.value = { ...state.value, category: '', feedId: '' };
-    displayLimit.value = DISPLAY_LIMIT;
-  })();
-  timelineCategoryClearCheck = run;
-  const done = () => {
-    if (timelineCategoryClearCheck === run) timelineCategoryClearCheck = null;
+// 「関連する非同期処理が落ち着いたら1回だけ判定する」ための共通の
+// 受け口。実行中にもう一度呼ばれたら同じ Promise を返し、終わったら
+// 次の呼び出しで新しい判定が始まる。
+function createQueuedCheck(run) {
+  let current = null;
+  return () => {
+    if (current) return current;
+    const p = (async () => { await run(); })();
+    current = p;
+    const done = () => { if (current === p) current = null; };
+    p.then(done, done);
+    return p;
   };
-  run.then(done, done);
-  return run;
 }
 
-let adminCategoryClearCheck = null;
-function queueAdminCategoryClearCheck() {
-  if (adminCategoryClearCheck) return adminCategoryClearCheck;
-  const run = (async () => {
-    // 一覧の取り直し・保存・削除の完了後に、最新の一覧で判定する。
-    while (mgmtLoading.value || formSaving.value || mgmtSavingId.value) {
-      await nextTick();
-    }
-    if (shouldClearCategorySelection(mgmtFeeds.value, adminCategory.value)) {
-      adminCategory.value = '';
-    }
-  })();
-  adminCategoryClearCheck = run;
-  const done = () => {
-    if (adminCategoryClearCheck === run) adminCategoryClearCheck = null;
-  };
-  run.then(done, done);
-  return run;
-}
+const queueTimelineCategoryClearCheck = createQueuedCheck(async () => {
+  while (refreshInFlight) {
+    const current = refreshInFlight;
+    await current.catch(() => {});
+    // 更新の完了処理 (後始末や、戻る際に予約される追随更新) が
+    // 次の更新を差し込む余地を残してから、継続を確認する。
+    await nextTick();
+  }
+  if (!shouldClearCategorySelection(state.value.feeds, state.value.category)) return;
+  // setCategory と同じく、カテゴリが外れるときはフィード選択も外す。
+  state.value = { ...state.value, category: '', feedId: '' };
+  displayLimit.value = DISPLAY_LIMIT;
+});
+
+const queueAdminCategoryClearCheck = createQueuedCheck(async () => {
+  // 一覧の取り直し・保存・削除の完了後に、最新の一覧で判定する。
+  while (mgmtLoading.value || formSaving.value || mgmtSavingId.value) {
+    await nextTick();
+  }
+  if (shouldClearCategorySelection(mgmtFeeds.value, adminCategory.value)) {
+    adminCategory.value = '';
+  }
+});
 
 watch(
   () => state.value.feeds,
@@ -411,10 +406,7 @@ async function refreshOnce() {
       if (needImport) importPayload = payload;
       listOk = true;
     } catch (e) {
-      if (e.message === 'unauthorized') {
-        expireSession();
-        return;
-      }
+      if (expireIfUnauthorized(e)) return;
       // サーバーに届かなくても、ローカルのフィード一覧で取得は続ける。
     }
     if (!listOk) feeds = await loadLocalFeeds();
@@ -1033,6 +1025,20 @@ function startEpisode(article) {
   loadEpisode(article);
 }
 
+// 自動送りの計画 (nextEpisodePlan / failedEpisodePlan) どおりに
+// 次のエピソードへ移る。計画が「次へ」でない・遷移先がキューに
+// 無ければ false を返す。遷移先の保存位置は使わず頭から始める
+// (自動送り・失敗時の送りに共通の規則)。
+function loadPlannedNext(plan) {
+  if (!plan || plan.type !== 'advance') return false;
+  const next = playQueue.value.find((a) => a.id === plan.id);
+  if (!next) return false;
+  if (plan.resetPlayed) playedInRound = new Set();
+  playedInRound.add(next.id);
+  loadEpisode(next, { resume: false });
+  return true;
+}
+
 function toggleShuffle() {
   shuffleOn.value = !shuffleOn.value;
   savePlayMode({ shuffle: shuffleOn.value, repeat: repeatMode.value });
@@ -1293,16 +1299,9 @@ function handlePlaybackFailure() {
     playedIds: playedInRound,
     consecutiveFailures: consecutivePlayFailures,
   });
-  if (plan.type === 'advance') {
-    const next = playQueue.value.find((a) => a.id === plan.id);
-    if (next) {
-      if (plan.resetPlayed) playedInRound = new Set();
-      playedInRound.add(next.id);
-      // 自動送りと同じく、遷移先の保存位置は使わず頭から。
-      loadEpisode(next, { resume: false });
-      if (staleDead) reloadLocal().catch(() => {});
-      return;
-    }
+  if (loadPlannedNext(plan)) {
+    if (staleDead) reloadLocal().catch(() => {});
+    return;
   }
   if (staleDead) {
     // 次が無い場合の stale の従来動作 (PR #63): 音声を取り消した
@@ -1347,25 +1346,31 @@ function handleEpisodeEnded() {
     shuffle: shuffleOn.value,
     playedIds: playedInRound,
   });
-  if (plan.type !== 'advance') return;
-  const next = playQueue.value.find((a) => a.id === plan.id);
-  if (!next) return;
-  if (plan.resetPlayed) playedInRound = new Set();
-  playedInRound.add(next.id);
-  // 自動送りは切り替わりなので、次のエピソードの保存位置は使わず
-  // 頭から始める (保存位置の復元はカードからの直接選択だけ)。
-  loadEpisode(next, { resume: false });
+  loadPlannedNext(plan);
 }
 audio.addEventListener('ended', handleEpisodeEnded);
 
-// セッション失効時の共通処理。保存分を消してサインイン画面に戻す。
-function expireSession() {
+// セッションを破棄してサインイン画面へ戻る共通部分 (失効・ログアウト)。
+function detachSession() {
   stopPlayer();
   clearSession();
   session.value = null;
   view.value = 'timeline';
+}
+
+// セッション失効時の共通処理。保存分を消してサインイン画面に戻す。
+function expireSession() {
+  detachSession();
   bootError.value = 'セッションの期限が切れました。もう一度サインインしてください。';
   renderSigninButton();
+}
+
+// API エラーがセッション失効なら共通処理へ倒し、倒したら true を返す
+// (呼び出し側は false のときだけ自前のエラー表示を行う)。
+function expireIfUnauthorized(e) {
+  if (e.message !== 'unauthorized') return false;
+  expireSession();
+  return true;
 }
 
 /* ---- フィード管理 (オーナーのみ) ---- */
@@ -1378,8 +1383,7 @@ async function loadFeeds() {
     mgmtFeeds.value = Array.isArray(payload.feeds) ? payload.feeds : [];
     mgmtError.value = '';
   } catch (e) {
-    if (e.message === 'unauthorized') expireSession();
-    else mgmtError.value = `フィードを読み込めませんでした（${e.message}）。時間をおいて開き直してください。`;
+    if (!expireIfUnauthorized(e)) mgmtError.value = `フィードを読み込めませんでした（${e.message}）。時間をおいて開き直してください。`;
   } finally {
     mgmtLoading.value = false;
   }
@@ -1398,8 +1402,7 @@ async function loadShareStatus() {
     };
     shareError.value = '';
   } catch (e) {
-    if (e.message === 'unauthorized') expireSession();
-    else shareError.value = `共有リンクの状態を取得できませんでした（${e.message}）。`;
+    if (!expireIfUnauthorized(e)) shareError.value = `共有リンクの状態を取得できませんでした（${e.message}）。`;
   } finally {
     shareLoading.value = false;
   }
@@ -1433,8 +1436,7 @@ async function onIssueShare() {
     shareConfirm.value = '';
     shareError.value = '';
   } catch (e) {
-    if (e.message === 'unauthorized') expireSession();
-    else shareError.value = `リンクを発行できませんでした（${e.message}）。`;
+    if (!expireIfUnauthorized(e)) shareError.value = `リンクを発行できませんでした（${e.message}）。`;
   } finally {
     shareSaving.value = false;
   }
@@ -1451,8 +1453,7 @@ async function onRevokeShare() {
     shareConfirm.value = '';
     shareError.value = '';
   } catch (e) {
-    if (e.message === 'unauthorized') expireSession();
-    else shareError.value = `リンクを無効化できませんでした（${e.message}）。`;
+    if (!expireIfUnauthorized(e)) shareError.value = `リンクを無効化できませんでした（${e.message}）。`;
   } finally {
     shareSaving.value = false;
   }
@@ -1551,8 +1552,7 @@ async function applyFeedOrder(next) {
     await lastReorder;
     mgmtError.value = '';
   } catch (e) {
-    if (e.message === 'unauthorized') expireSession();
-    else {
+    if (!expireIfUnauthorized(e)) {
       mgmtError.value = `並び替えを保存できませんでした（${e.message}）。`;
       loadFeeds();
     }
@@ -1669,8 +1669,8 @@ async function onDeleteFeed(feed) {
     confirmDeleteId.value = '';
     mgmtError.value = '';
   } catch (e) {
-    if (e.message === 'unauthorized') {
-      expireSession();
+    if (expireIfUnauthorized(e)) {
+      // セッション失効は共通処理へ倒した。
     } else if (e.message === 'not_found') {
       // 既に消えていた場合は一覧からも落として整合させる。
       adminFeedsDirty = true;
@@ -1749,9 +1749,8 @@ async function saveFeedForm(payload) {
     // ドキュメントが短いため、先に戻すと位置がずれる)。
     await restoreFormScroll();
   } catch (e) {
-    if (e.message === 'unauthorized') expireSession();
-    else if (e.message === 'invalid') formError.value = e.serverMessage || '入力内容を確認してください。';
-    else formError.value = `保存できませんでした（${e.message}）。`;
+    if (e.message === 'invalid') formError.value = e.serverMessage || '入力内容を確認してください。';
+    else if (!expireIfUnauthorized(e)) formError.value = `保存できませんでした（${e.message}）。`;
   } finally {
     formSaving.value = false;
   }
@@ -1854,10 +1853,7 @@ function renderSigninButton() {
 }
 
 function signOut() {
-  stopPlayer();
-  clearSession();
-  session.value = null;
-  view.value = 'timeline';
+  detachSession();
   state.value = createListState();
   loading.value = false;
   if (window.google) window.google.accounts.id.disableAutoSelect();

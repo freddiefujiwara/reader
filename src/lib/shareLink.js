@@ -2,6 +2,7 @@
 // 開く側 (App.vue の tryShareFromHash) はハッシュだけを見るため、
 // ベースはアプリの置き場所 (本番 /reader/、ステージングは
 // /reader/staging/) に合わせればよい。
+import { pad2 } from './format.js';
 
 // token から共有リンクの URL を作る。origin は末尾の '/' なし、
 // base はアプリのベースパス (前後に '/' があってもよい)。
@@ -20,6 +21,5 @@ export function formatShareExpiry(iso) {
   if (!iso) return '';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
-  const pad2 = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${pad2(d.getMinutes())}`;
 }

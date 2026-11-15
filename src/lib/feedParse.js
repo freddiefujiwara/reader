@@ -203,7 +203,6 @@ export function parseFeedMeta(xmlText) {
 export function toIsoDate(value) {
   if (!value) return '';
   const t = Date.parse(String(value).trim());
-  if (!t && t !== 0) return '';
   if (Number.isNaN(t)) return '';
   return new Date(t).toISOString();
 }
