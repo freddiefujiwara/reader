@@ -104,10 +104,38 @@ let app = null;
 let el = null;
 let errors = [];
 
-const flush = async (rounds = 8) => {
-  for (let i = 0; i < rounds; i += 1) {
-    await new Promise((r) => setTimeout(r, 0));
-    await nextTick();
+const flushRound = async () => {
+  await new Promise((r) => setTimeout(r, 0));
+  await nextTick();
+};
+
+// 条件が成り立つまで flush を繰り返す。保存→反映→背景更新のような
+// 非同期チェーンが何マクロタスクで終わるかはマシンの負荷で変わる
+// ため、固定回数の flush では、速い環境では収まっても CI では
+// 完了前に検証へ進んでしまう。検証内容は変えず、「完了するまで
+// 待つ」ことだけを決定的にするためのヘルパー。
+const flushUntil = async (cond, maxRounds = 120) => {
+  for (let i = 0; i < maxRounds; i += 1) {
+    if (await cond()) return true;
+    await flushRound();
+  }
+  return !!(await cond());
+};
+
+// ヘッダーの更新ボタンは背景更新の実行中だけ「更新中…」になる。
+const isRefreshingShown = () =>
+  !!el && [...el.querySelectorAll('button')].some((b) => b.textContent.includes('更新中'));
+
+// 背景更新が落ち着くまで待つ。実行中の更新がテストをまたいで残ると、
+// 共有の IndexedDB へ後から書き込んで次のテストの前提を壊すため、
+// テストの終わりと unmount 前に必ず静まるまで待つ (チェーンの合間に
+// 一瞬だけ「更新中」でなくなることがあるため、連続で確認する)。
+const settleApp = async (maxRounds = 120) => {
+  if (!el) return;
+  let calm = 0;
+  for (let i = 0; i < maxRounds && calm < 3; i += 1) {
+    await flushRound();
+    calm = isRefreshingShown() ? 0 : calm + 1;
   }
 };
 
@@ -128,23 +156,27 @@ async function seedAndMount() {
   app = createApp(App);
   app.config.errorHandler = (err) => { errors.push(err); };
   app.mount(el);
-  await flush();
+  await flushUntil(
+    () =>
+      JSON.stringify(articleTitles()) === JSON.stringify(['記事A', '記事B']) &&
+      JSON.stringify(categoryChips()) === JSON.stringify(['ポッドキャスト', 'private'])
+  );
   expect(articleTitles(), 'タイムラインに記事が2件出る').toEqual(['記事A', '記事B']);
   expect(categoryChips()).toEqual(['ポッドキャスト', 'private']);
 }
 
 async function editFirstFeedCategory(category) {
   findButton(el, '管理').click();
-  await flush();
+  await flushUntil(() => el.querySelectorAll('.feed-card').length >= 2);
   const card = el.querySelectorAll('.feed-card')[0];
   findButton(card, '編集').click();
-  await flush();
+  await flushUntil(() => !!el.querySelector('.feed-form'));
   const form = el.querySelector('.feed-form');
   const input = form.querySelector('#feed-category');
   input.value = category;
   input.dispatchEvent(new window.Event('input', { bubbles: true }));
   form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
-  await flush();
+  await flushUntil(() => !el.querySelector('.feed-form'));
   expect(el.querySelector('.feed-form'), '保存後はフォームが閉じる').toBeNull();
 }
 
@@ -164,7 +196,10 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // 実行中の背景更新を残したまま unmount すると、共有の IndexedDB へ
+  // 後から書き込んで次のテストの前提を壊すため、先に静まるまで待つ。
+  await settleApp();
   if (app) app.unmount();
   app = null;
   el = null;
@@ -177,16 +212,24 @@ describe('管理でのジャンル編集のタイムライン反映', () => {
     expect(errors).toEqual([]);
     // まだ管理画面にいる時点で、タイムライン側のキャッシュも新しい
     // ジャンルになっている (戻った後の読み直しで古くならない)。
+    // 反映は保存フローの最後に行われる非同期処理なので、完了を待つ。
+    await flushUntil(
+      async () =>
+        (await loadLocalFeeds()).find((f) => f.id === FEED_A.id)?.category === '新ジャンル'
+    );
     const cached = await loadLocalFeeds();
     expect(cached.find((f) => f.id === FEED_A.id).category).toBe('新ジャンル');
     // タイムラインへ戻ると、新しいジャンルのチップで絞れる。
     el.querySelector('.brand').click();
-    await flush();
+    await flushUntil(
+      () => JSON.stringify(categoryChips()) === JSON.stringify(['新ジャンル', 'private'])
+    );
     expect(errors).toEqual([]);
     expect(categoryChips()).toEqual(['新ジャンル', 'private']);
     findButton(el.querySelector('[aria-label="カテゴリで絞り込み"]'), '新ジャンル').click();
-    await flush();
+    await flushUntil(() => JSON.stringify(articleTitles()) === JSON.stringify(['記事A']));
     expect(articleTitles()).toEqual(['記事A']);
+    await settleApp();
   });
 
   it('保存前に始まった背景更新が実行中でも、戻れば新しいジャンルになり、旧一覧で上書きされても揃い直す', async () => {
@@ -194,19 +237,33 @@ describe('管理でのジャンル編集のタイムライン反映', () => {
     await seedAndMount();
     await editFirstFeedCategory('新ジャンル');
     el.querySelector('.brand').click();
-    await flush();
+    // 反映 (保存フローの最後の非同期処理) が状態へ届くまで待つ。
+    await flushUntil(
+      () => JSON.stringify(categoryChips()) === JSON.stringify(['新ジャンル', 'private'])
+    );
     expect(errors).toEqual([]);
     // 実行中の更新は保存前の一覧しか持っていないが、保存時の反映で
     // タイムラインは既に新しいジャンルになっている。
     expect(categoryChips()).toEqual(['新ジャンル', 'private']);
     // 実行中だった更新が終わる (旧一覧でキャッシュと状態が上書き
     // される) と、戻る際に予約した追随更新が最新の一覧を取り直す。
+    // 追随更新の完了までは、状態とキャッシュは一時的に旧ジャンルへ
+    // 戻るため、「追随更新が呼ばれ、更新が終わり、状態とキャッシュの
+    // 両方が新しいジャンル」になるまでを完了の条件にする (途中の
+    // 状態を掴んで早期に合格にしない)。
     releaseHeldList();
-    await flush(14);
+    await flushUntil(
+      async () =>
+        listArticlesCalls >= 2 &&
+        !isRefreshingShown() &&
+        JSON.stringify(categoryChips()) === JSON.stringify(['新ジャンル', 'private']) &&
+        (await loadLocalFeeds()).find((f) => f.id === FEED_A.id)?.category === '新ジャンル'
+    );
     expect(errors).toEqual([]);
     expect(listArticlesCalls).toBeGreaterThanOrEqual(2);
     expect(categoryChips()).toEqual(['新ジャンル', 'private']);
     const cached = await loadLocalFeeds();
     expect(cached.find((f) => f.id === FEED_A.id).category).toBe('新ジャンル');
+    await settleApp();
   });
 });
