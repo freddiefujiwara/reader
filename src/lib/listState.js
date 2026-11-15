@@ -107,7 +107,7 @@ export function markAllReadInList(state, feedId = '', category = '') {
 }
 
 // フィードチップの表示対象。未読フィルタのときは未読があるフィードだけに
-// 絞る (未読ゼロなら「すべて」だけが残る)。ただし選択中のフィードは、
+// 絞る (未読ゼロならチップは出ない)。ただし選択中のフィードは、
 // 未読がゼロでも行き場が無くならないよう残す。
 export function visibleFeedChips(state) {
   let feeds = Array.isArray(state?.feeds) ? state.feeds : [];

@@ -42,6 +42,17 @@ export function progressRatio(current, duration) {
 // リピートの3状態と表示名・遷移。モードの組み立ては blog と同じ:
 // 連続再生 = ランダム off + リピートなし、ランダム再生 = ランダム on、
 // 全体繰り返し = リピート全曲、単曲繰り返し = リピート1曲。
+//
+// 「リピートOFF／ON」の言い方との対応 (2026-11-15 の仕様確認で固定):
+//   OFF = リピートなし (連続再生)。1件終わるごとにキューの次へ進み、
+//         末尾まで再生したら停止する (ループしない)。
+//   ON  = 全体繰り返し (連続再生＋ループ)。末尾まで再生したら
+//         先頭に戻って続ける。
+// ランダムと単曲繰り返しは、この OFF／ON の言い方の対象外で、
+// 従来どおりの挙動 (下記 nextEpisodePlan の規則) を保つ。
+// なお実装は当初からこの対応どおりであり、「OFF = 1件だけ再生
+// して終了」にはなっていない (nextEpisodePlan がリピートなしでも
+// 次へ進めるため)。
 export const REPEAT_LABELS = { none: 'リピート：なし', all: 'リピート：全曲', one: 'リピート：1曲' };
 export const REPEAT_CYCLE = { none: 'all', all: 'one', one: 'none' };
 
@@ -95,6 +106,54 @@ export function nextEpisodePlan({ queue, currentId, repeat = 'none', shuffle = f
   if (index + 1 < ids.length) return { type: 'advance', id: ids[index + 1] };
   if (repeat === 'all') return { type: 'advance', id: ids[0] };
   return { type: 'stop' };
+}
+
+/* ---- 前へ／次へボタン (blog の musicPlayer と同じ規則) ---- */
+
+// 両端で折り返す1ステップ移動。blog の stepIndex と同じ式。
+export function stepIndex(index, count, delta) {
+  if (!count) return 0;
+  return (((index + delta) % count) + count) % count;
+}
+
+// 前へ (delta -1)／次へ (delta +1) の遷移先を記事IDで決める。
+// blog の musicPlayer のボタン挙動に対応する:
+//   ランダムでない → stepIndex で両端を折り返す (末尾の「次へ」は
+//                    先頭へ、先頭の「前へ」は末尾へ)。
+//   ランダムの「次へ」→ 現在以外のキュー内から randomPick で1件。
+//   ランダムの「前へ」→ history (再生した順の記事ID列) を
+//                    さかのぼり、現在と異なる直近の1件 (キューに
+//                    残っているもの)。無ければ stepIndex で前へ。
+// 戻り値は { id, historyCut }。historyCut は「前へ」で履歴を
+// 使った位置で、呼び出し側は履歴をその位置まで切り詰めてから
+// 遷移先を積み直す (blog が startTrack で履歴を積み直す扱いに
+// 合わせる)。履歴を使わなければ null。遷移先が無ければ全体を
+// null で返す。
+export function skipPlan({ queue, currentId, delta, shuffle = false, history = [], randomPick } = {}) {
+  const ids = Array.isArray(queue) ? queue : [];
+  if (!ids.length) return null;
+  const pick = typeof randomPick === 'function'
+    ? randomPick
+    : (candidates) => candidates[Math.floor(Math.random() * candidates.length)];
+  if (delta > 0) {
+    if (shuffle && ids.length > 1) {
+      return { id: pick(ids.filter((id) => id !== currentId)), historyCut: null };
+    }
+    const index = ids.indexOf(currentId);
+    if (index < 0) return null;
+    return { id: ids[stepIndex(index, ids.length, 1)], historyCut: null };
+  }
+  if (shuffle) {
+    const hist = Array.isArray(history) ? history : [];
+    for (let k = hist.length - 2; k >= 0; k -= 1) {
+      if (hist[k] !== currentId && ids.includes(hist[k])) {
+        return { id: hist[k], historyCut: k };
+      }
+    }
+  }
+  const index = ids.indexOf(currentId);
+  if (index < 0) return null;
+  return { id: ids[stepIndex(index, ids.length, -1)], historyCut: null };
 }
 
 /* ---- YouTube 音声の再生時間の二重化への対処 ----

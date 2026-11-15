@@ -73,6 +73,7 @@ import {
   nextSpeed,
   progressRatio,
   reachedKnownDurationEnd,
+  skipPlan,
   END_CHECK_INTERVAL_MS,
   PRELOAD_REMAINING_SEC,
   REPEAT_LABELS,
@@ -285,15 +286,21 @@ async function onManualRefresh() {
 }
 
 function setFeed(feedId) {
-  if (state.value.feedId === feedId) return;
-  state.value = { ...state.value, feedId };
+  // 選択中のフィードを再タップしたら解除し、全件表示に戻す
+  // (「すべて」チップは廃止し、トグル選択にした)。
+  const next = state.value.feedId === feedId ? '' : feedId;
+  if (next === state.value.feedId) return;
+  state.value = { ...state.value, feedId: next };
   displayLimit.value = DISPLAY_LIMIT;
 }
 
 function setCategory(category) {
-  if (state.value.category === category) return;
+  // 選択中のカテゴリを再タップしたら解除し、全件表示に戻す
+  // (「すべて」チップは廃止し、トグル選択にした)。
+  const next = state.value.category === category ? '' : category;
+  if (next === state.value.category) return;
   // カテゴリを変えたらフィード選択は解除する (対象外フィードが残らないように)。
-  state.value = { ...state.value, category, feedId: '' };
+  state.value = { ...state.value, category: next, feedId: '' };
   displayLimit.value = DISPLAY_LIMIT;
 }
 
@@ -380,6 +387,9 @@ const shuffleLabel = computed(() => (shuffleOn.value ? 'ランダム：オン' :
 const playQueue = ref([]);
 // このラウンドで再生を始めた記事ID (ランダム再生の未再生判定用)。
 let playedInRound = new Set();
+// 再生した順の記事ID列 (ランダム時の「前へ」でさかのぼるため、
+// blog の musicPlayer の history と同じく上限100件で保持する)。
+let playHistory = [];
 // 再生位置のメモリ上の控え (DB 読み直しを待たずに再開するため)。
 const playPosMemory = new Map();
 let pendingSeek = 0;
@@ -622,6 +632,8 @@ function updateMediaSession(article) {
     navigator.mediaSession.setActionHandler('pause', () => audio.pause());
     navigator.mediaSession.setActionHandler('seekbackward', () => skipBy(-15));
     navigator.mediaSession.setActionHandler('seekforward', () => skipBy(30));
+    navigator.mediaSession.setActionHandler('previoustrack', () => skipByTrack(-1));
+    navigator.mediaSession.setActionHandler('nexttrack', () => skipByTrack(1));
   } catch {
     // Media Session が使えない環境では何もしない。
   }
@@ -637,6 +649,10 @@ function loadEpisode(article) {
   // ものをそのまま使う。
   const ep = state.value.articles.find((a) => a.id === article.id) || article;
   currentEpisode.value = ep;
+  // 再生した順を覚える (ランダム時の「前へ」用。blog の startTrack
+  // の履歴記録と同じ位置づけで、自動送りもここを通る)。
+  playHistory.push(ep.id);
+  if (playHistory.length > 100) playHistory.shift();
   duration.value = 0;
   currentTime.value = 0;
   measuredModel = null;
@@ -657,6 +673,7 @@ function loadEpisode(article) {
 function startEpisode(article) {
   playQueue.value = buildQueue(visible.value, article);
   playedInRound = new Set([article.id]);
+  playHistory = [];
   loadEpisode(article);
 }
 
@@ -690,6 +707,27 @@ function togglePlay() {
 function toggleEpisode(article) {
   if (isCurrentEpisode(article)) togglePlay();
   else startEpisode(article);
+}
+
+// 前へ／次へ: 現在の再生キュー内での移動。遷移先の決定は blog の
+// musicPlayer と同じ規則 (player.js の skipPlan)。reader は
+// loadEpisode が常に再生を始める設計 (自動送りと同じ) なので、
+// 遷移後はそのまま再生する。
+function skipByTrack(delta) {
+  if (!currentEpisode.value) return;
+  const plan = skipPlan({
+    queue: playQueue.value.map((a) => a.id),
+    currentId: currentEpisode.value.id,
+    delta,
+    shuffle: shuffleOn.value,
+    history: playHistory,
+  });
+  if (!plan) return;
+  const target = playQueue.value.find((a) => a.id === plan.id);
+  if (!target) return;
+  if (plan.historyCut != null) playHistory = playHistory.slice(0, plan.historyCut);
+  playedInRound.add(target.id);
+  loadEpisode(target);
 }
 
 function skipBy(delta) {
@@ -732,6 +770,7 @@ function stopPlayer() {
   audio.removeAttribute('src');
   audio.load();
   currentEpisode.value = null;
+  playHistory = [];
   isPlaying.value = false;
   isLoading.value = false;
   endFlowDone = false;
@@ -1191,12 +1230,6 @@ onMounted(async () => {
         <div class="filter-bar">
         <div v-if="categoryList.length" class="feed-chips category-chips" role="tablist" aria-label="カテゴリで絞り込み">
           <button
-            type="button"
-            class="chip"
-            :class="{ active: state.category === '' }"
-            @click="setCategory('')"
-          >すべて</button>
-          <button
             v-for="c in categoryList"
             :key="c"
             type="button"
@@ -1206,12 +1239,6 @@ onMounted(async () => {
           >{{ c }}</button>
         </div>
         <div class="feed-chips" role="tablist" aria-label="フィードで絞り込み">
-          <button
-            type="button"
-            class="chip"
-            :class="{ active: state.feedId === '' }"
-            @click="setFeed('')"
-          >すべて</button>
           <button
             v-for="f in chipFeeds"
             :key="f.id"
@@ -1252,10 +1279,11 @@ onMounted(async () => {
                 type="button"
                 class="play-btn"
                 :class="{ 'is-current': isCurrentEpisode(a) }"
-                :aria-label="isCurrentEpisode(a) && isPlaying ? '一時停止' : '再生'"
+                :aria-label="isCurrentEpisode(a) && isLoading ? '読み込み中' : (isCurrentEpisode(a) && isPlaying ? '一時停止' : '再生')"
                 @click="toggleEpisode(a)"
               >
-                <svg v-if="isCurrentEpisode(a) && isPlaying" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h4v14H6zM14 5h4v14h-4z" /></svg>
+                <span v-if="isCurrentEpisode(a) && isLoading" class="play-loading" aria-hidden="true">…</span>
+                <svg v-else-if="isCurrentEpisode(a) && isPlaying" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h4v14H6zM14 5h4v14h-4z" /></svg>
                 <svg v-else viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>
               </button>
               <span v-if="a.audioUrl && a.durationSec" class="audio-duration">{{ formatTime(a.durationSec) }}</span>
@@ -1453,6 +1481,9 @@ onMounted(async () => {
           <button type="button" class="player-button player-skip" aria-label="15秒戻る" title="15秒戻る" @click="skipBy(-15)">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z" /><text x="12" y="16.1" text-anchor="middle" font-size="8.5" font-weight="700">15</text></svg>
           </button>
+          <button type="button" class="player-button player-step player-prev" aria-label="前へ" title="前へ" @click="skipByTrack(-1)">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h2v14H6zM20 5v14L9 12z" /></svg>
+          </button>
           <button
             type="button"
             class="player-play"
@@ -1462,6 +1493,9 @@ onMounted(async () => {
             <span v-if="isLoading" class="player-loading" aria-hidden="true">…</span>
             <svg v-else-if="isPlaying" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h4v14H6zM14 5h4v14h-4z" /></svg>
             <svg v-else viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>
+          </button>
+          <button type="button" class="player-button player-step player-next" aria-label="次へ" title="次へ" @click="skipByTrack(1)">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 5h2v14h-2zM4 5v14l11-7z" /></svg>
           </button>
           <button type="button" class="player-button player-skip" aria-label="30秒進む" title="30秒進む" @click="skipBy(30)">
             <svg viewBox="0 0 24 24" aria-hidden="true"><g transform="translate(24 0) scale(-1 1)"><path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z" /></g><text x="12" y="16.1" text-anchor="middle" font-size="8.5" font-weight="700">30</text></svg>

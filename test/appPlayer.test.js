@@ -190,6 +190,151 @@ describe('プレイヤーの自動送り (連続再生)', () => {
   });
 });
 
+describe('プレイヤーの自動送り (全体繰り返しと単曲繰り返し)', () => {
+  // 「リピートON」= 全体繰り返し: 末尾まで行ったら先頭に戻って続ける。
+  it('全体繰り返しでは、末尾の次は先頭に戻って再生が続く', async () => {
+    await mountPlayer();
+    const bar = await startCard(0);
+    const repeatBtn = () => bar.querySelector('button[aria-label^="リピート"]');
+    repeatBtn().click();
+    await flush();
+    expect(repeatBtn().getAttribute('aria-label')).toBe('リピート：全曲');
+
+    await fireEnded();
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+
+    await fireEnded();
+    // 末尾の次は止まらず、先頭のエピソード1へ戻る。
+    expect(errors).toEqual([]);
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
+    expect(latestAudio().src).toBe('https://example.com/ep1.mp3');
+  });
+
+  // 単曲繰り返しは OFF／ON の言い方の対象外で、従来どおり同じ
+  // エピソードを先頭から再生し直す。
+  it('単曲繰り返しでは、終わっても同じエピソードを再生し直す', async () => {
+    await mountPlayer();
+    const bar = await startCard(0);
+    const repeatBtn = () => bar.querySelector('button[aria-label^="リピート"]');
+    repeatBtn().click();
+    await flush();
+    repeatBtn().click();
+    await flush();
+    expect(repeatBtn().getAttribute('aria-label')).toBe('リピート：1曲');
+
+    await fireEnded();
+    expect(errors).toEqual([]);
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
+    expect(latestAudio().src).toBe('https://example.com/ep1.mp3');
+    // 先頭から再生が再開している (要素は再生中)。
+    expect(latestAudio().paused).toBe(false);
+    expect(latestAudio().currentTime).toBe(0);
+  });
+});
+
+describe('前へ／次へボタン', () => {
+  it('blog と同じアイコンとラベルで、再生ボタンの左右に付く', async () => {
+    await mountPlayer();
+    const bar = await startCard(0);
+    const prev = bar.querySelector('button[aria-label="前へ"]');
+    const next = bar.querySelector('button[aria-label="次へ"]');
+    expect(prev, '前へボタン').toBeTruthy();
+    expect(next, '次へボタン').toBeTruthy();
+    expect(prev.getAttribute('title')).toBe('前へ');
+    expect(next.getAttribute('title')).toBe('次へ');
+    // blog の musicPlayer と同じ SVG パス (skip-previous / skip-next)。
+    expect(prev.querySelector('path').getAttribute('d')).toBe('M6 5h2v14H6zM20 5v14L9 12z');
+    expect(next.querySelector('path').getAttribute('d')).toBe('M16 5h2v14h-2zM4 5v14l11-7z');
+    // 並びは blog と同じく 前へ → 再生 → 次へ。
+    const controls = [...bar.querySelector('.player-controls').children];
+    const playIdx = controls.findIndex((b) => b.classList.contains('player-play'));
+    expect(controls[playIdx - 1]).toBe(prev);
+    expect(controls[playIdx + 1]).toBe(next);
+    expect(errors).toEqual([]);
+  });
+
+  it('次へで次のエピソードへ進み、末尾では先頭へ折り返す', async () => {
+    await mountPlayer();
+    const bar = await startCard(0);
+    const next = () => bar.querySelector('button[aria-label="次へ"]');
+    next().click();
+    await flush();
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+    expect(latestAudio().src).toBe('https://example.com/ep2.mp3');
+
+    next().click();
+    await flush();
+    expect(errors).toEqual([]);
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
+    expect(latestAudio().src).toBe('https://example.com/ep1.mp3');
+  });
+
+  it('前へで前のエピソードへ戻り、先頭では末尾へ折り返す', async () => {
+    await mountPlayer();
+    const bar = await startCard(0);
+    const prev = () => bar.querySelector('button[aria-label="前へ"]');
+    prev().click();
+    await flush();
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+    expect(latestAudio().src).toBe('https://example.com/ep2.mp3');
+
+    prev().click();
+    await flush();
+    expect(errors).toEqual([]);
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
+    expect(latestAudio().src).toBe('https://example.com/ep1.mp3');
+  });
+});
+
+describe('フィルタのトグル選択 (「すべて」廃止)', () => {
+  const chipByText = (root, text) =>
+    [...root.querySelectorAll('button.chip')].find((b) => b.textContent.trim().startsWith(text));
+
+  it('カテゴリとチャンネルのチップに「すべて」が無く、未選択が初期状態', async () => {
+    await mountPlayer();
+    const chips = [...el.querySelectorAll('.feed-chips button.chip')];
+    expect(chips.length).toBeGreaterThan(0);
+    expect(chips.some((b) => b.textContent.trim() === 'すべて')).toBe(false);
+    expect(chips.some((b) => b.classList.contains('active'))).toBe(false);
+    // 既読状態の切替 (すべて／未読) は対象外で、従来どおり残る。
+    const tabs = [...el.querySelectorAll('.view-tabs button')].map((b) => b.textContent.trim());
+    expect(tabs).toEqual(['すべて', '未読']);
+    expect(errors).toEqual([]);
+  });
+
+  it('カテゴリは再タップで解除され、全件表示に戻る', async () => {
+    await mountPlayer();
+    const chip = () => chipByText(el.querySelector('.category-chips'), 'ポッドキャスト');
+    expect(chip()).toBeTruthy();
+    chip().click();
+    await flush();
+    expect(chip().classList.contains('active')).toBe(true);
+    expect(el.querySelectorAll('.article-card').length).toBe(2);
+
+    chip().click();
+    await flush();
+    expect(errors).toEqual([]);
+    expect(chip().classList.contains('active')).toBe(false);
+    expect(el.querySelectorAll('.article-card').length).toBe(2);
+  });
+
+  it('チャンネルは再タップで解除され、全件表示に戻る', async () => {
+    await mountPlayer();
+    const chip = () => chipByText(el.querySelector('.feed-chips:not(.category-chips)'), 'Rebuild');
+    expect(chip()).toBeTruthy();
+    chip().click();
+    await flush();
+    expect(chip().classList.contains('active')).toBe(true);
+    expect(el.querySelectorAll('.article-card').length).toBe(2);
+
+    chip().click();
+    await flush();
+    expect(errors).toEqual([]);
+    expect(chip().classList.contains('active')).toBe(false);
+    expect(el.querySelectorAll('.article-card').length).toBe(2);
+  });
+});
+
 describe('キューの範囲 (表示条件に合う全フィード)', () => {
   // https://example.com/feed2.xml のハッシュID (feedHash で固定済み)。
   const FEED2 = {
@@ -780,6 +925,29 @@ describe('読み込み表示', () => {
     await flush();
     expect(playBtn.getAttribute('aria-label')).toBe('一時停止');
     expect(playBtn.querySelector('svg')).toBeTruthy();
+    expect(errors).toEqual([]);
+  });
+
+  it('読み込み中は一覧側の当該エピソードの再生ボタンも「…」になり、再生可能になると戻る', async () => {
+    await mountPlayer();
+    await startCard(0);
+    const cardBtn = () => el.querySelectorAll('.article-card')[0].querySelector('.play-btn');
+    const otherBtn = () => el.querySelectorAll('.article-card')[1].querySelector('.play-btn');
+    // プレイヤー本体と同じ読み込み待ちステータスが、再生中の
+    // エピソードのカード側ボタンにも連動する。
+    expect(cardBtn().getAttribute('aria-label')).toBe('読み込み中');
+    expect(cardBtn().textContent).toContain('…');
+    expect(cardBtn().querySelector('svg')).toBeNull();
+    // 他のエピソードのボタンは通常の再生アイコンのまま。
+    expect(otherBtn().getAttribute('aria-label')).toBe('再生');
+    expect(otherBtn().querySelector('svg')).toBeTruthy();
+    expect(otherBtn().textContent).not.toContain('…');
+
+    latestAudio().dispatchEvent(new window.Event('canplay'));
+    await flush();
+    expect(cardBtn().getAttribute('aria-label')).toBe('一時停止');
+    expect(cardBtn().querySelector('svg')).toBeTruthy();
+    expect(cardBtn().textContent).not.toContain('…');
     expect(errors).toEqual([]);
   });
 });
