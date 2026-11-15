@@ -445,10 +445,19 @@ function samplePlaybackRate() {
   rateSample = null;
   if (dCt < 0) return;
   const model = classifyRate(dCt / (dWall * (audio.playbackRate || 1)));
-  if (model && model !== mappingCtx.value.model) {
+  if (model) {
+    // 分類が完了したら、結果が現在のモデルと同じでも実測済みと
+    // して記録する。learned が既に正しい曲では乗り換えが起きず、
+    // 乗り換えの条件の中でだけ記録すると measuredModel が null
+    // のままになり、到達判定のゲート (この曲で実測したモデルが
+    // あること) が永久に開かなかった。learned の保存・乗り換え
+    // は従来どおり、モデルが変わったときだけ行う。
+    const changed = model !== mappingCtx.value.model;
     measuredModel = model;
-    learnedTimeModel.value = model;
-    saveTimeModel(model);
+    if (changed) {
+      learnedTimeModel.value = model;
+      saveTimeModel(model);
+    }
   }
 }
 /* ---- 終端停滞ウォッチドッグ ----
@@ -476,7 +485,10 @@ function samplePlaybackRate() {
        なら終端とみなす。要素自身のタイムラインだけで完結し、
        駐留から約1秒で発火する (player.js の isBufferedEndStalled)。
      第三 (表示位置ベース、PR #48 までの従来経路): 全量バッファ
-       されていない場合の網として残す。 */
+       されていない場合の網として残す。位置は第一の経路と同様に
+       要素の現在位置から変換して求める (displayTime の ref は
+       timeupdate 由来で、終端でイベントが止まると最後のイベント
+       時点の位置で凍ってしまい、窓に入らないため)。 */
 let endWatchTimer = null;
 let endWatchLastCt = null;
 let endWatchFrozenSince = 0;
@@ -570,7 +582,12 @@ function checkEndStall() {
   // 第三の経路 (表示位置ベース)。前回 tick からの前進量で判定
   // する (前回「進んだ位置」からの累積ではない)。微小な前進が
   // 続く場合は毎 tick とも下限未満になるため、累積で下限を
-  // 超えて数え直しになることがない。
+  // 超えて数え直しになることがない。窓の判定に使う位置は、
+  // 要素の現在位置 (この tick で直接読んだ ct) を表示位置へ
+  // 変換して求める。displayTime (timeupdate で更新される ref)
+  // を使うと、終端で timeupdate が止まったときに最後の
+  // イベント時点の位置 (終端より手前) で凍り、窓 (残り5秒) に
+  // 入らず発火しなかった。
   if (endWatchLastCt === null) {
     // 監視の起点。ここから tick ごとの前進量を測る。
     endWatchLastCt = ct;
@@ -585,7 +602,7 @@ function checkEndStall() {
     return;
   }
   const frozenForSec = (now - endWatchFrozenSince) / 1000;
-  if (isEndStalled(displayTime.value, displayDuration.value, frozenForSec)) {
+  if (isEndStalled(toDisplayPosition(ct, mappingCtx.value), displayDuration.value, frozenForSec)) {
     handleEpisodeEnded();
   }
 }
