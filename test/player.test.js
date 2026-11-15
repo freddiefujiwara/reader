@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { visibleArticles } from '../src/lib/listState.js';
 import {
   formatTime,
   nextSpeed,
@@ -88,17 +89,60 @@ describe('progressRatio', () => {
 const ep = (id, feedId, audioUrl = `https://example.com/${id}.mp3`) => ({ id, feedId, audioUrl, title: id });
 
 describe('buildQueue', () => {
-  it('同じフィードの音声つき記事だけを、表示順のまま抜き出す', () => {
+  it('フィードを問わず、音声つき記事だけを表示順のまま抜き出す', () => {
     const a = ep('a', 'f1');
     const b = ep('b', 'f2');
     const c = ep('c', 'f1');
-    const d = { id: 'd', feedId: 'f1', audioUrl: '', title: 'd' };
+    const d = { id: 'd', feedId: 'f2', audioUrl: '', title: 'd' };
     const queue = buildQueue([a, b, c, d], a);
-    expect(queue.map((x) => x.id)).toEqual(['a', 'c']);
+    expect(queue.map((x) => x.id)).toEqual(['a', 'b', 'c']);
+  });
+  it('音声の無い記事は、表示リストに含まれていても入らない', () => {
+    const a = ep('a', 'f1');
+    const noAudio = { id: 'n', feedId: 'f1', audioUrl: '', title: 'n' };
+    const queue = buildQueue([noAudio, a], a);
+    expect(queue.map((x) => x.id)).toEqual(['a']);
+  });
+  it('既読・未読は問わない (既読の絞り込みは表示リスト側の担当)', () => {
+    const read = { ...ep('r', 'f1'), isRead: true };
+    const unread = { ...ep('u', 'f2'), isRead: false };
+    const queue = buildQueue([read, unread], read);
+    expect(queue.map((x) => x.id)).toEqual(['r', 'u']);
+  });
+  it('例1: ジャンル「音楽」＋未読フィルタでは、配下の全チャンネルの未読・音声ありが入る', () => {
+    const feeds = [
+      { id: 'f1', category: '音楽' },
+      { id: 'f2', category: '音楽' },
+      { id: 'f3', category: 'ニュース' },
+    ];
+    const articles = [
+      { ...ep('a', 'f1'), isRead: false },
+      { ...ep('b', 'f2'), isRead: false },
+      { ...ep('c', 'f1'), isRead: true },
+      { id: 'd', feedId: 'f2', audioUrl: '', title: 'd', isRead: false },
+      { ...ep('e', 'f3'), isRead: false },
+    ];
+    const state = { articles, feeds, feedId: '', category: '音楽', filter: 'unread' };
+    const queue = buildQueue(visibleArticles(state), articles[0]);
+    expect(queue.map((x) => x.id)).toEqual(['a', 'b']);
+  });
+  it('例2: 単一チャンネル＋「すべて」では、そのチャンネルの既読も含めて入る', () => {
+    const feeds = [
+      { id: 'f1', category: '音楽' },
+      { id: 'f2', category: '音楽' },
+    ];
+    const articles = [
+      { ...ep('a', 'f1'), isRead: true },
+      { ...ep('b', 'f1'), isRead: false },
+      { ...ep('c', 'f2'), isRead: false },
+    ];
+    const state = { articles, feeds, feedId: 'f1', category: '', filter: 'all' };
+    const queue = buildQueue(visibleArticles(state), articles[0]);
+    expect(queue.map((x) => x.id)).toEqual(['a', 'b']);
   });
   it('開始エピソードがリストに無ければ、その1件だけのキューにする', () => {
     const a = ep('a', 'f1');
-    const z = ep('z', 'f1');
+    const z = ep('z', 'f2');
     expect(buildQueue([a], z)).toEqual([z]);
   });
   it('開始エピソードが無ければ空', () => {
