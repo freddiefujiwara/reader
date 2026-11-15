@@ -60,9 +60,6 @@ vi.mock('../src/lib/api.js', () => ({
   exchangeShare: vi.fn(async () => ({ ok: true })),
   listArticles: vi.fn(async () => ({ ok: true, feeds: FEEDS, articles: [] })),
   listFeeds: vi.fn(async () => ({ ok: true, feeds: FEEDS })),
-  getShareLinkStatus: vi.fn(async () => ({ ok: true, active: false, expiresAt: null })),
-  issueShareLink: vi.fn(async () => ({ ok: true, token: 'dummy-share-token', expiresAt: '2026-12-16T05:47:00.000Z' })),
-  revokeShareLink: vi.fn(async () => ({ ok: true })),
   reorderFeeds: vi.fn(async () => ({ ok: true })),
   saveFeed: vi.fn(async () => ({ ok: true, feed: FEEDS[0] })),
 }));
@@ -112,6 +109,18 @@ async function openEdit(idx) {
   await flush();
   return el.querySelector('.feed-form');
 }
+
+it('編集・削除ボタンはカード右側の専用領域にあり、本体には無い', async () => {
+  await mountAdmin();
+  const card = el.querySelector('.feed-card');
+  const actions = card.querySelector(':scope > .feed-card-actions');
+  expect(actions, 'カード直下の右側領域がある').toBeTruthy();
+  expect(findButton(actions, '編集')).toBeTruthy();
+  expect(findButton(actions, '削除')).toBeTruthy();
+  const main = card.querySelector('.feed-card-main');
+  expect(main.querySelector('.feed-card-actions')).toBeNull();
+  expect([...main.querySelectorAll('button')].map((b) => b.textContent.trim())).not.toContain('編集');
+});
 
 beforeEach(() => {
   errors = [];
@@ -492,6 +501,45 @@ describe('管理画面のドラッグ並べ替え', () => {
     expect(reorderFeeds).toHaveBeenCalledTimes(1);
     const [, ids] = reorderFeeds.mock.calls[0];
     expect(ids).toEqual([FEEDS[0].id, FEEDS[3].id, FEEDS[1].id, FEEDS[2].id]);
+  });
+
+  it('2行目を一番上まで運ぶと先頭に入り、先頭行が下へどく', async () => {
+    await mountAdmin();
+    const handle = handles()[1];
+    // 2行目 (上端100) を clientY 140 → 0 へ。移動量はクランプで
+    // -100 (上端が先頭行の上端に一致) まで。中点の判定だけでは
+    // 先頭に入れない位置だが、端まで運んだので挿入先は0。
+    pointer('pointerdown', handle, 140);
+    pointer('pointermove', handle, 0);
+    await flush();
+    expect(errors).toEqual([]);
+    expect(cards()[1].style.transform).toBe('translateY(-100px)');
+    expect(cards()[0].style.transform).toBe('translateY(100px)');
+    pointer('pointerup', handle, 0);
+    await flush();
+    expect(errors).toEqual([]);
+    expect(reorderFeeds).toHaveBeenCalledTimes(1);
+    const [, ids] = reorderFeeds.mock.calls[0];
+    expect(ids).toEqual([FEEDS[1].id, FEEDS[0].id, FEEDS[2].id, FEEDS[3].id]);
+  });
+
+  it('3行目を一番下まで運ぶと末尾に入り、末尾行が上へどく', async () => {
+    await mountAdmin();
+    const handle = handles()[2];
+    // 3行目 (上端200・下端280) を大きく下へ。移動量はクランプで
+    // +100 (下端が末尾行の下端380に一致) まで。挿入先は末尾の3。
+    pointer('pointerdown', handle, 240);
+    pointer('pointermove', handle, 1000);
+    await flush();
+    expect(errors).toEqual([]);
+    expect(cards()[2].style.transform).toBe('translateY(100px)');
+    expect(cards()[3].style.transform).toBe('translateY(-100px)');
+    pointer('pointerup', handle, 1000);
+    await flush();
+    expect(errors).toEqual([]);
+    expect(reorderFeeds).toHaveBeenCalledTimes(1);
+    const [, ids] = reorderFeeds.mock.calls[0];
+    expect(ids).toEqual([FEEDS[0].id, FEEDS[1].id, FEEDS[3].id, FEEDS[2].id]);
   });
 
   it('動かさずに離すと保存は呼ばれない', async () => {

@@ -1137,6 +1137,16 @@ button.ghost.active {
   margin-top: 12px;
 }
 
+/* カード右側に置く編集・削除ボタン。カード本体 (.feed-card) の
+   フレックス行の最後の要素として、右端に縦中央で並べる。本体側の
+   削除確認内の .feed-actions には効かないよう、専用クラスで分ける。 */
+.feed-card-actions {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  align-self: center;
+  margin-top: 0;
+}
+
 button.ghost.danger {
   color: var(--error);
   border-color: var(--error);
@@ -1148,30 +1158,6 @@ button.ghost.danger {
 
 .delete-confirm p {
   margin: 0;
-}
-
-/* 共有リンク (管理画面の最下部) */
-.share-status {
-  margin: 0;
-}
-
-.share-url-row {
-  display: flex;
-  gap: 8px;
-  margin-top: 12px;
-}
-
-.share-url-row .share-url {
-  flex: 1;
-  min-width: 0;
-  font: inherit;
-  /* .field input と同じく、iOS Safari の自動拡大を避けるため16pxに固定する */
-  font-size: 16px;
-  color: var(--text);
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 10px 12px;
 }
 
 /* 開いたフォームへスクロールしたとき、固定ナビの下に隠れないようにする */
