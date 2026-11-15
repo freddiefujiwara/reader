@@ -10,7 +10,6 @@ const FEEDS = [
     title: 'Rebuild',
     url: 'https://feeds.rebuild.fm/rebuildfm',
     category: 'ポッドキャスト',
-    isPrivate: false,
     lastStatus: '200',
     lastError: '',
     lastFetchedAt: '2026-11-15T01:00:00.000Z',

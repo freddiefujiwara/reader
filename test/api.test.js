@@ -120,7 +120,6 @@ describe('フィード管理の action', () => {
       url: 'https://example.com/rss',
       category: 'news',
       enabled: true,
-      isPrivate: false,
     };
     const fetcher = okFetcher({ ok: true, feed });
     const data = await saveFeed('tok', feed, { fetcher, apiUrl: API });

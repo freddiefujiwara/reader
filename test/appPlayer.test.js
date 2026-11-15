@@ -17,7 +17,6 @@ const FEED = {
   url: 'https://feeds.rebuild.fm/rebuildfm',
   category: 'ポッドキャスト',
   enabled: true,
-  isPrivate: false,
   lastStatus: '200',
   lastError: '',
   lastFetchedAt: '',
