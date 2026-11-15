@@ -70,12 +70,6 @@ import { loadLocalArticles, saveLocalFeeds, putLocalArticles } from '../src/lib/
 // jsdom の HTMLMediaElement は再生を実装しないため、App が使う
 // 面だけを持ち、'ended' などをテストから発火できるスタブにする。
 const audioInstances = [];
-// TimeRanges もどき。buffered の区間をテストから差し替える。
-const makeTimeRanges = (list) => ({
-  length: list.length,
-  start: (i) => list[i][0],
-  end: (i) => list[i][1],
-});
 class FakeAudio extends EventTarget {
   constructor() {
     super();
@@ -87,11 +81,6 @@ class FakeAudio extends EventTarget {
     this.duration = Number.NaN;
     this.playbackRate = 1;
     this.preload = '';
-    this.buffered = makeTimeRanges([]);
-  }
-
-  setBuffered(list) {
-    this.buffered = makeTimeRanges(list);
   }
 
   play() {
@@ -596,11 +585,10 @@ describe('既知の長さへの到達による終了判定 (durationSec 到達)'
     expect(errors).toEqual([]);
   });
 
-  it('終端で timeupdate が止まっても、ウォッチドッグの tick が到達を拾って次へ進む', async () => {
+  it('終端で timeupdate が止まっても、タイマーの tick が到達を拾って次へ進む', async () => {
     vi.useFakeTimers();
     try {
-      // 偽タイマー用のポンプとマウント (ウォッチドッグの
-      // describe と同じ流儀)。
+      // 偽タイマー用のポンプとマウント。
       const flushFake = async () => {
         for (let i = 0; i < 10; i += 1) {
           await vi.advanceTimersByTimeAsync(10);
@@ -636,8 +624,8 @@ describe('既知の長さへの到達による終了判定 (durationSec 到達)'
       // イベントが止まった状態)。タイマーが進むまでは進まない。
       audio.currentTime = 100;
       expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
-      // ウォッチドッグの tick (0.5秒) が要素の位置を見て到達を
-      // 拾い、次へ進む。
+      // 終端チェックのタイマーの tick (0.5秒) が要素の位置を
+      // 見て到達を拾い、次へ進む。
       await vi.advanceTimersByTimeAsync(500);
       await flushFake();
       expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
@@ -651,359 +639,6 @@ describe('既知の長さへの到達による終了判定 (durationSec 到達)'
 
 // 偽タイマーを入れる前に、本物の setTimeout を控えておく (ポンプ用)。
 const realSetTimeout = globalThis.setTimeout;
-
-describe('終端停滞ウォッチドッグ (ended が来ない終端の検出)', () => {
-  // ウォッチドッグはインターバル駆動で、終端では timeupdate 自体が
-  // 止まるのが前提のため、この一群だけ偽タイマーで時間を進める。
-  // 実タイマー前提の flush は使わず、advanceTimersByTimeAsync で
-  // タイマーと非同期処理をまとめて進める。IndexedDB の内部
-  // スケジューリングは偽タイマー側へ寄るため、0ms ではなく少しずつ
-  // 進めるポンプでないとトランザクションが完了しない (実測)。
-  const flushFake = async () => {
-    for (let i = 0; i < 10; i += 1) {
-      await vi.advanceTimersByTimeAsync(10);
-      await new Promise((r) => realSetTimeout(r, 1));
-      await nextTick();
-    }
-  };
-
-  async function mountFake() {
-    let seeded = false;
-    const seeding = seed().then(() => { seeded = true; });
-    for (let i = 0; i < 50 && !seeded; i += 1) await flushFake();
-    await seeding;
-    el = document.createElement('div');
-    document.body.appendChild(el);
-    app = createApp(App);
-    app.config.errorHandler = (err) => { errors.push(err); };
-    app.mount(el);
-    for (let i = 0; i < 50 && el.querySelectorAll('.article-card').length < 2; i += 1) {
-      await flushFake();
-    }
-    expect(el.querySelectorAll('.article-card').length, '記事カードが2件出る').toBe(2);
-  }
-
-  async function startFake(idx) {
-    const card = el.querySelectorAll('.article-card')[idx];
-    card.querySelector('.play-btn').click();
-    await flushFake();
-    return el.querySelector('.player-bar');
-  }
-
-  // 終端 (実尺 1800 秒) の手前まで進めて、表示位置を同期する。
-  async function parkAt(audio, pos) {
-    audio.duration = 1800;
-    audio.dispatchEvent(new window.Event('loadedmetadata'));
-    audio.currentTime = pos;
-    audio.dispatchEvent(new window.Event('timeupdate'));
-    await flushFake();
-  }
-
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it('終端付近で currentTime が止まったままなら、ended が来なくても次へ進む', async () => {
-    await mountFake();
-    await startFake(0);
-    const audio = latestAudio();
-    // 駐留位置は、既知の長さへの到達 (残り0.6秒以内) に入らない
-    // 1799.2 に置く (到達判定が先に発火すると、停滞判定の
-    // タイミングを検証できないため)。
-    await parkAt(audio, 1799.2);
-    expect(audio.ended).toBe(false);
-
-    // ここから currentTime は止まったまま (iOS で 'ended' が来ない
-    // 状態)。監視間隔0.5秒・停滞判定1秒なので、駐留から約1秒
-    // までは進まず、約1〜1.5秒で検出して終了フローへ進める。
-    await vi.advanceTimersByTimeAsync(500);
-    await flushFake();
-    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
-    await vi.advanceTimersByTimeAsync(2000);
-    await flushFake();
-    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
-    expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(true);
-    expect(errors).toEqual([]);
-  });
-
-  it('終端の残り3秒付近で止まったままでも、次へ進む', async () => {
-    await mountFake();
-    await startFake(0);
-    const audio = latestAudio();
-    await parkAt(audio, 1797);
-
-    // 終端窓 (残り5秒) の内側だが、従来の窓 (残り1秒) より手前で
-    // 駐留するケース。駐留から約1秒までは進まず、約1〜1.5秒で
-    // 検出して次へ進む。
-    await vi.advanceTimersByTimeAsync(500);
-    await flushFake();
-    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
-    await vi.advanceTimersByTimeAsync(2000);
-    await flushFake();
-    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
-    expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(true);
-    expect(errors).toEqual([]);
-  });
-
-  it('終端付近で微小な前進 (tick あたり 0.05 秒未満) が続いても、次へ進む', async () => {
-    await mountFake();
-    await startFake(0);
-    const audio = latestAudio();
-    await parkAt(audio, 1799.0);
-
-    // 終端で要素の報告値がわずかに前にずり続けるケース。tick
-    // ごとの前進が下限 (0.05 秒) 未満なら「前進していない」と
-    // みなすため、累積で下限を超えても数え直しにはならない。
-    // 進む範囲は、既知の長さへの到達 (残り0.6秒以内) に入らない
-    // ところまでに留める。
-    for (let i = 0; i < 4; i += 1) {
-      if (el.querySelector('.player-title').textContent === 'エピソード2') break;
-      audio.currentTime = Math.min(audio.currentTime + 0.03, 1799.35);
-      audio.dispatchEvent(new window.Event('timeupdate'));
-      await vi.advanceTimersByTimeAsync(1000);
-    }
-    await flushFake();
-    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
-    expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(true);
-    expect(errors).toEqual([]);
-  });
-
-  it('終端で要素が無言で paused になっても (isPlaying は true のまま)、次へ進む', async () => {
-    await mountFake();
-    await startFake(0);
-    const audio = latestAudio();
-    // 駐留位置は、既知の長さへの到達 (残り0.6秒以内) に入らない
-    // 1799.2 に置く (到達判定が先に発火すると、停滞判定を
-    // 検証できないため)。
-    await parkAt(audio, 1799.2);
-
-    // iOS が終端で 'ended' も 'pause' も発火しないまま要素を
-    // paused にするケース。'pause' イベントは来ないので、アプリ
-    // 側の isPlaying は true のまま残る (画面は再生中表示)。要素
-    // の paused を見て停滞を数えないと、この状態では停滞時間が
-    // 一切貯まらず発火しなかった。
-    audio.paused = true;
-    await vi.advanceTimersByTimeAsync(500);
-    await flushFake();
-    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
-    await vi.advanceTimersByTimeAsync(2000);
-    await flushFake();
-    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
-    expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(true);
-    expect(errors).toEqual([]);
-  });
-
-  it('timeupdate が窓の手前で止まっても、要素の位置が窓内なら tick が拾って次へ進む', async () => {
-    await mountFake();
-    await startFake(0);
-    const audio = latestAudio();
-    // timeupdate は終端窓 (残り5秒) の手前 (1790) で止まった
-    // 状態。ref 経由の表示位置はここで凍る。
-    await parkAt(audio, 1790);
-
-    // 要素だけが終端窓の中 (1797) まで進んで止まる (timeupdate
-    // は来ない)。既知の長さへの到達 (残り0.6秒以内) には入って
-    // いないので、進むとすれば第三の経路だけ。従来は ref の
-    // 凍った位置 (1790) を見ていたため窓に入らず、発火しな
-    // かった。tick が要素の現在位置を変換して判定することで
-    // 拾える。
-    audio.currentTime = 1797;
-    await vi.advanceTimersByTimeAsync(500);
-    await flushFake();
-    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
-    await vi.advanceTimersByTimeAsync(2000);
-    await flushFake();
-    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
-    expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(true);
-    expect(errors).toEqual([]);
-  });
-
-  it('最終5秒を通常速度で再生中は、終了フローは走らない', async () => {
-    await mountFake();
-    await startFake(0);
-    const audio = latestAudio();
-    await parkAt(audio, 1795.3);
-
-    // 終端窓 (残り5秒) の内側を、1秒ごとに約1秒ずつ前進する
-    // 通常再生。前進量が下限以上なので停滞とは数えず、終端
-    // 付近にいても誤って発火しない。最終位置 (1799.3) は、既知
-    // の長さへの到達 (残り0.6秒以内) にも入らないところに
-    // 留める。
-    for (let i = 0; i < 4; i += 1) {
-      audio.currentTime = 1795.3 + (i + 1) * 1.0;
-      audio.dispatchEvent(new window.Event('timeupdate'));
-      await vi.advanceTimersByTimeAsync(1000);
-    }
-    await flushFake();
-    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
-    expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(false);
-    expect(errors).toEqual([]);
-  });
-
-  it('曲の途中で currentTime が止まっても (ネットワーク停滞)、終了フローは走らない', async () => {
-    await mountFake();
-    await startFake(0);
-    const audio = latestAudio();
-    await parkAt(audio, 900);
-
-    await vi.advanceTimersByTimeAsync(15_000);
-    await flushFake();
-    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
-    expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(false);
-    expect(errors).toEqual([]);
-  });
-
-  it('終端付近でも currentTime が進み続けていれば、終了フローは走らない', async () => {
-    await mountFake();
-    await startFake(0);
-    const audio = latestAudio();
-    await parkAt(audio, 1798.9);
-
-    // 監視間隔 (0.5秒) のたびに少しずつ進み続ける。終端付近に
-    // いても、進んでいる間は停滞として数えない。進む範囲は、
-    // 既知の長さへの到達 (残り0.6秒以内) に入らないところまで
-    // に留める (到達すれば終了するのが新しい仕様のため)。
-    for (let i = 0; i < 5; i += 1) {
-      audio.currentTime = Math.min(1798.9 + 0.09 * (i + 1), 1799.35);
-      audio.dispatchEvent(new window.Event('timeupdate'));
-      await vi.advanceTimersByTimeAsync(1000);
-    }
-    await flushFake();
-    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
-    expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(false);
-    expect(errors).toEqual([]);
-  });
-
-  it('終端付近でも一時停止中は終了フローは走らない', async () => {
-    await mountFake();
-    await startFake(0);
-    const audio = latestAudio();
-    // 駐留位置は、既知の長さへの到達 (残り0.6秒以内) に入らない
-    // 1799.2 に置く (到達判定が先に発火すると、一時停止の前に
-    // 進んでしまうため)。
-    await parkAt(audio, 1799.2);
-
-    audio.pause();
-    await flushFake();
-    await vi.advanceTimersByTimeAsync(15_000);
-    await flushFake();
-    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
-    expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(false);
-    expect(errors).toEqual([]);
-  });
-
-  it('全量バッファ済みで末尾に駐留すれば、約1秒で次へ進む (バッファ基準)', async () => {
-    await mountFake();
-    await startFake(0);
-    const audio = latestAudio();
-    // バッファの末尾は 1799.75 とする (duration の残り0.5秒以内
-    // なので「全量バッファ済み」の条件は満たす)。駐留位置は、
-    // その末尾付近 (残り0.5秒以内) にありながら、既知の長さへ
-    // の到達 (残り0.6秒以内) には入らない 1799.35 に置く
-    // (到達判定が先に発火すると、バッファ経路のタイミングを
-    // 検証できないため)。
-    audio.setBuffered([[0, 1799.75]]);
-    await parkAt(audio, 1799.35);
-    expect(audio.ended).toBe(false);
-
-    // 駐留から約0.5秒ではまだ進まない (ルックバック約1秒分の
-    // 履歴が要る)。約1〜1.5秒で検出して次へ進むのが目標。
-    await vi.advanceTimersByTimeAsync(500);
-    await flushFake();
-    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
-    await vi.advanceTimersByTimeAsync(1000);
-    await flushFake();
-    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
-    expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(true);
-    expect(errors).toEqual([]);
-  });
-
-  it('全量バッファ済みで末尾に微振動しながら駐留しても、次へ進む (バッファ基準)', async () => {
-    await mountFake();
-    await startFake(0);
-    const audio = latestAudio();
-    // バッファの末尾は 1799.75 とする。駐留位置と振動範囲は、
-    // その末尾付近 (残り0.5秒以内) にありながら、既知の長さへ
-    // の到達 (残り0.6秒以内) には入らない範囲に置く (到達判定
-    // が先に発火すると、バッファ経路を検証できないため)。
-    audio.setBuffered([[0, 1799.75]]);
-    await parkAt(audio, 1799.31);
-
-    // tick (0.5秒) ごとに ±0.06 秒を行き来する微振動。表示位置
-    // ベースの経路は、tick あたりの前進量が下限 (0.05 秒) 以上
-    // あるため毎回数え直しになって発火しない。一方バッファ基準
-    // は約1秒の正味前進 (≈0) で判定するため発火する。この
-    // テストはバッファ経路を外すと落ちる。
-    let high = false;
-    for (let i = 0; i < 5; i += 1) {
-      if (el.querySelector('.player-title').textContent === 'エピソード2') break;
-      high = !high;
-      audio.currentTime = high ? 1799.37 : 1799.31;
-      await vi.advanceTimersByTimeAsync(500);
-    }
-    await flushFake();
-    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
-    expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(true);
-    expect(errors).toEqual([]);
-  });
-
-  it('全量バッファ済みでも途中で止まっていれば、次へ進まない (バッファ基準)', async () => {
-    await mountFake();
-    await startFake(0);
-    const audio = latestAudio();
-    audio.setBuffered([[0, 1800]]);
-    await parkAt(audio, 900);
-
-    await vi.advanceTimersByTimeAsync(15_000);
-    await flushFake();
-    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
-    expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(false);
-    expect(errors).toEqual([]);
-  });
-
-  it('バッファが終端まで届いていない末尾駐留では、次へ進まない (バッファ基準)', async () => {
-    await mountFake();
-    await startFake(0);
-    const audio = latestAudio();
-    // duration は 1800 だが、ダウンロード済みは 1200 まで。その
-    // 末尾に駐留しても、続きのデータがまだ来る前提なので終端と
-    // はみなさない。表示位置も終端窓の外なので従来経路も発火
-    // しない。
-    audio.setBuffered([[0, 1200]]);
-    await parkAt(audio, 1199.8);
-
-    await vi.advanceTimersByTimeAsync(15_000);
-    await flushFake();
-    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
-    expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(false);
-    expect(errors).toEqual([]);
-  });
-
-  it('全量バッファ済みで末尾に駐留しても、一時停止中は次へ進まない (バッファ基準)', async () => {
-    await mountFake();
-    await startFake(0);
-    const audio = latestAudio();
-    // バッファの末尾は 1799.75 とする。駐留位置は、その末尾
-    // 付近 (残り0.5秒以内) にありながら、既知の長さへの到達
-    // (残り0.6秒以内) には入らない 1799.35 に置く (到達判定が
-    // 先に発火すると、一時停止中に進まないことを検証できない
-    // ため)。
-    audio.setBuffered([[0, 1799.75]]);
-    await parkAt(audio, 1799.35);
-
-    audio.pause();
-    await flushFake();
-    await vi.advanceTimersByTimeAsync(15_000);
-    await flushFake();
-    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
-    expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(false);
-    expect(errors).toEqual([]);
-  });
-});
 
 describe('次の曲の先読み', () => {
   // 先読みは本体とは別の2つ目の要素で温める。要素は必要になる
