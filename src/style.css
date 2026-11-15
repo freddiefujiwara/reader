@@ -1207,6 +1207,19 @@ button.ghost.danger {
   padding: 10px 12px;
 }
 
+/* 発行・無効化の2ボタンは縦に積まず、均等幅で横並びにする。
+   確認行 (.delete-confirm 内の .feed-actions) には付けない。 */
+.share-actions {
+  flex-wrap: nowrap;
+}
+
+.share-actions > button {
+  flex: 1 1 0;
+  min-width: 0;
+  padding-left: 10px;
+  padding-right: 10px;
+}
+
 /* 開いたフォームへスクロールしたとき、固定ナビの下に隠れないようにする */
 .feed-form {
   scroll-margin-top: calc(var(--nav-h, 64px) + 12px);
