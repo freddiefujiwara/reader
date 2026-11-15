@@ -19,6 +19,8 @@ import {
   isWithinEndGuard,
   RESUME_END_GUARD_SEC,
   reachedTrueEnd,
+  TRUE_END_TOLERANCE_SEC,
+  reachedKnownDurationEnd,
   isEndStalled,
   END_STALL_WATCH_INTERVAL_MS,
   END_STALL_WINDOW_SEC,
@@ -417,6 +419,44 @@ describe('reachedTrueEnd', () => {
   it('長さ不明なら終端にしない', () => {
     expect(reachedTrueEnd(10, 0)).toBe(false);
     expect(reachedTrueEnd(10, null)).toBe(false);
+  });
+});
+
+describe('reachedKnownDurationEnd', () => {
+  it('要素 duration と一致する曲では、実測モデルなしで到達を終了とする', () => {
+    expect(reachedKnownDurationEnd({
+      displayPos: 100, trueSec: 100, elementDuration: 100, hasMeasuredModel: false,
+    })).toBe(true);
+    // 許容誤差 (0.3秒) の境界。
+    expect(reachedKnownDurationEnd({
+      displayPos: 100 - TRUE_END_TOLERANCE_SEC, trueSec: 100, elementDuration: 100, hasMeasuredModel: false,
+    })).toBe(true);
+    expect(reachedKnownDurationEnd({
+      displayPos: 100 - TRUE_END_TOLERANCE_SEC - 0.1, trueSec: 100, elementDuration: 100, hasMeasuredModel: false,
+    })).toBe(false);
+  });
+  it('既知の長さの手前では終了としない', () => {
+    expect(reachedKnownDurationEnd({
+      displayPos: 95, trueSec: 100, elementDuration: 100, hasMeasuredModel: false,
+    })).toBe(false);
+  });
+  it('durationSec が不明な曲では、この判定では終了としない', () => {
+    expect(reachedKnownDurationEnd({
+      displayPos: 100, trueSec: 0, elementDuration: 100, hasMeasuredModel: false,
+    })).toBe(false);
+    expect(reachedKnownDurationEnd({
+      displayPos: 100, trueSec: null, elementDuration: 100, hasMeasuredModel: false,
+    })).toBe(false);
+  });
+  it('要素 duration とずれている曲では、実測モデルがある場合に限る', () => {
+    // ずれている曲の表示位置はモデル変換を通るため、端末保存の
+    // learned の流用だけ (hasMeasuredModel: false) では発火しない。
+    expect(reachedKnownDurationEnd({
+      displayPos: 103.8, trueSec: 104, elementDuration: 208, hasMeasuredModel: false,
+    })).toBe(false);
+    expect(reachedKnownDurationEnd({
+      displayPos: 103.8, trueSec: 104, elementDuration: 208, hasMeasuredModel: true,
+    })).toBe(true);
   });
 });
 

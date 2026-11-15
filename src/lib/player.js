@@ -178,12 +178,41 @@ export function interpretStoredPlayPos(stored, ctx) {
   return result;
 }
 
-// 表示位置が実質の終端 (残り0.3秒以内) に達したか。要素の 'ended' が
-// 来ないケースで終了フローへ進めるための判定。
+// 終端とみなす許容誤差 (秒)。表示位置が全体の残りこの秒数以内に
+// 入ったら、実質の終端に達したものとする。
+export const TRUE_END_TOLERANCE_SEC = 0.3;
+
+// 表示位置が実質の終端 (残り TRUE_END_TOLERANCE_SEC 秒以内) に
+// 達したか。要素の 'ended' が来ないケースで終了フローへ進める
+// ための判定。
 export function reachedTrueEnd(displayPos, trueSec) {
   if (!Number.isFinite(trueSec) || trueSec <= 0) return false;
   if (!Number.isFinite(displayPos)) return false;
-  return displayPos >= trueSec - 0.3;
+  return displayPos >= trueSec - TRUE_END_TOLERANCE_SEC;
+}
+
+/* ---- 既知の長さ (durationSec) への到達による終了判定 ----
+   YouTube 曲の durationSec は、reader-gas が抽出時に実ストリーム
+   から測った長さであり、発行者の申告ではない。これまでの実機
+   でもメディアの実長と一致し (121秒・80秒・49秒など)、表示位置
+   も毎回正しく終端まで到達している。一方、要素の 'ended' は
+   iOS 上の googlevideo 由来 fMP4 では来ないことがあり、従来の
+   表示位置ベースの判定は要素 duration との不一致がある曲に
+   限られていたため、両者が一致する通常の曲では 'ended' だけが
+   頼りになり、終端で数十秒止まることがあった。そこで、
+   durationSec が判明している曲では、表示位置がその長さに
+   達した時点で終了とみなす。最後のコンマ数秒が実際の終わり
+   より手前に判定される可能性は、許容誤差
+   (TRUE_END_TOLERANCE_SEC) の範囲に限られる。
+   要素 duration と一致する曲では、表示位置は要素の位置そのもの
+   (モデル変換を通らない) なので実測モデルは要らない。ずれて
+   いる曲の表示位置はモデル変換を通るため、従来どおり、この曲
+   の再生中に実測したモデルがある場合に限る (端末保存の
+   learned の流用だけでは発火しない。PR #45 の防御)。 */
+export function reachedKnownDurationEnd({ displayPos, trueSec, elementDuration, hasMeasuredModel } = {}) {
+  if (!reachedTrueEnd(displayPos, trueSec)) return false;
+  if (!durationMismatch(trueSec, elementDuration)) return true;
+  return hasMeasuredModel === true;
 }
 
 /* ---- 終端停滞の検出 (ウォッチドッグ) ----
