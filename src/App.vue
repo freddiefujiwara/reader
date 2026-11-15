@@ -286,15 +286,21 @@ async function onManualRefresh() {
 }
 
 function setFeed(feedId) {
-  if (state.value.feedId === feedId) return;
-  state.value = { ...state.value, feedId };
+  // 選択中のフィードを再タップしたら解除し、全件表示に戻す
+  // (「すべて」チップは廃止し、トグル選択にした)。
+  const next = state.value.feedId === feedId ? '' : feedId;
+  if (next === state.value.feedId) return;
+  state.value = { ...state.value, feedId: next };
   displayLimit.value = DISPLAY_LIMIT;
 }
 
 function setCategory(category) {
-  if (state.value.category === category) return;
+  // 選択中のカテゴリを再タップしたら解除し、全件表示に戻す
+  // (「すべて」チップは廃止し、トグル選択にした)。
+  const next = state.value.category === category ? '' : category;
+  if (next === state.value.category) return;
   // カテゴリを変えたらフィード選択は解除する (対象外フィードが残らないように)。
-  state.value = { ...state.value, category, feedId: '' };
+  state.value = { ...state.value, category: next, feedId: '' };
   displayLimit.value = DISPLAY_LIMIT;
 }
 
@@ -1224,12 +1230,6 @@ onMounted(async () => {
         <div class="filter-bar">
         <div v-if="categoryList.length" class="feed-chips category-chips" role="tablist" aria-label="カテゴリで絞り込み">
           <button
-            type="button"
-            class="chip"
-            :class="{ active: state.category === '' }"
-            @click="setCategory('')"
-          >すべて</button>
-          <button
             v-for="c in categoryList"
             :key="c"
             type="button"
@@ -1239,12 +1239,6 @@ onMounted(async () => {
           >{{ c }}</button>
         </div>
         <div class="feed-chips" role="tablist" aria-label="フィードで絞り込み">
-          <button
-            type="button"
-            class="chip"
-            :class="{ active: state.feedId === '' }"
-            @click="setFeed('')"
-          >すべて</button>
           <button
             v-for="f in chipFeeds"
             :key="f.id"
