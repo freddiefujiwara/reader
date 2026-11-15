@@ -282,18 +282,18 @@ describe('isWithinEndGuard', () => {
 });
 
 describe('isEndStalled', () => {
-  it('終端の残り1秒以内にあり、3秒以上止まっていれば停滞とする', () => {
-    expect(END_STALL_WATCH_INTERVAL_MS).toBe(2000);
+  it('終端の残り1秒以内にあり、1秒以上止まっていれば停滞とする', () => {
+    expect(END_STALL_WATCH_INTERVAL_MS).toBe(1000);
     expect(END_STALL_WINDOW_SEC).toBe(1);
-    expect(END_STALL_FROZEN_SEC).toBe(3);
+    expect(END_STALL_FROZEN_SEC).toBe(1);
     expect(isEndStalled(1799.5, 1800, 4)).toBe(true);
-    expect(isEndStalled(1799, 1800, 3)).toBe(true);
+    expect(isEndStalled(1799, 1800, 1)).toBe(true);
     expect(isEndStalled(1800, 1800, 10)).toBe(true);
   });
   it('終端から遠い・停滞が短い場合は停滞にしない', () => {
     expect(isEndStalled(1798.9, 1800, 10)).toBe(false);
     expect(isEndStalled(900, 1800, 30)).toBe(false);
-    expect(isEndStalled(1799.5, 1800, 2.9)).toBe(false);
+    expect(isEndStalled(1799.5, 1800, 0.9)).toBe(false);
   });
   it('長さ不明・位置なし・停滞時間不明なら停滞にしない', () => {
     expect(isEndStalled(100, 0, 10)).toBe(false);

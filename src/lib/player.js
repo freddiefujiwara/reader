@@ -194,12 +194,12 @@ export function reachedTrueEnd(displayPos, trueSec) {
    終了とみなす。判定材料はこの純粋関数に寄せる。 */
 
 // ウォッチドッグの監視間隔 (ミリ秒)。
-export const END_STALL_WATCH_INTERVAL_MS = 2000;
+export const END_STALL_WATCH_INTERVAL_MS = 1000;
 // 表示位置が実効終端の残りこの秒数以内にあれば「終端付近」。
 export const END_STALL_WINDOW_SEC = 1;
 // 要素の currentTime がこの秒数以上まったく進まなければ「停滞」。
-// インターバルが2秒のため、実際の検出は終端到達から約4秒になる。
-export const END_STALL_FROZEN_SEC = 3;
+// インターバルが1秒のため、実際の検出は終端到達から約1〜2秒になる。
+export const END_STALL_FROZEN_SEC = 1;
 
 // 終端付近に駐留し、currentTime が END_STALL_FROZEN_SEC 秒以上
 // 進んでいないか。実効終端 (effectiveDuration) は表示スケールの

@@ -519,8 +519,13 @@ describe('終端停滞ウォッチドッグ (ended が来ない終端の検出)'
     expect(audio.ended).toBe(false);
 
     // ここから currentTime は止まったまま (iOS で 'ended' が来ない
-    // 状態)。インターバル監視が停滞を検出して終了フローへ進める。
-    await vi.advanceTimersByTimeAsync(10_000);
+    // 状態)。監視間隔1秒・停滞判定1秒なので、最初の監視 (起点の
+    // 記録) だけでは進まず、次の監視で検出して終了フローへ進める
+    // (終端到達から約1〜2秒で次へ進む)。
+    await vi.advanceTimersByTimeAsync(1200);
+    await flushFake();
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
+    await vi.advanceTimersByTimeAsync(2000);
     await flushFake();
     expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
     expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(true);
@@ -546,12 +551,12 @@ describe('終端停滞ウォッチドッグ (ended が来ない終端の検出)'
     const audio = latestAudio();
     await parkAt(audio, 1799.0);
 
-    // 監視間隔 (2秒) のたびに少しずつ進み続ける。終端付近にいても、
+    // 監視間隔 (1秒) のたびに少しずつ進み続ける。終端付近にいても、
     // 進んでいる間は停滞として数えない。
     for (let i = 0; i < 5; i += 1) {
-      audio.currentTime = Math.min(1799.0 + 0.2 * (i + 1), 1799.95);
+      audio.currentTime = Math.min(1799.0 + 0.18 * (i + 1), 1799.95);
       audio.dispatchEvent(new window.Event('timeupdate'));
-      await vi.advanceTimersByTimeAsync(2000);
+      await vi.advanceTimersByTimeAsync(1000);
     }
     await flushFake();
     expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
