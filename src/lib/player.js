@@ -108,6 +108,54 @@ export function nextEpisodePlan({ queue, currentId, repeat = 'none', shuffle = f
   return { type: 'stop' };
 }
 
+/* ---- 前へ／次へボタン (blog の musicPlayer と同じ規則) ---- */
+
+// 両端で折り返す1ステップ移動。blog の stepIndex と同じ式。
+export function stepIndex(index, count, delta) {
+  if (!count) return 0;
+  return (((index + delta) % count) + count) % count;
+}
+
+// 前へ (delta -1)／次へ (delta +1) の遷移先を記事IDで決める。
+// blog の musicPlayer のボタン挙動に対応する:
+//   ランダムでない → stepIndex で両端を折り返す (末尾の「次へ」は
+//                    先頭へ、先頭の「前へ」は末尾へ)。
+//   ランダムの「次へ」→ 現在以外のキュー内から randomPick で1件。
+//   ランダムの「前へ」→ history (再生した順の記事ID列) を
+//                    さかのぼり、現在と異なる直近の1件 (キューに
+//                    残っているもの)。無ければ stepIndex で前へ。
+// 戻り値は { id, historyCut }。historyCut は「前へ」で履歴を
+// 使った位置で、呼び出し側は履歴をその位置まで切り詰めてから
+// 遷移先を積み直す (blog が startTrack で履歴を積み直す扱いに
+// 合わせる)。履歴を使わなければ null。遷移先が無ければ全体を
+// null で返す。
+export function skipPlan({ queue, currentId, delta, shuffle = false, history = [], randomPick } = {}) {
+  const ids = Array.isArray(queue) ? queue : [];
+  if (!ids.length) return null;
+  const pick = typeof randomPick === 'function'
+    ? randomPick
+    : (candidates) => candidates[Math.floor(Math.random() * candidates.length)];
+  if (delta > 0) {
+    if (shuffle && ids.length > 1) {
+      return { id: pick(ids.filter((id) => id !== currentId)), historyCut: null };
+    }
+    const index = ids.indexOf(currentId);
+    if (index < 0) return null;
+    return { id: ids[stepIndex(index, ids.length, 1)], historyCut: null };
+  }
+  if (shuffle) {
+    const hist = Array.isArray(history) ? history : [];
+    for (let k = hist.length - 2; k >= 0; k -= 1) {
+      if (hist[k] !== currentId && ids.includes(hist[k])) {
+        return { id: hist[k], historyCut: k };
+      }
+    }
+  }
+  const index = ids.indexOf(currentId);
+  if (index < 0) return null;
+  return { id: ids[stepIndex(index, ids.length, -1)], historyCut: null };
+}
+
 /* ---- YouTube 音声の再生時間の二重化への対処 ----
    itag 140 の fMP4 は、長さの情報が init セグメントの mvhd と断片側の
    両方に入っており、iOS のプレイヤーが合算して実長の2倍を duration と

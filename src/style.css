@@ -886,6 +886,27 @@ button.ghost.active {
   fill: currentColor;
 }
 
+/* 前へ/次へは blog の mp-prev / mp-next と同じ作り: 再生ボタンの
+   左右に置く 44px の円形ボタンで、スキップアイコンだけを
+   中央に置く (土台の .player-button が地と枠を担う)。 */
+.player-step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border-radius: 50%;
+  flex: none;
+}
+
+.player-step svg {
+  display: block;
+  width: 24px;
+  height: 24px;
+  fill: currentColor;
+}
+
 /* モード切替は blog の mp-repeat / mp-random と同じ扱い:
    小さな地紋なしアイコンで、普段は控えめな色、オンのときだけ
    full-strength。主題色は再生ボタン専用のままにする。 */
