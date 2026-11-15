@@ -13,7 +13,6 @@ const FEEDS = [
     title: 'Rebuild',
     url: 'https://feeds.rebuild.fm/rebuildfm',
     category: 'ポッドキャスト',
-    isPrivate: false,
     lastStatus: '200',
     lastError: '',
     lastFetchedAt: '2026-11-15T01:00:00.000Z',
@@ -24,7 +23,6 @@ const FEEDS = [
     title: '', // YouTube のタイトル補完待ち
     url: 'https://www.youtube.com/feeds/videos.xml?channel_id=UCxxxxxxxxxxxxxxxxxxxxxx',
     category: '教養・ラジオ',
-    isPrivate: false,
     lastStatus: '200',
     lastError: '',
     lastFetchedAt: '2026-11-15T01:00:00.000Z',
@@ -35,7 +33,6 @@ const FEEDS = [
     title: 'ゆる言語学ラジオ',
     url: 'https://api.robotstart.jp/api/v1/feeds/35d00481/get-feeds/podcast',
     category: 'ポッドキャスト',
-    isPrivate: false,
     lastStatus: '200',
     lastError: '',
     lastFetchedAt: '2026-11-15T01:00:00.000Z',
@@ -46,7 +43,6 @@ const FEEDS = [
     title: 'X freddie',
     url: 'https://a.ze.gs/x.freddie.xml',
     category: 'private',
-    isPrivate: true,
     lastStatus: '200',
     lastError: '',
     lastFetchedAt: '2026-11-15T01:00:00.000Z',
@@ -328,8 +324,8 @@ describe('ヘッダーのブランド (ホームボタン)', () => {
   });
 });
 
-describe('管理画面のプライベート表示', () => {
-  it('isPrivate なフィードでも「プライベート」バッジを表示しない', async () => {
+describe('管理画面の非公開表示', () => {
+  it('「プライベート」バッジや文言を表示しない', async () => {
     await mountAdmin();
     expect(errors).toEqual([]);
     // 対象フィード自体は通常どおり描画される。
@@ -633,7 +629,6 @@ describe('管理画面の YouTube チャンネル URL 追加', () => {
     title: 'rakutentech',
     url: 'https://www.youtube.com/channel/UCxNfaRC6MbAnwSR1Dqqv69A',
     category: '',
-    isPrivate: false,
     lastStatus: '',
     lastError: '',
     lastFetchedAt: '',
@@ -688,7 +683,6 @@ describe('管理画面の YouTube チャンネル URL 追加', () => {
       title: '',
       url: 'https://www.youtube.com/@rakutentech',
       category: '',
-      isPrivate: false,
     });
     // 保存後はフォームが閉じ、サーバーが返した解決済みフィードが一覧に出る。
     expect(el.querySelector('.feed-form'), '保存後はフォームが閉じる').toBeNull();

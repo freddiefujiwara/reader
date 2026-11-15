@@ -62,15 +62,13 @@ export function listArticles(sessionToken, { feedId = '', category = '', filter 
 }
 
 // フィード管理の一覧 (オーナーセッションのみ)。
-// -> { ok, feeds: [{id, title, url, category, isPrivate,
+// -> { ok, feeds: [{id, title, url, category,
 //     lastStatus, lastError, lastFetchedAt, unreadCount}] }
 export function listFeeds(sessionToken, opts) {
   return postJson({ action: 'listFeeds', sessionToken }, opts);
 }
 
 // フィードの追加・更新 (オーナーセッションのみ)。
-// isPrivate はサーバー側が URL のホスト (a.ze.gs) から決めるため、
-// 送った値は参考値で、確定値は応答の feed で確認する。
 // -> { ok, feed } / 検証エラーは error: 'invalid' + serverMessage。
 export function saveFeed(sessionToken, feed, opts) {
   return postJson({ action: 'saveFeed', sessionToken, feed }, opts);

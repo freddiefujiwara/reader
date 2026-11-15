@@ -148,7 +148,6 @@ export function resolveFeedAddForm(form, { xml = '' } = {}) {
 
 // saveFeed へ送る feed オブジェクトを組み立てる。
 // 新規 (base なし): ID は送らない (サーバーが URL から決める)。
-// isPrivate=false (isPrivate はサーバーが URL から決める)。
 // 編集 (base あり): ID / タイトル / URL は元のフィードのまま、
 // ジャンルだけをフォームから反映する。
 export function buildSaveFeedPayload(form, base = null) {
@@ -158,14 +157,12 @@ export function buildSaveFeedPayload(form, base = null) {
       title: base.title || '',
       url: base.url || '',
       category: String(form?.category || '').trim(),
-      isPrivate: base.isPrivate === true,
     };
   }
   return {
     title: String(form?.title || '').trim(),
     url: String(form?.url || '').trim(),
     category: String(form?.category || '').trim(),
-    isPrivate: false,
   };
 }
 

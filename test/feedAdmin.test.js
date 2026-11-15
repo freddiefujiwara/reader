@@ -32,7 +32,6 @@ describe('createFeedForm / feedFormFromFeed', () => {
       url: 'https://example.com/rss',
       category: 'news',
       enabled: false,
-      isPrivate: true,
       unreadCount: 5,
     };
     expect(feedFormFromFeed(feed)).toEqual({
@@ -208,7 +207,7 @@ describe('resolveFeedAddForm (取得結果でタイトルを決める)', () => {
 });
 
 describe('buildSaveFeedPayload', () => {
-  it('新規は ID を送らず、isPrivate=false (空白は落とす)', () => {
+  it('新規は ID を送らず (空白は落とす)', () => {
     const payload = buildSaveFeedPayload({
       title: ' Rebuild ',
       url: ' https://feeds.rebuild.fm/rebuildfm ',
@@ -218,7 +217,6 @@ describe('buildSaveFeedPayload', () => {
       title: 'Rebuild',
       url: 'https://feeds.rebuild.fm/rebuildfm',
       category: 'tech',
-      isPrivate: false,
     });
     expect('id' in payload).toBe(false);
   });
@@ -231,14 +229,13 @@ describe('buildSaveFeedPayload', () => {
     expect(payload.title).toBe('');
     expect('id' in payload).toBe(false);
   });
-  it('編集時は ID / タイトル / URL / isPrivate は元を引き継ぎ、ジャンルだけをフォームから取る', () => {
+  it('編集時は ID / タイトル / URL は元を引き継ぎ、ジャンルだけをフォームから取る', () => {
     const base = {
       id: 'b81e59da11f890d2',
       title: 'Rebuild',
       url: 'https://feeds.rebuild.fm/rebuildfm',
       category: 'old',
       enabled: true,
-      isPrivate: true,
     };
     const payload = buildSaveFeedPayload(
       { id: '書き換えたふり', title: '書き換えたふり', url: 'https://evil.example/', category: ' new ', enabled: false },
@@ -249,11 +246,10 @@ describe('buildSaveFeedPayload', () => {
       title: 'Rebuild',
       url: 'https://feeds.rebuild.fm/rebuildfm',
       category: 'new',
-      isPrivate: true,
     });
   });
   it('編集でフォームに enabled があってもペイロードには含めない', () => {
-    const base = { id: 'x', title: 'X', url: 'https://example.com/f', category: 'old', isPrivate: false };
+    const base = { id: 'x', title: 'X', url: 'https://example.com/f', category: 'old' };
     const payload = buildSaveFeedPayload({ category: 'news', enabled: false }, base);
     expect('enabled' in payload).toBe(false);
     expect(payload.category).toBe('news');
