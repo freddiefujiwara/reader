@@ -529,3 +529,76 @@ describe('ジャンル候補 (datalist を使わない)', () => {
     expect(errors).toEqual([]);
   });
 });
+
+describe('管理画面のスクロール位置の復元', () => {
+  // 過去の不具合: 編集中は一覧が隠れてドキュメントが極端に短くなり、
+  // フォームを閉じるとブラウザの位置復元で一覧の最下部へ飛んでいた。
+  // 開く前の位置を覚えておき、閉じた後に戻すことをここで固定する。
+  let currentScrollY = 0;
+
+  beforeEach(() => {
+    currentScrollY = 0;
+    Object.defineProperty(window, 'scrollY', {
+      configurable: true,
+      get: () => currentScrollY,
+    });
+  });
+
+  afterEach(() => {
+    delete window.scrollY;
+  });
+
+  it('編集をキャンセルすると、開く前のスクロール位置へ戻る', async () => {
+    currentScrollY = 480;
+    await mountAdmin();
+    const form = await openEdit(2);
+    findButton(form, 'キャンセル').click();
+    await flush();
+    expect(errors).toEqual([]);
+    expect(el.querySelector('.feed-form'), 'フォームは閉じる').toBeNull();
+    expect(el.querySelectorAll('.feed-card').length, '一覧が戻る').toBe(FEEDS.length);
+    expect(scrollToCalls).toEqual([{ top: 480 }]);
+  });
+
+  it('編集を保存すると、開く前のスクロール位置へ戻る', async () => {
+    currentScrollY = 320;
+    await mountAdmin();
+    const form = await openEdit(0);
+    const input = form.querySelector('#feed-category');
+    input.value = '新しいジャンル';
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+    form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+    await flush();
+    await flush();
+    expect(errors).toEqual([]);
+    expect(el.querySelector('.feed-form'), '保存後はフォームが閉じる').toBeNull();
+    expect(el.querySelectorAll('.feed-card').length, '一覧が戻る').toBe(FEEDS.length);
+    expect(scrollToCalls).toEqual([{ top: 320 }]);
+  });
+
+  it('追加フォームをキャンセルしても、開く前の位置へ戻る', async () => {
+    currentScrollY = 200;
+    await mountAdmin();
+    findButton(el, 'フィードを追加').click();
+    await flush();
+    const form = el.querySelector('.feed-form');
+    expect(form, '追加フォームが開く').toBeTruthy();
+    findButton(form, 'キャンセル').click();
+    await flush();
+    expect(errors).toEqual([]);
+    expect(el.querySelector('.feed-form'), 'フォームは閉じる').toBeNull();
+    expect(scrollToCalls).toEqual([{ top: 200 }]);
+  });
+
+  it('編集中にブランドでタイムラインへ戻ると、位置の復元は走らない', async () => {
+    currentScrollY = 480;
+    await mountAdmin();
+    await openEdit(0);
+    el.querySelector('.brand').click();
+    await flush();
+    expect(errors).toEqual([]);
+    // 先頭へのスクロール (goHome) だけが走り、覚えた位置への復元は無い。
+    expect(scrollToCalls.some((c) => c.top === 480)).toBe(false);
+    expect(scrollToCalls.at(-1)).toMatchObject({ top: 0 });
+  });
+});
