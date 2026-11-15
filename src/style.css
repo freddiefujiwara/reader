@@ -1042,7 +1042,58 @@ button.ghost.active {
 }
 
 .feed-card {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
   padding: 18px 20px;
+  /* ドラッグ中、掴んだ行以外の行が詰めて動くアニメーション。 */
+  transition: transform 160ms ease;
+}
+
+.feed-card.is-dragging {
+  position: relative;
+  z-index: 6;
+  transition: none;
+  box-shadow: var(--shadow), 0 14px 34px rgba(64, 42, 20, 0.18);
+  cursor: grabbing;
+}
+
+/* ドロップ直後の1フレームは、レイアウト位置の変化と transform の
+   解除が重なって行がずれて見えないよう、アニメーションを止める。 */
+.feed-card.drag-settling {
+  transition: none;
+}
+
+.feed-card-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* 並び替えのドラッグハンドル。行の左端に置き、縦はいっぱいに広げて
+   掴みやすくする。touch-action: none で、ドラッグ中にページの
+   スクロールへ競合させない (ドラッグはハンドルからのみ始まる)。 */
+.drag-handle {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  background: transparent;
+  border: none;
+  border-radius: 10px;
+  color: var(--muted-2);
+  font: inherit;
+  font-size: 1.15rem;
+  line-height: 1;
+  cursor: grab;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.drag-handle:active {
+  cursor: grabbing;
+  color: var(--muted);
 }
 
 .feed-card.is-disabled {

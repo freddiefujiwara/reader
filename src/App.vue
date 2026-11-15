@@ -17,8 +17,10 @@ import {
   filterAdminFeeds,
   formatFeedStatus,
   genreSuggestions,
+  dragInsertIndex,
+  dragRowPitch,
   isFeedFormDirty,
-  moveFeedOrder,
+  moveItemToIndex,
   createOrderSender,
   planFeedAdd,
   resolveFeedAddForm,
@@ -1398,15 +1400,13 @@ async function waitReorderSettled() {
   try {
     await lastReorder;
   } catch {
-    // エラー表示と読み直しは onMoveFeed 側で行う。
+    // エラー表示と読み直しは applyFeedOrder 側で行う。
   }
 }
 
-async function onMoveFeed(feed, direction) {
-  const next = moveFeedOrder(mgmtFeeds.value, feed.id, direction);
-  if (!next) return;
-  // 画面は即座に動かし、保存は orderSender が直列化＋合体して送る。
-  // 保存中でも次の移動を受け付ける (ボタンは端以外では無効化しない)。
+// 並び順の確定: 画面へ即座に反映し、保存は orderSender が直列化＋合体
+// して送る。失敗したらエラー表示＋一覧を取り直す。
+async function applyFeedOrder(next) {
   mgmtFeeds.value = next;
   try {
     lastReorder = orderSender.submit(next.map((f) => f.id));
@@ -1419,6 +1419,91 @@ async function onMoveFeed(feed, direction) {
       loadFeeds();
     }
   }
+}
+
+/* ---- ドラッグでの並び替え ---- */
+
+// ドラッグ中だけ持つ状態。rects は開始時点の各行の { top, height }
+// (文書座標)。from / target は mgmtFeeds のインデックス (ジャンル
+// 絞り込み中はドラッグできないため adminFeeds と並びが一致する)。
+// dy は指の移動量 (行の範囲内にクランプ済み)、pitch は行の詰め量。
+const drag = ref(null);
+// ドロップ直後の1フレームだけ transform のアニメーションを止める。
+// 並び替えでレイアウト位置が変わるのと同時に transform が外れると、
+// 行がずれて見えるため。
+const dragSettling = ref(false);
+
+function onDragPointerDown(event, index) {
+  if (adminCategory.value) return;
+  if (event.button != null && event.button > 0) return;
+  const card = event.currentTarget?.closest('article.feed-card');
+  if (!card || !card.parentElement) return;
+  const cards = [...card.parentElement.querySelectorAll(':scope > article.feed-card')];
+  if (cards.length !== mgmtFeeds.value.length) return;
+  const rects = cards.map((c) => {
+    const r = c.getBoundingClientRect();
+    return { top: r.top + window.scrollY, height: r.height };
+  });
+  drag.value = {
+    from: index,
+    target: index,
+    dy: 0,
+    rects,
+    pitch: dragRowPitch(rects, index),
+    startY: event.clientY + window.scrollY,
+  };
+  try {
+    event.currentTarget.setPointerCapture(event.pointerId);
+  } catch {
+    // キャプチャできない環境ではハンドル上での操作として続ける。
+  }
+  event.preventDefault();
+}
+
+function onDragPointerMove(event) {
+  const d = drag.value;
+  if (!d) return;
+  // ビューポートの端では少しスクロールさせ、長い一覧でも端まで
+  // 運べるようにする。スクロールで文書座標が変わるため、移動量は
+  // スクロール後の座標で計算する。
+  if (event.clientY < 72) window.scrollBy(0, -14);
+  else if (event.clientY > window.innerHeight - 72) window.scrollBy(0, 14);
+  const rawDy = event.clientY + window.scrollY - d.startY;
+  const first = d.rects[0];
+  const last = d.rects[d.rects.length - 1];
+  const minDy = first.top - d.rects[d.from].top;
+  const maxDy = last.top + last.height - (d.rects[d.from].top + d.rects[d.from].height);
+  d.dy = Math.min(Math.max(rawDy, minDy), maxDy);
+  d.target = dragInsertIndex(d.rects, d.from, d.dy);
+}
+
+function onDragPointerUp() {
+  const d = drag.value;
+  if (!d) return;
+  drag.value = null;
+  if (d.target === d.from) return;
+  const next = moveItemToIndex(mgmtFeeds.value, d.from, d.target);
+  if (!next) return;
+  dragSettling.value = true;
+  applyFeedOrder(next);
+  nextTick(() => {
+    dragSettling.value = false;
+  });
+}
+
+function onDragPointerCancel() {
+  drag.value = null;
+}
+
+// ドラッグ中の各行の変位。掴んだ行は指に追随し、挿入先までの間の
+// 行は掴んだ行のピッチ分だけ詰めて表示する。
+function feedCardDragStyle(index) {
+  const d = drag.value;
+  if (!d) return undefined;
+  if (index === d.from) return { transform: `translateY(${d.dy}px)` };
+  if (d.from < index && index <= d.target) return { transform: `translateY(${-d.pitch}px)` };
+  if (d.target <= index && index < d.from) return { transform: `translateY(${d.pitch}px)` };
+  return undefined;
 }
 
 function askDeleteFeed(feed) {
@@ -1910,7 +1995,24 @@ onMounted(async () => {
               v-for="(f, i) in adminFeeds"
               :key="f.id"
               class="card feed-card"
+              :class="{ 'is-dragging': drag && drag.from === i, 'drag-settling': dragSettling }"
+              :style="feedCardDragStyle(i)"
             >
+              <!-- 並び替えは左端のハンドルからのドラッグで行う。シート
+                   全体の順序に対する操作なので、ジャンルで絞っている
+                   間はハンドル自体を出さない (部分集合の中での移動に
+                   見えて誤解を招くため)。 -->
+              <button
+                v-if="!adminCategory"
+                type="button"
+                class="drag-handle"
+                aria-label="ドラッグで並び替え"
+                @pointerdown="onDragPointerDown($event, i)"
+                @pointermove="onDragPointerMove"
+                @pointerup="onDragPointerUp"
+                @pointercancel="onDragPointerCancel"
+              >≡</button>
+              <div class="feed-card-main">
               <p class="article-meta">
                 <span class="feed-name">{{ feedDisplayName(f) }}</span>
                 <span v-if="f.category">{{ f.category }}</span>
@@ -1936,27 +2038,9 @@ onMounted(async () => {
                 </div>
               </div>
               <div v-else class="feed-actions">
-                <!-- 並び替えはシート全体の順序に対する操作なので、ジャンルで
-                     絞っている間は移動ボタンを出さない (部分集合の中での
-                     移動に見えて誤解を招くため)。 -->
-                <button
-                  v-if="!adminCategory"
-                  class="ghost"
-                  type="button"
-                  aria-label="上へ移動"
-                  :disabled="i === 0"
-                  @click="onMoveFeed(f, -1)"
-                >↑</button>
-                <button
-                  v-if="!adminCategory"
-                  class="ghost"
-                  type="button"
-                  aria-label="下へ移動"
-                  :disabled="i === mgmtFeeds.length - 1"
-                  @click="onMoveFeed(f, 1)"
-                >↓</button>
                 <button class="ghost" type="button" @click="startEditFeed(f)">編集</button>
                 <button class="ghost danger" type="button" @click="askDeleteFeed(f)">削除</button>
+              </div>
               </div>
             </article>
             </template>
