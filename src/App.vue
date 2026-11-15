@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onMounted, ref } from 'vue';
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { API_URL, GOOGLE_CLIENT_ID } from './config.js';
 import {
   deleteFeed,
@@ -32,6 +32,7 @@ import {
   markAllReadScope,
   patchArticle,
   patchFeedCategory,
+  shouldClearCategorySelection,
   sortArticlesDesc,
   visibleArticles,
   visibleFeedChips,
@@ -148,6 +149,26 @@ const genreSuggestionList = computed(() => genreSuggestions(genreOptions.value, 
 // 管理一覧の表示対象: 選択中のジャンルに合うフィードだけ。
 const adminFeeds = computed(() => filterAdminFeeds(mgmtFeeds.value, adminCategory.value));
 const hasMore = computed(() => visible.value.length > displayLimit.value);
+
+// 選択中のカテゴリ (ジャンル) を持つフィードが1つも無くなったら、
+// 選択を自動で解除して全件表示に戻す。最後の1件を別ジャンルへ
+// 編集・削除するとカテゴリのチップ自体が消え、手では解除できなく
+// なるため。一覧が空の間 (読み込み中・未取得) は解除しない
+// (判定は shouldClearCategorySelection に任せる)。
+watch(
+  () => state.value.feeds,
+  (feeds) => {
+    if (!shouldClearCategorySelection(feeds, state.value.category)) return;
+    // setCategory と同じく、カテゴリが外れるときはフィード選択も外す。
+    state.value = { ...state.value, category: '', feedId: '' };
+    displayLimit.value = DISPLAY_LIMIT;
+  }
+);
+watch(mgmtFeeds, (feeds) => {
+  if (shouldClearCategorySelection(feeds, adminCategory.value)) {
+    adminCategory.value = '';
+  }
+});
 
 const FILTERS = [
   { key: 'all', label: 'すべて' },

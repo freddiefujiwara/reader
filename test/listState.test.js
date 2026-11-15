@@ -4,6 +4,7 @@ import {
   visibleArticles,
   patchArticle,
   patchFeedCategory,
+  shouldClearCategorySelection,
   withUnreadCounts,
   sortArticlesDesc,
   markAllReadInList,
@@ -203,6 +204,34 @@ describe('feedDisplayName', () => {
   it('URL も解釈できなければ ID を出す', () => {
     expect(feedDisplayName({ id: 'abc123', title: '', url: 'not-a-url' })).toBe('abc123');
     expect(feedDisplayName(null)).toBe('');
+  });
+});
+
+describe('shouldClearCategorySelection', () => {
+  const feeds = [
+    { id: 'a', category: 'ニュース' },
+    { id: 'b', category: '技術' },
+    { id: 'c', category: '' },
+  ];
+  it('選択中カテゴリを持つフィードがあれば維持する', () => {
+    expect(shouldClearCategorySelection(feeds, 'ニュース')).toBe(false);
+    expect(shouldClearCategorySelection(feeds, '技術')).toBe(false);
+  });
+  it('選択中カテゴリを持つフィードが1つも無ければ解除する', () => {
+    expect(shouldClearCategorySelection(feeds, '川口')).toBe(true);
+  });
+  it('一覧が空 (読み込み中・未取得) の間は解除しない', () => {
+    expect(shouldClearCategorySelection([], 'ニュース')).toBe(false);
+    expect(shouldClearCategorySelection(null, 'ニュース')).toBe(false);
+    expect(shouldClearCategorySelection(undefined, 'ニュース')).toBe(false);
+  });
+  it('選択が無い (空) ときは解除しない', () => {
+    expect(shouldClearCategorySelection(feeds, '')).toBe(false);
+    expect(shouldClearCategorySelection(feeds, null)).toBe(false);
+  });
+  it('カテゴリは前後の空白を除いて比べる', () => {
+    expect(shouldClearCategorySelection([{ id: 'a', category: ' ニュース ' }], 'ニュース')).toBe(false);
+    expect(shouldClearCategorySelection(feeds, ' ニュース ')).toBe(false);
   });
 });
 

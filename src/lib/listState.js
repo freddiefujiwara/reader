@@ -31,6 +31,22 @@ export function feedCategories(feeds) {
   return seen;
 }
 
+// 選択中のカテゴリを持つフィードが一覧に1つも無いとき、カテゴリ
+// 選択を解除すべきかを判定する。最後の1件を別ジャンルへ編集・削除
+// するとカテゴリ自体が消え、チップも無くなって手では解除できなく
+// なるため、呼び出し側はこれが true のときに選択を '' へ戻す。
+// 一覧が空の間 (読み込み中・未取得、またはフィード自体が0件) は
+// 解除しない。読み込みが終わる前に絞り込みを消してしまわないため
+// で、true になるのは「一覧に1件以上あり、かつ選択中カテゴリを
+// 持つフィードが無い」ときだけ。
+export function shouldClearCategorySelection(feeds, category) {
+  const c = String(category || '').trim();
+  if (!c) return false;
+  const list = Array.isArray(feeds) ? feeds : [];
+  if (list.length === 0) return false;
+  return !list.some((f) => String(f?.category || '').trim() === c);
+}
+
 // 表示条件 (フィード＋カテゴリ＋ビュー) に合う記事だけを返す。
 // 楽観的更新で状態が変わった記事をその場で出し分けるためにクライアントで行う。
 export function visibleArticles(state) {
