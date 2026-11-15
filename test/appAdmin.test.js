@@ -74,6 +74,7 @@ import { saveFeed, listFeeds } from '../src/lib/api.js';
 import { fetchFeedXml } from '../src/lib/feedFetch.js';
 
 const scrollCalls = [];
+const scrollToCalls = [];
 let app = null;
 let el = null;
 let errors = [];
@@ -120,6 +121,10 @@ beforeEach(() => {
   // jsdom はスクロールを実装しないため、呼び出し自体を記録する。
   window.HTMLElement.prototype.scrollIntoView = function (opts) {
     scrollCalls.push({ el: this, opts });
+  };
+  scrollToCalls.length = 0;
+  window.scrollTo = function (opts) {
+    scrollToCalls.push(opts);
   };
   vi.clearAllMocks();
 });
@@ -185,6 +190,47 @@ describe('管理画面の編集フォーム', () => {
     expect(form, '追加フォームが開く').toBeTruthy();
     expect(form.querySelector('.feed-form-title').textContent).toContain('フィードを追加');
     expect(scrollCalls.some((c) => c.el === form)).toBe(true);
+  });
+});
+
+describe('ヘッダーのブランド (ホームボタン)', () => {
+  const brand = () => el.querySelector('.brand');
+
+  it('ブランドはリンクではなくボタンで、href を持たない (フルリロードしない)', async () => {
+    await mountAdmin();
+    expect(errors).toEqual([]);
+    expect(brand(), 'ブランドが出る').toBeTruthy();
+    expect(brand().tagName).toBe('BUTTON');
+    expect(brand().getAttribute('href')).toBeNull();
+    expect(el.querySelector('a.brand')).toBeNull();
+  });
+
+  it('管理画面でブランドを押すと、リロードなしにタイムラインへ戻る', async () => {
+    await mountAdmin();
+    expect(el.querySelectorAll('.feed-card').length).toBe(FEEDS.length);
+    brand().click();
+    await flush();
+    expect(errors).toEqual([]);
+    // 管理の一覧は消え、タイムライン側の下部バー (表示切替) が出る。
+    expect(el.querySelectorAll('.feed-card').length).toBe(0);
+    expect(el.querySelector('.view-tabs'), 'タイムラインに戻っている').toBeTruthy();
+    expect(scrollToCalls.at(-1)).toMatchObject({ top: 0 });
+  });
+
+  it('タイムライン表示中にブランドを押すと、先頭へスクロールするだけ', async () => {
+    el = document.createElement('div');
+    document.body.appendChild(el);
+    app = createApp(App);
+    app.config.errorHandler = (err) => { errors.push(err); };
+    app.mount(el);
+    await flush();
+    expect(el.querySelector('.view-tabs'), 'タイムライン表示中').toBeTruthy();
+    brand().click();
+    await flush();
+    expect(errors).toEqual([]);
+    expect(scrollToCalls).toEqual([{ top: 0, behavior: 'smooth' }]);
+    // 画面はタイムラインのまま。
+    expect(el.querySelector('.view-tabs')).toBeTruthy();
   });
 });
 

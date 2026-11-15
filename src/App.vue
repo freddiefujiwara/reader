@@ -323,6 +323,18 @@ async function goUnreadAll() {
   displayLimit.value = DISPLAY_LIMIT;
 }
 
+// ヘッダーのブランド: アプリ内のホームボタン。以前は href="./" の
+// リンクだったため、タップするとフルリロードになり、読み込み済みの
+// 記事・再生状態・スクロール位置がすべて失われていた。ここでは
+// アプリ内でタイムラインへ戻し (管理画面からの場合は backToTimeline
+// と同じ後処理も行う)、タイムライン表示中なら先頭へスクロールする。
+async function goHome() {
+  if (view.value !== 'timeline') {
+    await backToTimeline();
+  }
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
 // 既読の付け外しはローカルのみ (サーバーへは送らない)。
 async function applyRead(article, isRead) {
   if (!isOwner.value) return;
@@ -1186,13 +1198,13 @@ onMounted(async () => {
 <template>
   <div>
     <nav class="site-nav">
-      <a class="brand" href="./" aria-label="リーダー トップへ">
+      <button class="brand" type="button" aria-label="タイムラインに戻る" @click="goHome">
         <span class="brand-mark">読</span>
         <span class="brand-text">
           <span class="brand-name">リーダー</span>
           <span class="brand-sub">RSSリーダー</span>
         </span>
-      </a>
+      </button>
       <span></span>
       <span class="session-note">
         <button
