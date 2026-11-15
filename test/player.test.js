@@ -608,8 +608,8 @@ describe('failureSkipLimit', () => {
 });
 
 describe('createStallTracker (ストール検知)', () => {
-  it('既定の閾値は20秒', () => {
-    expect(STALL_THRESHOLD_MS).toBe(20_000);
+  it('既定の閾値は10秒', () => {
+    expect(STALL_THRESHOLD_MS).toBe(10_000);
   });
   it('最初の観測は基準作りだけで、止まったとは判定しない', () => {
     const t = createStallTracker({ thresholdMs: 100 });
