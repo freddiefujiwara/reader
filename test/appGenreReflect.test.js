@@ -267,4 +267,40 @@ describe('管理でのジャンル編集のタイムライン反映', () => {
     expect(cached.find((f) => f.id === FEED_A.id).category).toBe('新ジャンル');
     await settleApp();
   });
+
+  it('保存前に始まった背景更新が、カテゴリ選択後に旧一覧で読み直しても選択を解除しない', async () => {
+    holdList = true; // 初回の背景更新を、カテゴリ選択後まで実行中に保つ
+    await seedAndMount();
+    await editFirstFeedCategory('新ジャンル');
+    el.querySelector('.brand').click();
+    await flushUntil(
+      () => JSON.stringify(categoryChips()) === JSON.stringify(['新ジャンル', 'private'])
+    );
+    expect(errors).toEqual([]);
+    expect(categoryChips()).toEqual(['新ジャンル', 'private']);
+
+    // 新しいジャンルを選択し、記事が1件に絞られた状態にする。
+    findButton(el.querySelector('[aria-label="カテゴリで絞り込み"]'), '新ジャンル').click();
+    await flushUntil(() => JSON.stringify(articleTitles()) === JSON.stringify(['記事A']));
+    expect(articleTitles()).toEqual(['記事A']);
+
+    // ここで保存前に始まっていた更新を解放する。その更新は旧一覧
+    // (A は「ポッドキャスト」) しか持たないため、完了時には一時的に
+    // 旧カテゴリ構成で読み直される。続いて戻る際に予約された追随
+    // 更新が最新の一覧を取り直し、最終状態では「新ジャンル」が
+    // 存在する。途中の旧一覧で選択を解除してしまうと、最終状態で
+    // カテゴリが戻っても絞り込みだけが外れたままになる。
+    releaseHeldList();
+    await flushUntil(
+      async () =>
+        listArticlesCalls >= 2 &&
+        !isRefreshingShown() &&
+        JSON.stringify(categoryChips()) === JSON.stringify(['新ジャンル', 'private']) &&
+        (await loadLocalFeeds()).find((f) => f.id === FEED_A.id)?.category === '新ジャンル'
+    );
+    await settleApp();
+    expect(errors).toEqual([]);
+    expect(categoryChips()).toEqual(['新ジャンル', 'private']);
+    expect(articleTitles()).toEqual(['記事A']);
+  });
 });
