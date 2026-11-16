@@ -208,6 +208,50 @@ const genreSuggestionList = computed(() => genreSuggestions(genreOptions.value, 
 const adminFeeds = computed(() => filterAdminFeeds(mgmtFeeds.value, adminCategory.value));
 const hasMore = computed(() => visible.value.length > displayLimit.value);
 
+// 要約の「もっと見る」展開。折りたたみは CSS の line-clamp (3行) で、
+// 実際に省略されているカードにだけボタンを出すため、描画後に各要約
+// 要素の scrollHeight / clientHeight を比べて省略の有無を測る。
+// 展開状態は記事ごとのローカル状態で、保存はしない。
+const expandedSummaryIds = ref(new Set());
+const clampedSummaryIds = ref(new Set());
+const summaryEls = new Map();
+
+function registerSummaryEl(id, el) {
+  if (el) summaryEls.set(id, el);
+  else summaryEls.delete(id);
+}
+
+function measureSummaries() {
+  const next = new Set();
+  for (const [id, el] of summaryEls) {
+    if (expandedSummaryIds.value.has(id)) {
+      // 展開中は測れない (省略されていない)。閉じたときに測り直すため、
+      // それまでの省略判定は引き継ぐ。
+      if (clampedSummaryIds.value.has(id)) next.add(id);
+      continue;
+    }
+    if (el.scrollHeight > el.clientHeight + 1) next.add(id);
+  }
+  clampedSummaryIds.value = next;
+}
+
+function toggleSummary(id) {
+  const next = new Set(expandedSummaryIds.value);
+  if (next.has(id)) {
+    next.delete(id);
+    expandedSummaryIds.value = next;
+    // 折りたたみ直後は再描画を待ってから省略の有無を測り直す。
+    nextTick(measureSummaries);
+  } else {
+    next.add(id);
+    expandedSummaryIds.value = next;
+  }
+}
+
+watch(displayArticles, () => nextTick(measureSummaries));
+window.addEventListener('resize', measureSummaries);
+onUnmounted(() => window.removeEventListener('resize', measureSummaries));
+
 // 選択中のカテゴリ (ジャンル) を持つフィードが1つも無くなったら、
 // 選択を自動で解除して全件表示に戻す。最後の1件を別ジャンルへ
 // 編集・削除するとカテゴリのチップ自体が消え、手では解除できなく
@@ -2027,6 +2071,10 @@ document.addEventListener('visibilitychange', () => {
 });
 
 onMounted(async () => {
+  // Web フォントの読み込みで要約の行数が変わるため、確定後に測り直す。
+  if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(() => measureSummaries());
+  }
   if (!API_URL) {
     bootError.value = 'データAPIのURLが未設定です（ビルド時の設定待ち）。';
     loading.value = false;
@@ -2133,7 +2181,19 @@ onMounted(async () => {
             <h2 class="article-title">
               <a :href="a.link" target="_blank" rel="noopener" @click="onOpenArticle(a)">{{ a.title }}</a>
             </h2>
-            <p v-if="a.summary" class="article-summary">{{ a.summary }}</p>
+            <p
+              v-if="a.summary"
+              :ref="(el) => registerSummaryEl(a.id, el)"
+              class="article-summary"
+              :class="{ expanded: expandedSummaryIds.has(a.id) }"
+            >{{ a.summary }}</p>
+            <button
+              v-if="a.summary && (expandedSummaryIds.has(a.id) || clampedSummaryIds.has(a.id))"
+              type="button"
+              class="summary-toggle"
+              :aria-expanded="expandedSummaryIds.has(a.id) ? 'true' : 'false'"
+              @click="toggleSummary(a.id)"
+            >{{ expandedSummaryIds.has(a.id) ? '閉じる' : 'もっと見る' }}</button>
             <div class="article-foot">
               <button
                 v-if="isOwner && isYouTubeArticle(a)"
