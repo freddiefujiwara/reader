@@ -164,12 +164,22 @@ describe('管理画面の編集フォーム', () => {
   });
 
   it('タイトル未取得のフィードでは「（未取得）」と表示して開ける', async () => {
-    await mountAdmin();
-    const form = await openEdit(1);
-    expect(errors).toEqual([]);
-    expect(form, '編集フォームが開く').toBeTruthy();
-    expect(form.querySelector('.field-static').textContent).toBe('（未取得）');
-    expect(scrollCalls.some((c) => c.el === form)).toBe(true);
+    // FEEDS[1] は YouTube フィードで、編集できなくなったため、
+    // タイトル未取得の非 YouTube フィードに差し替えて確かめる。
+    const untitled = FEEDS.map((f, i) =>
+      i === 1 ? { ...f, title: '', url: 'https://example.com/feed.xml' } : f
+    );
+    listFeeds.mockImplementation(async () => ({ ok: true, feeds: untitled }));
+    try {
+      await mountAdmin();
+      const form = await openEdit(1);
+      expect(errors).toEqual([]);
+      expect(form, '編集フォームが開く').toBeTruthy();
+      expect(form.querySelector('.field-static').textContent).toBe('（未取得）');
+      expect(scrollCalls.some((c) => c.el === form)).toBe(true);
+    } finally {
+      listFeeds.mockImplementation(async () => ({ ok: true, feeds: FEEDS }));
+    }
   });
 
   it('ジャンルを変更して保存すると、元の ID / タイトル / URL のまま saveFeed へ渡り、フォームが閉じる', async () => {
@@ -342,6 +352,50 @@ describe('管理画面の非公開表示', () => {
     // バッジ (private-badge) も「プライベート」の文言も出ない。
     expect(el.querySelector('.private-badge')).toBeNull();
     expect(el.textContent).not.toContain('プライベート');
+  });
+});
+
+describe('管理画面の YouTube フィード', () => {
+  // FEEDS[1] が YouTube フィード (videos.xml 形式の URL)。
+  const youtubeCard = () => el.querySelectorAll('.feed-card')[1];
+
+  it('YouTube フィードには編集・削除ボタンが出ず、代わりに案内文言が出る', async () => {
+    await mountAdmin();
+    expect(errors).toEqual([]);
+    const card = youtubeCard();
+    expect(findButton(card, '編集'), '編集ボタンは無い').toBeUndefined();
+    expect(findButton(card, '削除'), '削除ボタンは無い').toBeUndefined();
+    const note = card.querySelector('.feed-youtube-note');
+    expect(note, '案内文言が出る').toBeTruthy();
+    expect(note.textContent.trim()).toBe('変更・解除はYouTubeアプリで');
+  });
+
+  it('YouTube 以外のフィードには従来どおり編集・削除ボタンが出て、案内文言は出ない', async () => {
+    await mountAdmin();
+    expect(errors).toEqual([]);
+    const card = el.querySelectorAll('.feed-card')[0];
+    expect(findButton(card, '編集'), '編集ボタンが出る').toBeTruthy();
+    expect(findButton(card, '削除'), '削除ボタンが出る').toBeTruthy();
+    expect(card.querySelector('.feed-youtube-note'), '案内文言は出ない').toBeNull();
+  });
+
+  it('YouTube フィードでも並び替えハンドルは残る', async () => {
+    await mountAdmin();
+    expect(errors).toEqual([]);
+    expect(youtubeCard().querySelector('button.drag-handle'), 'ドラッグハンドルが出る').toBeTruthy();
+  });
+
+  it('ジャンルで絞った先が YouTube フィードだけでも、案内文言が出て編集・削除は出ない', async () => {
+    await mountAdmin();
+    const tablist = el.querySelector('[aria-label="ジャンルで絞り込み"]');
+    findButton(tablist, '教養・ラジオ').click();
+    await flush();
+    expect(errors).toEqual([]);
+    const cards = el.querySelectorAll('.feed-card');
+    expect(cards.length).toBe(1);
+    expect(findButton(cards[0], '編集')).toBeUndefined();
+    expect(findButton(cards[0], '削除')).toBeUndefined();
+    expect(cards[0].querySelector('.feed-youtube-note'), '案内文言が出る').toBeTruthy();
   });
 });
 
