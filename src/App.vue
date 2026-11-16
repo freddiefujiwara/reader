@@ -106,6 +106,10 @@ const DISPLAY_LIMIT = 50;
 // 既読の初回取り込みでサーバーから受け取る上限 (保持上限と同じ)。
 const IMPORT_LIMIT = 5000;
 const year = new Date().getFullYear();
+// ヘッダーのブランドのリンク先: アプリのトップ (ベース URL そのもの。
+// 本番は /reader/、ステージングは /reader/staging/)。ジャンルや
+// フィードの選択を表すパスを含まないため、常に素のトップへ飛ぶ。
+const topUrl = import.meta.env.BASE_URL;
 
 const session = ref(loadSession());
 const bootError = ref('');
@@ -541,18 +545,6 @@ async function goUnreadAll() {
   if (state.value.feedId === '' && state.value.category === '' && state.value.filter === 'unread' && !fromAdmin) return;
   state.value = { ...state.value, feedId: '', category: '', filter: 'unread' };
   displayLimit.value = DISPLAY_LIMIT;
-}
-
-// ヘッダーのブランド: アプリ内のホームボタン。以前は href="./" の
-// リンクだったため、タップするとフルリロードになり、読み込み済みの
-// 記事・再生状態・スクロール位置がすべて失われていた。ここでは
-// アプリ内でタイムラインへ戻し (管理画面からの場合は backToTimeline
-// と同じ後処理も行う)、タイムライン表示中なら先頭へスクロールする。
-async function goHome() {
-  if (view.value !== 'timeline') {
-    await backToTimeline();
-  }
-  window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 // 既読の付け外しはローカルのみ (サーバーへは送らない)。
@@ -1913,13 +1905,13 @@ onMounted(async () => {
 <template>
   <div>
     <nav class="site-nav">
-      <button class="brand" type="button" aria-label="タイムラインに戻る" @click="goHome">
+      <a class="brand" :href="topUrl" aria-label="トップへ移動">
         <span class="brand-mark">読</span>
         <span class="brand-text">
           <span class="brand-name">リーダー</span>
           <span class="brand-sub">RSSリーダー</span>
         </span>
-      </button>
+      </a>
       <span></span>
       <span class="session-note">
         <button

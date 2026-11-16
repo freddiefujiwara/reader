@@ -275,31 +275,36 @@ describe('管理画面の編集フォームの保存ボタン', () => {
   });
 });
 
-describe('ヘッダーのブランド (ホームボタン)', () => {
+describe('ヘッダーのブランド (トップへのリンク)', () => {
   const brand = () => el.querySelector('.brand');
 
-  it('ブランドはリンクではなくボタンで、href を持たない (フルリロードしない)', async () => {
+  it('ブランドはボタンではなくリンクで、href はアプリのトップ (ベース URL) を指す', async () => {
     await mountAdmin();
     expect(errors).toEqual([]);
     expect(brand(), 'ブランドが出る').toBeTruthy();
-    expect(brand().tagName).toBe('BUTTON');
-    expect(brand().getAttribute('href')).toBeNull();
-    expect(el.querySelector('a.brand')).toBeNull();
+    expect(brand().tagName).toBe('A');
+    // ベース URL そのもの (本番は /reader/、ステージングは
+    // /reader/staging/)。ジャンルやフィードのパスを含まないため、
+    // どこから押しても常に素のトップへ飛ぶ。
+    expect(brand().getAttribute('href')).toBe('/reader/');
+    expect(el.querySelector('button.brand')).toBeNull();
   });
 
-  it('管理画面でブランドを押すと、リロードなしにタイムラインへ戻る', async () => {
+  it('管理画面でブランドを押しても、アプリ内ではタイムラインへ戻らない', async () => {
     await mountAdmin();
     expect(el.querySelectorAll('.feed-card').length).toBe(FEEDS.length);
     brand().click();
     await flush();
     expect(errors).toEqual([]);
-    // 管理の一覧は消え、タイムライン側の下部バー (表示切替) が出る。
-    expect(el.querySelectorAll('.feed-card').length).toBe(0);
-    expect(el.querySelector('.view-tabs'), 'タイムラインに戻っている').toBeTruthy();
-    expect(scrollToCalls.at(-1)).toMatchObject({ top: 0 });
+    // 遷移はブラウザのページ読み込みに任せるため、アプリ内では
+    // 画面遷移も先頭スクロールも起きない (jsdom は実際に遷移しない
+    // ので、管理画面のままであることがその確認になる)。
+    expect(el.querySelectorAll('.feed-card').length).toBe(FEEDS.length);
+    expect(el.querySelector('.view-tabs')).toBeNull();
+    expect(scrollToCalls).toEqual([]);
   });
 
-  it('管理画面に「← タイムラインに戻る」は無く、戻る手段はブランドだけ', async () => {
+  it('管理画面に「← タイムラインに戻る」は無く、トップへ出る手段はブランドだけ', async () => {
     await mountAdmin();
     expect(errors).toEqual([]);
     expect(findButton(el, '← タイムラインに戻る')).toBeUndefined();
@@ -307,7 +312,7 @@ describe('ヘッダーのブランド (ホームボタン)', () => {
     expect(findButton(el, 'フィードを追加'), '追加ボタンは残る').toBeTruthy();
   });
 
-  it('タイムライン表示中にブランドを押すと、先頭へスクロールするだけ', async () => {
+  it('タイムライン表示中にブランドを押しても、先頭スクロールは起きない', async () => {
     el = document.createElement('div');
     document.body.appendChild(el);
     app = createApp(App);
@@ -318,7 +323,8 @@ describe('ヘッダーのブランド (ホームボタン)', () => {
     brand().click();
     await flush();
     expect(errors).toEqual([]);
-    expect(scrollToCalls).toEqual([{ top: 0, behavior: 'smooth' }]);
+    // ページ遷移に任せるため、アプリ内ではスクロールも起きない。
+    expect(scrollToCalls).toEqual([]);
     // 画面はタイムラインのまま。
     expect(el.querySelector('.view-tabs')).toBeTruthy();
   });
@@ -404,13 +410,18 @@ describe('管理画面のジャンル絞り込み', () => {
   });
 
   it('絞り込みは管理画面側の状態として保持され、タイムラインと行き来しても残る', async () => {
+    // 行き来はブラウザの戻る (popstate) で行うため、ルーティングが
+    // 有効になるようトップの URL で開いたことにする (ブランドは
+    // トップへのページ遷移になり、アプリ内の行き来には使わない)。
+    window.history.pushState(null, '', '/reader/');
     await mountAdmin();
     findButton(genreTablist(), 'ポッドキャスト').click();
     await flush();
     expect(el.querySelectorAll('.feed-card').length).toBe(2);
-    // 戻る手段はヘッダーのブランド (ホームボタン) のみ。
+    // 戻る手段はヘッダーのブランド (トップへのリンク) のみ。
     expect(findButton(el, '← タイムラインに戻る')).toBeUndefined();
-    el.querySelector('.brand').click();
+    window.history.pushState(null, '', '/reader/');
+    window.dispatchEvent(new window.PopStateEvent('popstate'));
     await flush();
     findButton(el, '管理').click();
     await flush();
@@ -420,6 +431,8 @@ describe('管理画面のジャンル絞り込み', () => {
     expect(dragHandles().length).toBe(0);
     const active = genreTablist().querySelector('.chip.active');
     expect(active.textContent.trim()).toBe('ポッドキャスト');
+    // 後続のテストへ URL を持ち越さない。
+    window.history.pushState(null, '', '/');
   });
 });
 
@@ -839,15 +852,19 @@ describe('管理画面のスクロール位置の復元', () => {
     expect(scrollToCalls).toEqual([{ top: 200 }]);
   });
 
-  it('編集中にブランドでタイムラインへ戻ると、位置の復元は走らない', async () => {
+  it('編集中にブランドを押しても、アプリ内では戻らず位置の復元も走らない', async () => {
     currentScrollY = 480;
     await mountAdmin();
     await openEdit(0);
+    const scrollCountBefore = scrollToCalls.length;
     el.querySelector('.brand').click();
     await flush();
     expect(errors).toEqual([]);
-    // 先頭へのスクロール (goHome) だけが走り、覚えた位置への復元は無い。
+    // ブランドはトップへのページ遷移なので、アプリ内では画面遷移も
+    // スクロール (復元・先頭への移動とも) も起きず、フォームは
+    // 開いたままになる (遷移はブラウザが行う)。
+    expect(el.querySelector('.feed-form'), 'フォームは開いたまま').toBeTruthy();
+    expect(scrollToCalls.length).toBe(scrollCountBefore);
     expect(scrollToCalls.some((c) => c.top === 480)).toBe(false);
-    expect(scrollToCalls.at(-1)).toMatchObject({ top: 0 });
   });
 });

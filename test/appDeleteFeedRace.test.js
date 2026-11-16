@@ -208,8 +208,11 @@ describe('フィード削除と背景更新の競合', () => {
     expect(deleteFeed).toHaveBeenCalledWith('tok', FEED_A.id);
     expect(cardOf('Rebuild')).toBeUndefined();
 
-    // 更新がまだ実行中のままタイムラインへ戻る。
-    el.querySelector('button[aria-label="タイムラインに戻る"]').click();
+    // 更新がまだ実行中のままタイムラインへ戻る。ブランドはトップへの
+    // ページ遷移になったため、アプリ内で戻る経路はブラウザの戻る
+    // (popstate) だけになった。ここでは戻る操作相当で戻す。
+    window.history.pushState(null, '', '/reader/');
+    window.dispatchEvent(new window.PopStateEvent('popstate'));
     await flushRound();
 
     // 保留していた更新を解放する。その更新は削除前の一覧で完了するが、

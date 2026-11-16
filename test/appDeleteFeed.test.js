@@ -184,7 +184,10 @@ describe('管理画面の削除フロー', () => {
     // しまうため、ここでは起動時の更新が終わってから戻る (現実の操作でも
     // 削除の操作中に更新は終わっているのが通常)。
     await settleApp();
-    el.querySelector('button[aria-label="タイムラインに戻る"]').click();
+    // ブランドはトップへのページ遷移になったため、アプリ内で戻る
+    // 経路はブラウザの戻る (popstate) だけになった。戻る操作相当で戻す。
+    window.history.pushState(null, '', '/reader/');
+    window.dispatchEvent(new window.PopStateEvent('popstate'));
     await flushUntil(async () => {
       const records = await loadLocalArticles();
       return records.length === 1 && records[0].id === 'art-b'
