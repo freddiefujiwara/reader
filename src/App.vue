@@ -307,6 +307,22 @@ function applyRoute(route) {
 
 if (initialRoute) applyRoute(initialRoute);
 
+// ヘッダーのタイトル押下: リンク先 (アプリのトップ) へ、ページを
+// 開き直さずにアプリ内で移動する。再生中の音声はそのまま続く。
+// href 自体は残すので、中クリックや修飾キー付きクリックでは
+// ブラウザ既定の開き方 (新しいタブ等) になる。
+function goHome() {
+  applyRoute({ view: 'timeline', category: '', feedId: '', unread: false, staging: routeStaging });
+  window.scrollTo({ top: 0 });
+}
+
+function onBrandClick(event) {
+  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  if (!session.value) return; // 未ログインでは通常のリンクとして開く
+  event.preventDefault();
+  goHome();
+}
+
 // 画面状態から現在の URL パスを組み立てる (管理画面では管理側の
 // ジャンル、タイムラインではカテゴリ＋フィード選択を見る)。
 function routePathForState() {
@@ -1927,7 +1943,7 @@ onMounted(async () => {
 <template>
   <div>
     <nav class="site-nav">
-      <a class="brand" :href="topUrl" aria-label="トップへ移動">
+      <a class="brand" :href="topUrl" aria-label="トップへ移動" @click="onBrandClick">
         <span class="brand-mark">読</span>
         <span class="brand-text">
           <span class="brand-name">リーダー</span>
