@@ -2320,10 +2320,17 @@ onMounted(async () => {
               </div>
               <!-- 編集・削除はカード右側の空きに置く (カード本体の
                    フレックス行の3つ目の要素)。削除確認が出ている間は
-                   隠す (確認のボタンは本体側に出る)。 -->
+                   隠す (確認のボタンは本体側に出る)。
+                   YouTube フィードは YouTube 側が正で、購読同期が
+                   リーダー側の変更を上書きしてしまうため、編集・削除
+                   は出さず、YouTube アプリ側での操作を案内する小さな
+                   注記に替える (並び替えは従来どおり可能)。 -->
               <div v-if="confirmDeleteId !== f.id" class="feed-actions feed-card-actions">
-                <button class="ghost" type="button" @click="startEditFeed(f)">編集</button>
-                <button class="ghost danger" type="button" @click="askDeleteFeed(f)">削除</button>
+                <p v-if="youtubeChannelIdFromUrl(f.url)" class="feed-youtube-note">変更・解除はYouTubeアプリで</p>
+                <template v-else>
+                  <button class="ghost" type="button" @click="startEditFeed(f)">編集</button>
+                  <button class="ghost danger" type="button" @click="askDeleteFeed(f)">削除</button>
+                </template>
               </div>
             </article>
             </template>

@@ -1158,6 +1158,15 @@ button.ghost.active {
   margin-top: 0;
 }
 
+/* YouTube フィードで編集・削除ボタンの代わりに出す注記。画面が
+   うるさくならないよう、くすんだ色・小さいフォントの1行に留める。 */
+.feed-youtube-note {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
 button.ghost.danger {
   color: var(--error);
   border-color: var(--error);
