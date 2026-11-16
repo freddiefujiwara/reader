@@ -6,9 +6,11 @@ import {
   exchangeSession,
   exchangeShare,
   getShareLinkStatus,
+  getStats,
   issueShareLink,
   listArticles,
   listFeeds,
+  logEvents,
   reorderFeeds,
   revokeShareLink,
   saveFeed,
@@ -107,6 +109,7 @@ import {
   toDisplayPosition,
   toElementPosition,
 } from './lib/player.js';
+import { createEventQueue, createListenTracker } from './lib/eventLog.js';
 
 // 画面に出す件数の初期値と「もっと見る」の増分 (v2 は全件ローカルにあるため、
 // サーバー取得ではなく表示ウィンドウを広げるだけ)。
@@ -153,6 +156,11 @@ const shareSaving = ref(false);
 const shareError = ref('');
 const shareConfirm = ref(''); // '' | 'issue' | 'revoke'
 const shareCopied = ref(false);
+// 今週の視聴 (管理画面の共有リンクの下)。週単位の集計なので、
+// 取得は管理画面を開いたときの1回だけにする。
+const statsData = ref(null); // null=未取得 / { currentWeek, current }
+const statsLoading = ref(false);
+const statsError = ref('');
 const formMode = ref(''); // '' | 'add' | 'edit'
 const formEl = ref(null);
 const form = ref(createFeedForm());
@@ -642,6 +650,18 @@ function setFeed(feedId) {
   displayLimit.value = DISPLAY_LIMIT;
   // 別のフィードの一覧へ移るので、先頭から見せる。
   scrollToTop();
+  // 視聴ログ: フィードを開いた操作だけを記録する (選択の解除や
+  // ジャンルだけの変更、初期表示・背景更新では送らない)。
+  if (next) {
+    queueEvent({
+      type: 'feed_view',
+      feed_id: next,
+      feed_title: feedTitleOf(next),
+      article_id: '',
+      article_title: '',
+    });
+    flushEventLog();
+  }
 }
 
 function setCategory(category) {
@@ -699,6 +719,16 @@ async function applyRead(article, isRead) {
 }
 
 function onOpenArticle(article) {
+  // 視聴ログ: 記事を開いた操作を記録する (既読かどうかによらない。
+  // 聴き終えたときの既読化はこの経路を通らないので数えない)。
+  queueEvent({
+    type: 'article_open',
+    feed_id: article.feedId,
+    feed_title: article.feedTitle || feedTitleOf(article.feedId),
+    article_id: article.id,
+    article_title: article.title || '',
+  });
+  flushEventLog();
   if (isOwner.value && !article.isRead) {
     // 元記事を開く操作は止めない。既読化はローカルに書くだけ。
     applyRead(article, true);
@@ -793,6 +823,43 @@ async function onMarkAllRead() {
     targetIds.forEach((id) => { pendingReadMarks.delete(id); });
     listError.value = `保存できませんでした（${e.message}）。`;
   }
+}
+
+/* ---- 視聴ログ (サーバーへ送る計測) ---- */
+
+// イベントはメモリ上のキューに貯め、操作の区切り (フィード切替・
+// 記事オープン・再生停止・pagehide) でまとめて送る。再生中の通信は
+// 増やさない。読み取り専用 (共有リンク) では送らない (サーバー側
+// でも forbidden)。
+const eventQueue = createEventQueue({
+  send: (events) => logEvents(session.value.token, events),
+  enabled: () => !!session.value && isOwner.value,
+});
+
+function queueEvent(event) {
+  if (!session.value || !isOwner.value) return;
+  eventQueue.push(event);
+}
+
+function flushEventLog() {
+  // 裏で送るだけなので結果は待たない (失敗しても操作は止めない)。
+  eventQueue.flush();
+}
+
+function feedTitleOf(feedId) {
+  const feed = state.value.feeds.find((f) => f.id === feedId);
+  return feed ? feed.title || '' : '';
+}
+
+// 再生時間の積算 (play/pause の区間で実再生時間を測る)。
+const listenTracker = createListenTracker();
+
+// 再生が止まった区切りで、積算した再生時間を play イベントとして
+// キューへ入れ、まとめて送る。
+function flushPlayListen() {
+  const event = listenTracker.finalize();
+  if (event) queueEvent(event);
+  flushEventLog();
 }
 
 /* ---- ポッドキャスト再生 (端末ローカルのみ) ---- */
@@ -1156,6 +1223,15 @@ function loadEpisode(article, { resume = true } = {}) {
   // 開始時に状態側の最新を id で引き直し、見つからなければ渡された
   // ものをそのまま使う。
   const ep = state.value.articles.find((a) => a.id === article.id) || article;
+  // 視聴ログ: 前のエピソードの再生時間を確定してから、計測対象を
+  // 新しいエピソードへ差し替える。
+  flushPlayListen();
+  listenTracker.setContext({
+    id: ep.id,
+    feedId: ep.feedId,
+    feedTitle: ep.feedTitle || feedTitleOf(ep.feedId),
+    title: ep.title || '',
+  });
   currentEpisode.value = ep;
   currentSrcStale = !!ep.audioStale;
   currentSrcUrl = ep.audioUrl || '';
@@ -1348,6 +1424,10 @@ function onSeekInput(event) {
 
 function stopPlayer() {
   savePlayPos();
+  // 視聴ログ: プレイヤーを閉じるのが再生の終わりなので、積算した
+  // 再生時間をここで確定して送る。
+  flushPlayListen();
+  listenTracker.clear();
   stopEndCheckTimer();
   discardPreload();
   audio.pause();
@@ -1406,12 +1486,16 @@ audio.addEventListener('timeupdate', () => {
 });
 audio.addEventListener('play', () => {
   isPlaying.value = true;
+  // 視聴ログ: 再生区間を開く。
+  listenTracker.start();
   // 再開のたびにストール計測をやり直す (一時停止を挟んだ窓で
   // 誤判定しないため)。
   stallTracker.reset(performance.now());
 });
 audio.addEventListener('pause', () => {
   isPlaying.value = false;
+  // 視聴ログ: 再生区間を閉じる (積算の確定は停止の区切りで行う)。
+  listenTracker.pause();
   savePlayPos();
 });
 // 読み込み表示: データ待ちの間だけ出し、再生可能になったら消す。
@@ -1498,13 +1582,18 @@ function handleEpisodeEnded() {
   isLoading.value = false;
   const ep = currentEpisode.value;
   if (!ep) return;
-  // 聴き終えたら、記事を開いたときと同じ経路で既読にする
-  // (単曲リピートでも、既読化は冪等なので毎回通してよい)。
+  // 聴き終えたら既読にする (単曲リピートでも、既読化は冪等なので
+  // 毎回通してよい)。視聴ログの article_open は「記事を開いた操作」
+  // だけを数えるため、ここでは onOpenArticle を経由せず既読化だけ
+  // を行う (play イベントは別に数える)。
   const view = state.value.articles.find((a) => a.id === ep.id) || ep;
-  onOpenArticle(view);
+  if (isOwner.value && !view.isRead) applyRead(view, true);
   clearPlayPos(ep.id);
   currentTime.value = 0;
   if (repeatMode.value === 'one') {
+    // 視聴ログ: 1周分の再生時間を確定する (計測対象は同じ曲のまま
+    // 次の周を数え直す)。
+    flushPlayListen();
     // 単曲リピート: src は差し替えず先頭から再生し直す。再開位置
     // (pendingSeek は metadata 読み込み時だけ効く) とは競合しない。
     audio.currentTime = 0;
@@ -1519,7 +1608,9 @@ function handleEpisodeEnded() {
     shuffle: shuffleOn.value,
     playedIds: playedInRound,
   });
-  loadPlannedNext(plan);
+  // 次へ進む場合は loadEpisode 側で再生時間を確定する。進まずに
+  // 止まる場合は、ここが再生の終わりなので確定して送る。
+  if (!loadPlannedNext(plan)) flushPlayListen();
 }
 audio.addEventListener('ended', handleEpisodeEnded);
 
@@ -1632,6 +1723,35 @@ async function onRevokeShare() {
   }
 }
 
+/* ---- 今週の視聴 (管理画面の共有リンクの下) ---- */
+
+async function loadStats() {
+  if (!session.value) return;
+  statsLoading.value = true;
+  try {
+    const payload = await getStats(session.value.token);
+    statsData.value = {
+      currentWeek: payload.currentWeek || '',
+      current: Array.isArray(payload.current) ? payload.current : [],
+    };
+    statsError.value = '';
+  } catch (e) {
+    if (!expireIfUnauthorized(e)) statsError.value = `視聴集計を取得できませんでした（${e.message}）。`;
+  } finally {
+    statsLoading.value = false;
+  }
+}
+
+// 今週分のうち再生があったフィードを、再生時間の長い順に最大5件。
+const currentWeekListening = computed(() => {
+  if (!statsData.value) return [];
+  return statsData.value.current
+    .filter((s) => (s.plays || 0) > 0)
+    .slice()
+    .sort((a, b) => (b.seconds || 0) - (a.seconds || 0) || (b.plays || 0) - (a.plays || 0))
+    .slice(0, 5);
+});
+
 async function copyShareUrl() {
   if (!shareUrl.value) return;
   try {
@@ -1660,6 +1780,7 @@ function openFeedAdmin() {
   shareConfirm.value = '';
   loadFeeds();
   loadShareStatus();
+  loadStats();
 }
 
 async function backToTimeline() {
@@ -2053,7 +2174,12 @@ async function tryShareFromHash() {
 // 開いたまま凍結されると、次に開いたページの DB 読み込みが
 // その接続と競合して固まることがある (再生中に管理画面から
 // ヘッダーのタイトルで開き直すと再現した)。
-window.addEventListener('pagehide', () => { closeLocalDb(); });
+window.addEventListener('pagehide', () => {
+  // 視聴ログ: ページを離れる前に、貯まっている分を送る (best effort)。
+  // 再生中のまま離れた場合は、ここまでの再生時間も確定する。
+  flushPlayListen();
+  closeLocalDb();
+});
 
 // しばらく離れて戻ってきたら、裏で背景更新する (復帰直後の
 // ネットワーク失敗をユーザーの操作ではなく背景更新側で受けるため)。
@@ -2479,6 +2605,24 @@ onMounted(async () => {
               </div>
             </template>
             <p v-if="shareError" class="error">{{ shareError }}</p>
+          </section>
+
+          <!-- 今週の視聴 (視聴ログの週次集計のうち今週分)。
+               週が変わるまで内容は変わらないため、取得は管理画面を
+               開いたときの1回だけ。 -->
+          <section class="panel usage-stats-panel">
+            <h2 class="feed-form-title">今週の視聴</h2>
+            <p v-if="statsLoading && !statsData" class="hint"><span class="spinner"></span>読み込み中...</p>
+            <template v-else-if="statsData">
+              <ul v-if="currentWeekListening.length" class="usage-stats-list">
+                <li v-for="s in currentWeekListening" :key="s.feed_id">
+                  <span class="usage-stats-feed">{{ s.feed_title || s.feed_id }}</span>
+                  <span class="usage-stats-meta">{{ formatTime(s.seconds) }}・{{ s.plays }}回</span>
+                </li>
+              </ul>
+              <p v-else class="hint">今週の再生はまだありません。</p>
+            </template>
+            <p v-if="statsError" class="error">{{ statsError }}</p>
           </section>
         </template>
       </template>
