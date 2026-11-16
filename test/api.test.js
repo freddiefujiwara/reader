@@ -7,6 +7,7 @@ import {
   listFeeds,
   saveFeed,
   deleteFeed,
+  setStar,
   reorderFeeds,
   issueShareLink,
   getShareLinkStatus,
@@ -159,6 +160,18 @@ describe('フィード管理の action', () => {
     const fetcher = okFetcher({ ok: true });
     await reorderFeeds('tok', ['nhk', 'asahi'], { fetcher, apiUrl: API });
     expect(lastBody(fetcher)).toEqual({ action: 'reorderFeeds', sessionToken: 'tok', feedIds: ['nhk', 'asahi'] });
+  });
+  it('setStar は set_star に id と on を送る', async () => {
+    const fetcher = okFetcher({ ok: true });
+    await setStar('tok', 'article-1', true, { fetcher, apiUrl: API });
+    expect(lastBody(fetcher)).toEqual({ action: 'set_star', sessionToken: 'tok', id: 'article-1', on: true });
+    const fetcher2 = okFetcher({ ok: true });
+    await setStar('tok', 'article-1', false, { fetcher: fetcher2, apiUrl: API });
+    expect(lastBody(fetcher2)).toEqual({ action: 'set_star', sessionToken: 'tok', id: 'article-1', on: false });
+  });
+  it('setStar の forbidden はそのまま投げる (readonly 用)', async () => {
+    const fetcher = okFetcher({ ok: false, error: 'forbidden' });
+    await expect(setStar('tok', 'article-1', true, { fetcher, apiUrl: API })).rejects.toThrow('forbidden');
   });
 });
 

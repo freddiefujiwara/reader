@@ -48,6 +48,8 @@ describe('planUpserts', () => {
       play_pos: 0,
       is_read: false,
       read_at: '',
+      starred: false,
+      star_state: '',
     });
   });
   it('既存の既読記事は状態と取り込み日時を保ち、メタデータだけ更新する', async () => {
@@ -285,7 +287,7 @@ describe('planOrphanArticles / articleRecordToView', () => {
       id: 'x', feedId: 'nhk', feedTitle: 'NHK', title: 't', link: 'https://example.com',
       publishedAt: '2026-11-14T00:00:00.000Z', fetchedAt: '2026-11-14T01:00:00.000Z',
       summary: 's', author: 'a', audioUrl: '', audioUrlAt: '', audioStale: false,
-      durationSec: null, playPos: 0, isRead: true,
+      durationSec: null, playPos: 0, isRead: true, starred: false, starState: '',
     });
   });
 });

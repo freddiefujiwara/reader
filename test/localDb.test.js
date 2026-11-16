@@ -9,6 +9,8 @@ import {
   loadLocalArticles,
   deleteLocalArticles,
   setLocalArticleRead,
+  setLocalArticleStar,
+  syncLocalArticleStars,
   setLocalArticlePlayPos,
   clearLocalArticlePlayPos,
   clearLocalArticleAudio,
@@ -142,6 +144,47 @@ describe('音声URLの取り消し', () => {
   });
 });
 
+describe('スターの書き換えと同期', () => {
+  it('setLocalArticleStar はスター項目だけを切り替える', async () => {
+    await putLocalArticles([rec('star-1', { is_read: true, play_pos: 12 })]);
+    await setLocalArticleStar('star-1', true, 'on');
+    let row = (await loadLocalArticles()).find((a) => a.id === 'star-1');
+    expect(row.starred).toBe(true);
+    expect(row.star_state).toBe('on');
+    expect(row.is_read).toBe(true);
+    expect(row.play_pos).toBe(12);
+    await setLocalArticleStar('star-1', false, 'off');
+    row = (await loadLocalArticles()).find((a) => a.id === 'star-1');
+    expect(row.starred).toBe(false);
+    expect(row.star_state).toBe('off');
+    await deleteLocalArticles(['star-1']);
+  });
+  it('setLocalArticleStar は対象が無ければ何もしない', async () => {
+    await setLocalArticleStar('no-such-article', true, 'on');
+    const all = await loadLocalArticles();
+    expect(all.some((a) => a.id === 'no-such-article')).toBe(false);
+  });
+  it('syncLocalArticleStars はサーバー値で上書きし、ローカルに無い記事は作らない', async () => {
+    await putLocalArticles([
+      rec('star-2', { starred: false, star_state: '' }),
+      rec('star-3', { starred: true, star_state: 'on' }),
+    ]);
+    await syncLocalArticleStars([
+      { id: 'star-2', starred: true, star_state: '' },
+      { id: 'star-3', starred: false, star_state: 'off' },
+      { id: 'star-absent', starred: true, star_state: 'on' },
+    ]);
+    const rows = await loadLocalArticles();
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
+    expect(byId['star-2'].starred).toBe(true);
+    expect(byId['star-2'].star_state).toBe('');
+    expect(byId['star-3'].starred).toBe(false);
+    expect(byId['star-3'].star_state).toBe('off');
+    expect(byId['star-absent']).toBeUndefined();
+    await deleteLocalArticles(['star-2', 'star-3']);
+  });
+});
+
 describe('ingestFeedArticles (取り込みは書き込み時点で最新状態とマージする)', () => {
   const FEED = { id: 'ingest-feed', title: 'Ingest' };
   const FETCHED1 = '2026-11-14T01:00:00.000Z';
@@ -180,6 +223,21 @@ describe('ingestFeedArticles (取り込みは書き込み時点で最新状態�
     expect(rows.length).toBe(3);
     expect(rows.every((a) => a.is_read)).toBe(true);
     expect(rows.every((a) => a.read_at === READ_AT)).toBe(true);
+    await cleanup();
+  });
+
+  it('取り込み後に付けたスターは、次の取り込みで巻き戻らない', async () => {
+    await cleanup();
+    await ingestFeedArticles(FEED, makeEntries(), FETCHED1, null);
+    const target = await idOf('a1');
+    await setLocalArticleStar(target, true, 'on');
+
+    await ingestFeedArticles(FEED, makeEntries('renamed'), FETCHED2, null);
+    const rows = await rowsOfFeed();
+    const row = rows.find((a) => a.id === target);
+    expect(row.starred).toBe(true);
+    expect(row.star_state).toBe('on');
+    expect(rows.filter((a) => a.id !== target).every((a) => !a.starred && (a.star_state || '') === '')).toBe(true);
     await cleanup();
   });
 
