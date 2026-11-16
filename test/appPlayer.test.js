@@ -1055,3 +1055,22 @@ describe('切り替わり時の開始位置 (次の曲の頭が飛ぶ不具合)'
     expect(errors).toEqual([]);
   });
 });
+
+describe('タイトル押下と再生の継続', () => {
+  it('再生中にタイトルを押しても、ページを開き直さず再生が続く', async () => {
+    await mountPlayer();
+    const bar = await startCard(0);
+    expect(bar, 'プレイヤーバーが出る').toBeTruthy();
+    const audio = latestAudio();
+    expect(audio.paused).toBe(false);
+    el.querySelector('.brand').click();
+    await flush();
+    expect(errors).toEqual([]);
+    // 同じ音声要素が再生中のまま、プレイヤーバーも残る。
+    expect(audio.paused).toBe(false);
+    expect(audio.src).toBe('https://example.com/ep1.mp3');
+    expect(el.querySelector('.player-bar .player-title').textContent).toBe('エピソード1');
+    // 画面はタイムラインのまま。
+    expect(el.querySelector('.view-tabs')).toBeTruthy();
+  });
+});
