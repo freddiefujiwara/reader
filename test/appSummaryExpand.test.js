@@ -7,7 +7,8 @@
 //   jsdom では各要約要素に高さを差し込んでから resize で測り直させる。
 // - 押すと展開 (expanded クラス) してボタンが「閉じる」に変わり、
 //   再度押すと元の省略表示に戻る。複数カードは独立に開閉できる。
-// - 展開ボタンのクリックは記事オープン (既読化) を引き起こさない。
+// - 展開 (折りたたみ→展開) すると、その記事が既読になる (「既読にする」と
+//   同じ applyRead の経路)。閉じる操作では既読を取り消さない。
 import 'fake-indexeddb/auto';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createApp, nextTick } from 'vue';
@@ -258,17 +259,64 @@ describe('要約の展開と折りたたみ', () => {
     expect(second.querySelector('.summary-toggle').textContent).toBe('もっと見る');
   });
 
-  it('展開ボタンを押しても記事は既読化されない', async () => {
+});
+
+describe('要約の展開と既読', () => {
+  it('展開すると記事が既読になる', async () => {
+    await mountWithSummaries();
+    const card = cardByTitle('長い要約の記事');
+    expect((await localRow('long-1')).is_read).toBe(false);
+
+    card.querySelector('.summary-toggle').click();
+    await flush();
+
+    const row = await localRow('long-1');
+    expect(row.is_read, '展開で既読がローカルに記録される').toBe(true);
+    expect(card.classList.contains('is-read'), 'カードに既読表示が付く').toBe(true);
+    expect(
+      card.querySelector('.article-summary').classList.contains('expanded'),
+      '要約は展開されたまま'
+    ).toBe(true);
+  });
+
+  it('閉じても既読は取り消されない', async () => {
     await mountWithSummaries();
     const card = cardByTitle('長い要約の記事');
 
     card.querySelector('.summary-toggle').click();
     await flush();
+    expect((await localRow('long-1')).is_read).toBe(true);
+
     card.querySelector('.summary-toggle').click();
     await flush();
 
-    const row = await localRow('long-1');
-    expect(row.is_read, 'ローカルの既読状態は変わらない').toBe(false);
-    expect(card.classList.contains('is-read'), 'カードにも既読表示は付かない').toBe(false);
+    expect((await localRow('long-1')).is_read, '折りたたんでも既読のまま').toBe(true);
+    expect(card.classList.contains('is-read'), '既読表示も残る').toBe(true);
+    expect(
+      card.querySelector('.article-summary').classList.contains('expanded'),
+      '要約は折りたたまれる'
+    ).toBe(false);
+  });
+
+  it('既に既読の記事を展開しても状態は変わらない', async () => {
+    await mountWithSummaries();
+    const card = cardByTitle('長い要約の記事');
+    // 先に「既読にする」ボタンで既読化しておく (本物の経路)。
+    card.querySelector('.read-toggle').click();
+    await flush();
+    const before = await localRow('long-1');
+    expect(before.is_read).toBe(true);
+
+    card.querySelector('.summary-toggle').click();
+    await flush();
+
+    const after = await localRow('long-1');
+    expect(after.is_read, '既読のまま').toBe(true);
+    expect(after.read_at, '既読日時は書き換わらない').toBe(before.read_at);
+    expect(
+      card.querySelector('.article-summary').classList.contains('expanded'),
+      '展開はできる'
+    ).toBe(true);
+    expect(errors).toEqual([]);
   });
 });
