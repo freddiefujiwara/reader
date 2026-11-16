@@ -331,9 +331,15 @@ if (initialRoute) applyRoute(initialRoute);
 // 開き直さずにアプリ内で移動する。再生中の音声はそのまま続く。
 // href 自体は残すので、中クリックや修飾キー付きクリックでは
 // ブラウザ既定の開き方 (新しいタブ等) になる。
+// 一覧の先頭へ戻す。タイトル押下 (goHome) と、フィード・ジャンル等の
+// 選択変更で共用する。
+function scrollToTop() {
+  window.scrollTo({ top: 0 });
+}
+
 function goHome() {
   applyRoute({ view: 'timeline', category: '', feedId: '', unread: false, staging: routeStaging });
-  window.scrollTo({ top: 0 });
+  scrollToTop();
 }
 
 function onBrandClick(event) {
@@ -590,6 +596,8 @@ function setFeed(feedId) {
   if (next === state.value.feedId) return;
   state.value = { ...state.value, feedId: next };
   displayLimit.value = DISPLAY_LIMIT;
+  // 別のフィードの一覧へ移るので、先頭から見せる。
+  scrollToTop();
 }
 
 function setCategory(category) {
@@ -600,12 +608,14 @@ function setCategory(category) {
   // カテゴリを変えたらフィード選択は解除する (対象外フィードが残らないように)。
   state.value = { ...state.value, category: next, feedId: '' };
   displayLimit.value = DISPLAY_LIMIT;
+  scrollToTop();
 }
 
 function setFilter(filter) {
   if (state.value.filter === filter) return;
   state.value = { ...state.value, filter };
   displayLimit.value = DISPLAY_LIMIT;
+  scrollToTop();
 }
 
 // ヘッダーの未読ピル: 全フィードの未読一覧へ移動する。
@@ -619,6 +629,7 @@ async function goUnreadAll() {
   if (state.value.feedId === '' && state.value.category === '' && state.value.filter === 'unread' && !fromAdmin) return;
   state.value = { ...state.value, feedId: '', category: '', filter: 'unread' };
   displayLimit.value = DISPLAY_LIMIT;
+  scrollToTop();
 }
 
 // 既読の付け外しはローカルのみ (サーバーへは送らない)。

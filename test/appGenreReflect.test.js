@@ -142,6 +142,18 @@ const settleApp = async (maxRounds = 120) => {
   }
 };
 
+// 起動時の背景更新が「始まって、終わった」ことを決定的に待つ。
+// settleApp だけでは、更新の実行中にラウンド上限へ達して見切り
+// 発車したり、開始直後の一瞬の静けさを「終わった」と誤認したり
+// しうる (CI で実際に踏んだ)。listArticles の呼び出し回数 (更新が
+// 一覧取得まで進んだ証跡) と「更新中」表示の消灯を両方そろえる
+// (2・3番目のテストが追随更新の完了条件に使うのと同じ形)。
+const waitBootRefreshDone = async () => {
+  const done = await flushUntil(() => listArticlesCalls >= 1 && !isRefreshingShown(), 1200);
+  expect(done, '起動時の背景更新が完了する').toBe(true);
+  await settleApp();
+};
+
 function findButton(root, text) {
   return [...root.querySelectorAll('button')].find((b) => b.textContent.trim() === text);
 }
@@ -221,6 +233,15 @@ afterEach(async () => {
 describe('管理でのジャンル編集のタイムライン反映', () => {
   it('保存した時点で、共有状態 (IndexedDB のフィードキャッシュ) へ反映される', async () => {
     await seedAndMount();
+    // このテストの前提は「実行中の背景更新が無い」こと (実行中の
+    // 更新がある場合は後続の2テストが holdList で再現している)。
+    // 起動直後の背景更新は保存前の一覧しか持たず、その書き込みが
+    // 保存時の反映より後に完了すると、キャッシュが旧ジャンルへ
+    // 戻ってしまう。マウント直後はまだ実行中のことがあるため、
+    // 編集の前に、更新が始まって終わったことまで確認して前提を
+    // 決定的にする (静けさだけを見る settleApp では、CI の負荷下で
+    // 実行中のまま上限に達して見切り発車したことがある)。
+    await waitBootRefreshDone();
     await editFirstFeedCategory('新ジャンル');
     expect(errors).toEqual([]);
     // まだ管理画面にいる時点で、タイムライン側のキャッシュも新しい
