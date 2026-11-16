@@ -2,6 +2,7 @@ import 'fake-indexeddb/auto';
 import { describe, it, expect } from 'vitest';
 import {
   localDbName,
+  closeLocalDb,
   saveLocalFeeds,
   loadLocalFeeds,
   putLocalArticles,
@@ -427,5 +428,21 @@ describe('YouTube URL 形式変更の移行 (migrateYouTubeChannelUrlIds)', () =
     await expect(getLocalMeta(YT_CHANNEL_URL_MIGRATED_KEY)).resolves.toBe(true);
     await saveLocalFeeds([]);
     await setLocalMeta(YT_CHANNEL_URL_MIGRATED_KEY, undefined);
+  });
+});
+
+describe('DB 接続のクローズ (closeLocalDb)', () => {
+  it('閉じた後は開き直して、保存済みの内容を読み戻せる', async () => {
+    await saveLocalFeeds([
+      { id: 'zenn', title: 'Zenn', url: 'https://example.com/zenn' },
+    ]);
+    closeLocalDb();
+    const loaded = await loadLocalFeeds();
+    expect(loaded.map((f) => f.id)).toEqual(['zenn']);
+  });
+
+  it('開いていない状態で閉じてもエラーにならない', () => {
+    closeLocalDb();
+    expect(() => closeLocalDb()).not.toThrow();
   });
 });

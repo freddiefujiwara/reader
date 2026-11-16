@@ -34,6 +34,19 @@ describe('postJson', () => {
     expect(init.headers['Content-Type']).toContain('text/plain');
     expect(JSON.parse(init.body)).toEqual({ action: 'list' });
   });
+  it('応答が固まったらタイムアウトで打ち切り、再試行しない', async () => {
+    // fetch が abort シグナルで AbortError を返す振る舞いを模す。
+    const fetcher = vi.fn((url, init) => new Promise((_, reject) => {
+      init.signal.addEventListener('abort', () => {
+        const e = new Error('The operation was aborted');
+        e.name = 'AbortError';
+        reject(e);
+      });
+    }));
+    await expect(postJson({ action: 'list' }, { fetcher, apiUrl: API, timeoutMs: 10, retryDelayMs: 0 }))
+      .rejects.toThrow('aborted');
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
   it('ok:false は error を投げる', async () => {
     const fetcher = okFetcher({ ok: false, error: 'unauthorized' });
     await expect(postJson({ action: 'list' }, { fetcher, apiUrl: API })).rejects.toThrow('unauthorized');

@@ -11,3 +11,16 @@ export async function withRetry(fn, { retries = 1, retryDelayMs = 900, isRetryab
     }
   }
 }
+
+// promise が ms 以内に終わらなければ Error('timeout') で reject する。
+// 元の promise 自体は止めない (裏で終わればそれでよい)。固まると
+// 画面全体が止まる読み込み (起動時のローカル読み直し等) の保険。
+export function withTimeout(promise, ms) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('timeout')), ms);
+    Promise.resolve(promise).then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (err) => { clearTimeout(timer); reject(err); },
+    );
+  });
+}

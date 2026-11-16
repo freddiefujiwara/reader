@@ -12,16 +12,27 @@ function isRetryable(err) {
   return /^HTTP 5\d\d$/.test(String((err && err.message) || ''));
 }
 
-export async function postJson(body, { fetcher = fetch, apiUrl = API_URL, retries = 1, retryDelayMs = 900 } = {}) {
+export async function postJson(body, { fetcher = fetch, apiUrl = API_URL, retries = 1, retryDelayMs = 900, timeoutMs = 30000 } = {}) {
   if (!apiUrl) throw new Error('api_not_configured');
   // 全 action は冪等 (既読化・保存・削除・並び替え) なので、
   // ネットワーク失敗と 5xx のときだけ1回だけ送り直す。
   return withRetry(async () => {
-    const res = await fetcher(apiUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify(body),
-    });
+    // 応答が返らないまま固まるリクエストを打ち切る。タイムアウトは
+    // AbortError になり、再試行対象 (TypeError / 5xx) には含めない
+    // (固まっている相手へすぐ送り直しても同じ結果になるため)。
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let res;
+    try {
+      res = await fetcher(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     if (!data || data.ok !== true) {
