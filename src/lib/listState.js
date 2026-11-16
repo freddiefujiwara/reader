@@ -70,14 +70,29 @@ export function patchFeedCategory(feeds, feedId, category) {
   return (feeds || []).map((f) => (f.id === feedId ? { ...f, category } : f));
 }
 
-// 1件の既読を差し替えた新しい articles を返す (元の配列は壊さない)。
+// 1件の記事の一部フィールドを差し替えた新しい articles を返す
+// (元の配列は壊さない)。差し替えるのは既読 (isRead) とスター
+// (starred / starState) だけ。
 export function patchArticle(articles, articleId, patch) {
   return articles.map((a) => {
     if (a.id !== articleId) return a;
     const next = { ...a };
     if (patch.isRead !== undefined) next.isRead = patch.isRead;
+    if (patch.starred !== undefined) next.starred = patch.starred;
+    if (patch.starState !== undefined) next.starState = patch.starState;
     return next;
   });
+}
+
+// 記事が再生ボタン表示 (＝キュー入り) の対象かどうか。
+// 音声URLがあることが前提で、YouTube フィードの記事はスターが
+// 付いているものだけに絞る。それ以外のフィード (ポッドキャスト等)
+// は従来どおり音声URLの有無だけで決まる。youtubeFeedIds は
+// YouTube フィードの ID 集合 (Set)。
+export function isPlayableArticle(article, youtubeFeedIds) {
+  if (!article || !article.audioUrl) return false;
+  if (youtubeFeedIds && youtubeFeedIds.has(article.feedId)) return !!article.starred;
+  return true;
 }
 
 // 読み直した記事一覧 (views) へ、まだ DB のスナップショットに
@@ -99,6 +114,25 @@ export function mergePendingReadMarks(views, marks) {
     if (a.isRead === want) return a;
     keep.set(a.id, want);
     return { ...a, isRead: want };
+  });
+  return { articles, keep };
+}
+
+// 読み直した記事一覧 (views) へ、まだ DB のスナップショットに
+// 反映されていると確認できていないスター変更 (marks:
+// Map<記事ID, {starred, starState}>) を重ねる。mergePendingReadMarks
+// のスター版で、考え方はそちらと同じ。一覧から消えた記事への変更と、
+// スナップショット側と一致した変更は marks から落とす。
+export function mergePendingStarMarks(views, marks) {
+  const pending = marks instanceof Map ? marks : new Map();
+  if (!pending.size) return { articles: views || [], keep: new Map() };
+  const keep = new Map();
+  const articles = (views || []).map((a) => {
+    if (!pending.has(a.id)) return a;
+    const want = pending.get(a.id);
+    if (a.starred === want.starred && (a.starState || '') === (want.starState || '')) return a;
+    keep.set(a.id, want);
+    return { ...a, starred: want.starred, starState: want.starState || '' };
   });
   return { articles, keep };
 }
