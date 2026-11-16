@@ -37,6 +37,7 @@ const FEED_B = {
 let serverFeeds = [];
 
 vi.mock('../src/lib/api.js', () => ({
+  setStar: vi.fn(async () => ({ ok: true })),
   deleteFeed: vi.fn(async (token, id) => {
     serverFeeds = serverFeeds.filter((f) => f.id !== id);
     return { ok: true };

@@ -30,6 +30,7 @@ const FRESH_URL = 'https://example.com/fresh.mp3';
 const hoursAgoIso = (h) => new Date(Date.now() - h * 60 * 60 * 1000).toISOString();
 
 vi.mock('../src/lib/api.js', () => ({
+  setStar: vi.fn(async () => ({ ok: true })),
   deleteFeed: vi.fn(async () => ({ ok: true })),
   exchangeSession: vi.fn(async () => ({ ok: true })),
   exchangeShare: vi.fn(async () => ({ ok: true })),
