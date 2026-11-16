@@ -170,7 +170,8 @@ const unreadTotalCount = computed(() =>
   state.value.feeds.reduce((n, f) => n + (f.unreadCount || 0), 0)
 );
 // 「すべて既読」の対象件数 (現在のスコープ = 選択中のフィード／
-// カテゴリ内の未読)。ボタンの非活性判定と確認文言の件数に使う。
+// カテゴリ内の未読)。ボタンの非活性判定、確認を出すかの判定、
+// 確認文言の件数に使う。
 const scopedUnreadCount = computed(() =>
   markAllReadTargets(state.value, state.value.feedId, state.value.category).length
 );
@@ -577,14 +578,20 @@ function onOpenArticle(article) {
 }
 
 // 「すべて既読」の確認表示。誤タップで大量に既読化しないよう、
-// 実行前に下部バー内で確認を取る (フィード削除や共有リンク発行と
-// 同じインライン確認の流儀)。スコープが変わったら確認は畳む
-// (別の範囲への確認を持ち越さない)。
+// 対象が多いときだけ実行前に下部バー内で確認を取る (フィード削除や
+// 共有リンク発行と同じインライン確認の流儀)。件数が少ないときに
+// 毎回確認が出ると煩わしいため、しきい値未満は即座に実行する。
+// スコープが変わったら確認は畳む (別の範囲への確認を持ち越さない)。
+const MARK_ALL_CONFIRM_THRESHOLD = 100;
 const markAllConfirm = ref(false);
 
 function askMarkAllRead() {
   if (!isOwner.value) return;
   if (scopedUnreadCount.value === 0) return;
+  if (scopedUnreadCount.value < MARK_ALL_CONFIRM_THRESHOLD) {
+    onMarkAllRead();
+    return;
+  }
   markAllConfirm.value = true;
 }
 

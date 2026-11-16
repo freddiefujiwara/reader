@@ -221,11 +221,9 @@ describe('すべて既読と背景更新の読み直しの競合', () => {
     await releaseNextLoad(); // 剪定の読み取り
     await flushUntil(() => gate.pending.length >= 1); // reloadLocal の読み取りが保留中
 
-    // その間に「すべて既読」を押し、確認も済ませる。画面へは即座に
-    // 効き、DB へも書ける。
+    // その間に「すべて既読」を押す。対象は1件なので確認は出ず、
+    // 即座に実行される。画面へは即座に効き、DB へも書ける。
     findButton(el, 'すべて既読').click();
-    await flushRound();
-    findButton(el, 'すべて既読にする').click();
     await flushUntil(() => headerUnread() === 1);
     expect(articleTitles()).toEqual([]);
     gate.armed = false;
