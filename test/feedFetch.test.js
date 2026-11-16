@@ -21,6 +21,18 @@ describe('fetchFeedXml', () => {
   it('content を返す', async () => {
     await expect(fetchFeedXml('https://example.com/f', { fetcher: okFetcher() })).resolves.toBe(XML);
   });
+  it('応答が固まったらタイムアウトで打ち切り、再試行しない', async () => {
+    const fetcher = vi.fn((url, init) => new Promise((_, reject) => {
+      init.signal.addEventListener('abort', () => {
+        const e = new Error('The operation was aborted');
+        e.name = 'AbortError';
+        reject(e);
+      });
+    }));
+    await expect(fetchFeedXml('https://example.com/f', { fetcher, timeoutMs: 10, retryDelayMs: 0 }))
+      .rejects.toThrow('aborted');
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
   it('error が入っていたら投げる', async () => {
     const fetcher = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ url: 'x', content: null, error: 'HTTP 404' }) }));
     await expect(fetchFeedXml('https://example.com/f', { fetcher })).rejects.toThrow('HTTP 404');

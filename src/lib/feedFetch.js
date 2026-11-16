@@ -29,9 +29,19 @@ function isRetryable(err) {
   return err instanceof TypeError;
 }
 
-export async function fetchFeedXml(fetchUrl, { fetcher = fetch, proxyBase = URL_FETCH_API_URL, token = URL_FETCH_TOKEN, retries = 1, retryDelayMs = 900 } = {}) {
+export async function fetchFeedXml(fetchUrl, { fetcher = fetch, proxyBase = URL_FETCH_API_URL, token = URL_FETCH_TOKEN, retries = 1, retryDelayMs = 900, timeoutMs = 30000 } = {}) {
   return withRetry(async () => {
-    const res = await fetcher(proxyUrl(fetchUrl, proxyBase, token));
+    // 応答が返らないまま固まるリクエストを打ち切る (タイムアウトは
+    // AbortError になり、再試行対象の TypeError には含めない)。
+    // 1件の固まりで全フィードの更新が止まるのを防ぐ。
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let res;
+    try {
+      res = await fetcher(proxyUrl(fetchUrl, proxyBase, token), { signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     if (!data || data.error) throw new Error((data && data.error) || 'fetch_failed');

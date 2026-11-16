@@ -310,6 +310,7 @@ export function articleRecordToView(record, feedTitle, nowMs = Date.now()) {
 /* ---- IndexedDB の薄いラッパー ---- */
 
 let dbPromise = null;
+let openDb = null;
 
 export function openLocalDb(env) {
   if (!dbPromise) {
@@ -323,11 +324,28 @@ export function openLocalDb(env) {
         db.createObjectStore('feeds', { keyPath: 'id' });
         db.createObjectStore('meta', { keyPath: 'key' });
       };
-      req.onsuccess = () => resolve(req.result);
+      req.onsuccess = () => {
+        openDb = req.result;
+        // 他のページが版を上げようとしたら、塞がずに接続を手放す。
+        openDb.onversionchange = () => closeLocalDb();
+        resolve(openDb);
+      };
       req.onerror = () => reject(req.error || new Error('indexeddb_open_failed'));
     });
   }
   return dbPromise;
+}
+
+// 開いている接続を閉じて、次回は開き直すようにする。ページが
+// 破棄・凍結 (bfcache) される前に呼ぶためのもの: 接続を開いた
+// まま凍結されると、次に開いたページの読み込みがその接続と
+// 競合して固まることがある。
+export function closeLocalDb() {
+  if (openDb) {
+    try { openDb.close(); } catch { /* 既に閉じている */ }
+    openDb = null;
+  }
+  dbPromise = null;
 }
 
 function requestToPromise(req) {
