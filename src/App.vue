@@ -253,6 +253,10 @@ function toggleSummary(id) {
   } else {
     next.add(id);
     expandedSummaryIds.value = next;
+    // 展開したら、その記事は読んだ扱いにする (「既読にする」と同じ
+    // applyRead の経路。閉じる操作では既読を取り消さない)。
+    const article = state.value.articles.find((a) => a.id === id);
+    if (article && !article.isRead) applyRead(article, true);
   }
 }
 
