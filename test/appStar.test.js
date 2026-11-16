@@ -235,6 +235,46 @@ describe('スターと再生ボタンの表示', () => {
   });
 });
 
+describe('スターボタンの位置', () => {
+  it('スターはアクション行の左端に固定され、再生ボタンより前に出る', async () => {
+    await mountApp([
+      rec('yt-starred', YT_FEED_ID, 'スター付き動画', '2026-11-15T00:00:00.000Z', { ...AUDIO, starred: true }),
+      rec('yt-plain', YT_FEED_ID, 'スター無し動画', '2026-11-14T00:00:00.000Z', { ...AUDIO }),
+    ]);
+
+    // 再生できる (スター付き) カード: 先頭がスター、その後に再生ボタン。
+    const starredFoot = cardByTitle('スター付き動画').querySelector('.article-foot');
+    expect(starredFoot.firstElementChild.classList.contains('star-btn'), '左端がスター').toBe(true);
+    const starIdx = [...starredFoot.children].findIndex((c) => c.classList.contains('star-btn'));
+    const playIdx = [...starredFoot.children].findIndex((c) => c.classList.contains('play-btn'));
+    expect(playIdx, '再生ボタンがある').toBeGreaterThanOrEqual(0);
+    expect(starIdx, 'スターが再生ボタンより前 (左)').toBeLessThan(playIdx);
+
+    // 再生できない (スター無し) カードでも、スターは同じ左端に出る。
+    const plainFoot = cardByTitle('スター無し動画').querySelector('.article-foot');
+    expect(plainFoot.querySelector('.play-btn')).toBeNull();
+    expect(plainFoot.firstElementChild.classList.contains('star-btn'), '再生不可でも左端がスター').toBe(true);
+  });
+
+  it('スターを外して再生ボタンが消えても、スターは左端のまま動かない', async () => {
+    await mountApp([
+      rec('yt-on', YT_FEED_ID, '再生できる動画', '2026-11-15T00:00:00.000Z', { ...AUDIO, starred: true }),
+    ]);
+    const footBefore = cardByTitle('再生できる動画').querySelector('.article-foot');
+    expect(footBefore.firstElementChild.classList.contains('star-btn')).toBe(true);
+
+    cardByTitle('再生できる動画').querySelector('.star-btn').click();
+    await flushUntil(async () =>
+      setStar.mock.calls.length >= 1 && (await localRow('yt-on'))?.star_state === 'off');
+
+    const card = cardByTitle('再生できる動画');
+    expect(card.querySelector('.play-btn'), '再生ボタンは消える').toBeNull();
+    const footAfter = card.querySelector('.article-foot');
+    expect(footAfter.firstElementChild.classList.contains('star-btn'), '外した後も左端がスター').toBe(true);
+    expect(footAfter.firstElementChild.textContent).toBe('☆');
+  });
+});
+
 describe('スターの付け外し', () => {
   it('付けると set_star が呼ばれて点灯し、DB に手動の印が残る (音声URLが無ければボタンは出ない)', async () => {
     await mountApp([
