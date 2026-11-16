@@ -653,6 +653,29 @@ button.ghost.active {
   overflow: hidden;
 }
 
+/* 「もっと見る」で展開した要約: 行数制限を外して全文を出す。 */
+.article-summary.expanded {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+}
+
+/* 要約の展開ボタン。read-toggle と同じ控えめなテキストボタン。 */
+.summary-toggle {
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--muted);
+  padding: 4px 0 0;
+  cursor: pointer;
+}
+
+.summary-toggle:hover {
+  color: var(--link);
+}
+
 .article-foot {
   display: flex;
   align-items: center;

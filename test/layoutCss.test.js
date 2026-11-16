@@ -28,6 +28,22 @@ describe('下部バーとプレイヤーバーの重なり防止', () => {
   });
 });
 
+describe('要約の展開表示', () => {
+  it('通常の要約 (.article-summary) は3行で省略される', () => {
+    const body = ruleBody('.article-summary');
+    expect(body, '要約のルールがある').not.toBe('');
+    expect(body).toContain('-webkit-line-clamp: 3');
+    expect(body).toContain('overflow: hidden');
+  });
+
+  it('展開した要約 (.article-summary.expanded) は行数制限が外れる', () => {
+    const body = ruleBody('.article-summary.expanded');
+    expect(body, '展開時のルールがある').not.toBe('');
+    expect(body).toContain('-webkit-line-clamp: unset');
+    expect(body).toContain('overflow: visible');
+  });
+});
+
 describe('ジャンル候補の配置', () => {
   it('候補 (.genre-suggestions) は通常フローの flex で、絶対配置ではない', () => {
     const body = ruleBody('.genre-suggestions');
