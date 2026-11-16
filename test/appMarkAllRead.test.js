@@ -1,11 +1,13 @@
 // 「すべて既読」の確認ステップとスコープの固定テスト。
 //
 // すべて既読は端末ローカル (IndexedDB) だけの操作で、誤タップで
-// 大量に既読化しないよう、実行前に下部バー内で確認を取る。
-// ここでは (1) 確認を経て初めて既読化されること、(2) 対象が
-// 現在のスコープ (フィード／全体) 内の未読だけであること、
-// (3) キャンセルでは何も変わらないこと、(4) 未読ゼロではボタンが
-// 押せないこと、(5) 未読のみ表示へ即時に反映されることを固定する。
+// 大量に既読化しないよう、対象が100件以上のときだけ実行前に
+// 下部バー内で確認を取る。100件未満は確認なしで即座に実行する。
+// ここでは (1) 100件未満では確認なしで即座に既読化されること、
+// (2) 対象が現在のスコープ (フィード／全体) 内の未読だけである
+// こと、(3) 未読ゼロではボタンが押せないこと、(4) 未読のみ表示へ
+// 即時に反映されること、(5) 境界 (99件では確認なし／100件では
+// 確認あり) と100件でのキャンセルを固定する。
 import 'fake-indexeddb/auto';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createApp, nextTick } from 'vue';
@@ -154,6 +156,38 @@ async function seedAndMount(allRead = false) {
   expect(articleTitles()).toEqual(['記事A1', '記事A2', '記事B']);
 }
 
+// 境界テスト用に、1フィードへ大量の未読記事を用意してマウントする。
+async function seedBulkAndMount(count) {
+  const feed = { ...FEED_A, unreadCount: count };
+  serverFeeds = [feed];
+  await saveLocalFeeds([feed]);
+  const base = Date.parse('2026-11-15T00:00:00.000Z');
+  const records = [];
+  for (let i = 0; i < count; i += 1) {
+    records.push(rec(
+      `bulk-${i + 1}`,
+      FEED_A.id,
+      `記事${i + 1}`,
+      new Date(base - i * 60000).toISOString()
+    ));
+  }
+  await putLocalArticles(records);
+  el = document.createElement('div');
+  document.body.appendChild(el);
+  app = createApp(App);
+  app.config.errorHandler = (err) => { errors.push(err); };
+  app.mount(el);
+  await flushUntil(() => headerUnread() === count);
+  await settleApp();
+  expect(headerUnread()).toBe(count);
+}
+
+// 大量記事の既読フラグを bulk-1 から順に配列で返す。
+const bulkReadFlags = async (count) => {
+  const flags = await readFlags();
+  return Array.from({ length: count }, (_, i) => flags[`bulk-${i + 1}`]);
+};
+
 beforeEach(() => {
   errors = [];
   serverFeeds = [{ ...FEED_A }, { ...FEED_B }];
@@ -175,26 +209,20 @@ afterEach(async () => {
 });
 
 describe('すべて既読の確認とスコープ', () => {
-  it('確認を経て初めて全体が既読化され、未読数が追随する', async () => {
+  it('100件未満では確認なしで即座に全体が既読化され、未読数が追随する', async () => {
     await seedAndMount();
     expect(headerUnread()).toBe(3);
 
     const btn = findButton(el, 'すべて既読');
     expect(btn.disabled).toBe(false);
     btn.click();
-    await flushRound();
-
-    // 確認が出ただけでは、まだ何も既読になっていない。
-    expect(confirmText()).toBe('未読3件をすべて既読にしますか？');
-    expect(headerUnread()).toBe(3);
-    expect(await readFlags()).toEqual({ 'art-a1': false, 'art-a2': false, 'art-b': false });
-
-    findButton(el, 'すべて既読にする').click();
     await flushUntil(() => headerUnread() === null);
+
+    // 確認は出ず、そのまま既読化されている。
+    expect(confirmText()).toBe(null);
     expect(await readFlags()).toEqual({ 'art-a1': true, 'art-a2': true, 'art-b': true });
 
-    // 確認は閉じ、未読ゼロになったボタンは押せない。
-    expect(confirmText()).toBe(null);
+    // 未読ゼロになったボタンは押せない。
     expect(findButton(el, 'すべて既読').disabled).toBe(true);
     expect(errors).toEqual([]);
   });
@@ -206,27 +234,9 @@ describe('すべて既読の確認とスコープ', () => {
     expect(articleTitles()).toEqual(['記事A1', '記事A2']);
 
     findButton(el, 'すべて既読').click();
-    await flushRound();
-    expect(confirmText()).toBe('未読2件をすべて既読にしますか？');
-
-    findButton(el, 'すべて既読にする').click();
     await flushUntil(() => headerUnread() === 1);
-    expect(await readFlags()).toEqual({ 'art-a1': true, 'art-a2': true, 'art-b': false });
-    expect(errors).toEqual([]);
-  });
-
-  it('キャンセルでは何も変わらず、確認が閉じる', async () => {
-    await seedAndMount();
-    findButton(el, 'すべて既読').click();
-    await flushRound();
-    expect(confirmText()).toBe('未読3件をすべて既読にしますか？');
-
-    findButton(el, 'キャンセル').click();
-    await flushRound();
     expect(confirmText()).toBe(null);
-    expect(headerUnread()).toBe(3);
-    expect(await readFlags()).toEqual({ 'art-a1': false, 'art-a2': false, 'art-b': false });
-    expect(findButton(el, 'すべて既読').disabled).toBe(false);
+    expect(await readFlags()).toEqual({ 'art-a1': true, 'art-a2': true, 'art-b': false });
     expect(errors).toEqual([]);
   });
 
@@ -246,11 +256,55 @@ describe('すべて既読の確認とスコープ', () => {
     expect(articleTitles()).toEqual(['記事A1', '記事A2', '記事B']);
 
     findButton(el, 'すべて既読').click();
-    await flushRound();
-    findButton(el, 'すべて既読にする').click();
     await flushUntil(() => articleTitles().length === 0);
     expect(headerUnread()).toBe(null);
     expect(await readFlags()).toEqual({ 'art-a1': true, 'art-a2': true, 'art-b': true });
+    expect(errors).toEqual([]);
+  });
+
+  it('99件では確認なしで即座に既読化される (境界の下)', async () => {
+    await seedBulkAndMount(99);
+    findButton(el, 'すべて既読').click();
+    await flushUntil(() => headerUnread() === null);
+    expect(confirmText()).toBe(null);
+    expect(await bulkReadFlags(99)).toEqual(Array(99).fill(true));
+    expect(errors).toEqual([]);
+  });
+
+  it('100件では確認を経て初めて既読化される (境界の上)', async () => {
+    await seedBulkAndMount(100);
+    const btn = findButton(el, 'すべて既読');
+    expect(btn.disabled).toBe(false);
+    btn.click();
+    await flushRound();
+
+    // 確認が出ただけでは、まだ何も既読になっていない。
+    expect(confirmText()).toBe('未読100件をすべて既読にしますか？');
+    expect(headerUnread()).toBe(100);
+    expect(await bulkReadFlags(100)).toEqual(Array(100).fill(false));
+
+    findButton(el, 'すべて既読にする').click();
+    await flushUntil(() => headerUnread() === null);
+    expect(await bulkReadFlags(100)).toEqual(Array(100).fill(true));
+
+    // 確認は閉じ、未読ゼロになったボタンは押せない。
+    expect(confirmText()).toBe(null);
+    expect(findButton(el, 'すべて既読').disabled).toBe(true);
+    expect(errors).toEqual([]);
+  });
+
+  it('100件ではキャンセルで何も変わらず、確認が閉じる', async () => {
+    await seedBulkAndMount(100);
+    findButton(el, 'すべて既読').click();
+    await flushRound();
+    expect(confirmText()).toBe('未読100件をすべて既読にしますか？');
+
+    findButton(el, 'キャンセル').click();
+    await flushRound();
+    expect(confirmText()).toBe(null);
+    expect(headerUnread()).toBe(100);
+    expect(await bulkReadFlags(100)).toEqual(Array(100).fill(false));
+    expect(findButton(el, 'すべて既読').disabled).toBe(false);
     expect(errors).toEqual([]);
   });
 });
