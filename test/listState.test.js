@@ -11,6 +11,8 @@ import {
   markAllReadScope,
   markAllReadTargets,
   mergePendingReadMarks,
+  mergePendingStarMarks,
+  isPlayableArticle,
   visibleFeedChips,
   feedCategories,
   feedDisplayName,
@@ -356,5 +358,72 @@ describe('mergePendingReadMarks', () => {
     const v = views();
     mergePendingReadMarks(v, new Map([['a', true]]));
     expect(v[0].isRead).toBe(false);
+  });
+});
+
+describe('patchArticle のスター差し替え', () => {
+  it('starred / starState だけを差し替え、他は壊さない', () => {
+    const before = [{ id: 'a', isRead: false, starred: false, starState: '' }];
+    const out = patchArticle(before, 'a', { starred: true, starState: 'on' });
+    expect(out[0]).toEqual({ id: 'a', isRead: false, starred: true, starState: 'on' });
+    expect(before[0].starred).toBe(false);
+  });
+});
+
+describe('isPlayableArticle', () => {
+  const yt = new Set(['yt-feed']);
+  const withAudio = { audioUrl: 'https://example.com/a.m4a' };
+
+  it('音声URLが無ければ、どのフィードでも対象外', () => {
+    expect(isPlayableArticle({ feedId: 'pod', audioUrl: '' }, yt)).toBe(false);
+    expect(isPlayableArticle({ feedId: 'yt-feed', audioUrl: '', starred: true }, yt)).toBe(false);
+  });
+
+  it('YouTube 以外のフィードは、音声URLがあればスター無しでも対象', () => {
+    expect(isPlayableArticle({ ...withAudio, feedId: 'pod', starred: false }, yt)).toBe(true);
+  });
+
+  it('YouTube フィードは、スター付きのときだけ対象', () => {
+    expect(isPlayableArticle({ ...withAudio, feedId: 'yt-feed', starred: true }, yt)).toBe(true);
+    expect(isPlayableArticle({ ...withAudio, feedId: 'yt-feed', starred: false }, yt)).toBe(false);
+    expect(isPlayableArticle({ ...withAudio, feedId: 'yt-feed' }, yt)).toBe(false);
+  });
+});
+
+describe('mergePendingStarMarks', () => {
+  const views = () => [
+    { id: 'a', starred: false, starState: '' },
+    { id: 'b', starred: true, starState: 'on' },
+    { id: 'c', starred: true, starState: '' },
+  ];
+
+  it('控えが無ければ一覧はそのままで、keep は空', () => {
+    const v = views();
+    const out = mergePendingStarMarks(v, new Map());
+    expect(out.articles).toBe(v);
+    expect(out.keep.size).toBe(0);
+  });
+
+  it('スナップショットが古い記事は、控えのスターで上書きし、keep に残す', () => {
+    const out = mergePendingStarMarks(views(), new Map([['a', { starred: true, starState: 'on' }]]));
+    expect(out.articles[0]).toEqual({ id: 'a', starred: true, starState: 'on' });
+    expect([...out.keep.keys()]).toEqual(['a']);
+  });
+
+  it('スナップショット側が既に控えと一致していれば、控えから落とす', () => {
+    const out = mergePendingStarMarks(views(), new Map([['b', { starred: true, starState: 'on' }]]));
+    expect(out.keep.size).toBe(0);
+    expect(out.articles[1].starred).toBe(true);
+  });
+
+  it('外す変更も対称に扱う (starState の違いだけでも不一致とみなす)', () => {
+    const out = mergePendingStarMarks(views(), new Map([['c', { starred: false, starState: 'off' }]]));
+    expect(out.articles[2]).toEqual({ id: 'c', starred: false, starState: 'off' });
+    expect([...out.keep.keys()]).toEqual(['c']);
+  });
+
+  it('一覧から消えた記事への控えは落とす', () => {
+    const out = mergePendingStarMarks(views(), new Map([['gone', { starred: true, starState: 'on' }]]));
+    expect(out.keep.size).toBe(0);
   });
 });

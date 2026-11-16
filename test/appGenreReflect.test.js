@@ -45,6 +45,7 @@ let listArticlesCalls = 0;
 let releaseHeldList = null;
 
 vi.mock('../src/lib/api.js', () => ({
+  setStar: vi.fn(async () => ({ ok: true })),
   deleteFeed: vi.fn(async () => ({ ok: true })),
   exchangeSession: vi.fn(async () => ({ ok: true })),
   exchangeShare: vi.fn(async () => ({ ok: true })),

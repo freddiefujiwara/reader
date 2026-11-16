@@ -48,6 +48,7 @@ const EP2 = rec('ep-2', 'エピソード2', '2026-11-13T00:00:00.000Z', 'https:/
 const KEPT_URL = 'https://example.com/kept.mp3';
 
 vi.mock('../src/lib/api.js', () => ({
+  setStar: vi.fn(async () => ({ ok: true })),
   deleteFeed: vi.fn(async () => ({ ok: true })),
   exchangeSession: vi.fn(async () => ({ ok: true })),
   exchangeShare: vi.fn(async () => ({ ok: true })),

@@ -684,6 +684,20 @@ button.ghost.active {
   color: var(--link);
 }
 
+/* YouTube 記事のスター付け外し。☆/⭐ の文字そのままを使う。
+   read-toggle と違い右寄せはしない (既読ボタンが右端を担う)。 */
+.star-btn {
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 1.05rem;
+  line-height: 1;
+  padding: 6px 4px;
+  cursor: pointer;
+  flex: none;
+  touch-action: manipulation;
+}
+
 /* ---- ポッドキャストプレイヤー ----
    部品の見た目は blog のプレイヤー (article .music-player の
    mp-button / mp-play / mp-seek / mp-time) に揃える。色はこの

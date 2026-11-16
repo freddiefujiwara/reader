@@ -86,6 +86,16 @@ export function deleteFeed(sessionToken, feedId, opts) {
   return postJson({ action: 'deleteFeed', sessionToken, feedId }, opts);
 }
 
+// 記事へのスターの付け外し (オーナーセッションのみ。readonly は
+// サーバー側で forbidden)。スターはサーバーが正本で、実効スター
+// (starred) はサーバーの list 応答で同期される。on のときは手動で
+// 付けた印 (star_state: 'on')、off のときは手動で外した印 ('off')
+// としてサーバーに残る。
+// -> { ok }
+export function setStar(sessionToken, articleId, on, opts) {
+  return postJson({ action: 'set_star', sessionToken, id: articleId, on: !!on }, opts);
+}
+
 export function reorderFeeds(sessionToken, feedIds, opts) {
   return postJson({ action: 'reorderFeeds', sessionToken, feedIds }, opts);
 }

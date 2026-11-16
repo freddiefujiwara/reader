@@ -12,6 +12,7 @@ import {
   reorderFeeds,
   revokeShareLink,
   saveFeed,
+  setStar,
 } from './lib/api.js';
 import { buildShareUrl, formatShareExpiry } from './lib/shareLink.js';
 import {
@@ -29,15 +30,18 @@ import {
   planFeedAdd,
   resolveFeedAddForm,
   validateFeedUrl,
+  youtubeChannelIdFromUrl,
 } from './lib/feedAdmin.js';
 import { clearSession, loadSession, saveSession } from './lib/session.js';
 import {
   createListState,
   feedCategories,
   feedDisplayName,
+  isPlayableArticle,
   markAllReadInList,
   markAllReadTargets,
   mergePendingReadMarks,
+  mergePendingStarMarks,
   patchArticle,
   patchFeedCategory,
   shouldClearCategorySelection,
@@ -66,7 +70,9 @@ import {
   saveLocalFeeds,
   setLocalArticlePlayPos,
   setLocalArticleRead,
+  setLocalArticleStar,
   setLocalMeta,
+  syncLocalArticleStars,
 } from './lib/localDb.js';
 import { normalizeFeedIds } from './lib/feedHash.js';
 import { buildRoutePath, parseRoute, routeSegmentsFromPathname } from './lib/route.js';
@@ -166,6 +172,20 @@ const formDirty = computed(() => isFeedFormDirty(formBase.value, form.value));
 
 const isReadonly = computed(() => session.value?.role === 'readonly');
 const isOwner = computed(() => session.value?.role === 'owner');
+// YouTube フィードの ID 集合。記事が YouTube 由来かどうかは、
+// フィードの保存 URL からチャンネル ID が取れるかで判定する
+// (サーバー側の RSS 出し分けと同じ判定)。
+const youtubeFeedIds = computed(() =>
+  new Set(
+    state.value.feeds
+      .filter((f) => youtubeChannelIdFromUrl(f.url))
+      .map((f) => f.id)
+  )
+);
+const isYouTubeArticle = (a) => youtubeFeedIds.value.has(a.feedId);
+// 再生ボタンを出す (＝キューに入れる) 記事か。YouTube 記事は
+// スター付きのものだけ、それ以外は音声URLの有無で決まる。
+const canPlay = (a) => isPlayableArticle(a, youtubeFeedIds.value);
 const visible = computed(() => visibleArticles(state.value));
 const displayArticles = computed(() => visible.value.slice(0, displayLimit.value));
 const unreadTotalCount = computed(() =>
@@ -381,6 +401,14 @@ const FILTERS = [
 // スナップショット側と一致した変更はその読み直しで控えから落ちる。
 const pendingReadMarks = new Map();
 
+// 付け外したばかりで、背景更新の読み直し・スター同期が使う DB の
+// スナップショットに反映されていると確認できていないスター変更
+// (記事ID -> {starred, starState})。pendingReadMarks のスター版で、
+// reloadLocal が読み直した一覧へ重ね直し、スナップショット側と
+// 一致した変更はその読み直しで控えから落ちる。スター同期
+// (refreshOnce) はこの控えがある記事を上書き対象から外す。
+const pendingStarMarks = new Map();
+
 // DB の中身を state へ読み直す。未読数はローカルの記事から数える。
 async function reloadLocal() {
   const [feeds, records] = await Promise.all([loadLocalFeeds(), loadLocalArticles()]);
@@ -390,7 +418,10 @@ async function reloadLocal() {
   const merged = mergePendingReadMarks(loaded, pendingReadMarks);
   pendingReadMarks.clear();
   merged.keep.forEach((isRead, id) => { pendingReadMarks.set(id, isRead); });
-  const views = merged.articles;
+  const starMerged = mergePendingStarMarks(merged.articles, pendingStarMarks);
+  pendingStarMarks.clear();
+  starMerged.keep.forEach((mark, id) => { pendingStarMarks.set(id, mark); });
+  const views = starMerged.articles;
   state.value = { ...state.value, feeds: withUnreadCounts(feeds, views), articles: views };
 }
 
@@ -421,12 +452,16 @@ async function refreshOnce() {
     // 大きめに取る (取り込みは v1 のサーバー状態を1回だけ引き継ぐため)。
     let feeds = [];
     let importPayload = null;
+    let starRows = [];
     let listOk = false;
     const needImport = !(await getLocalMeta('statesImportedV2'));
     try {
-      const payload = await listArticles(session.value.token, { limit: needImport ? IMPORT_LIMIT : 1 });
+      // スター状態の同期にも使うため、記事も毎回まとめて取る
+      // (サーバー側で上限は調整される)。
+      const payload = await listArticles(session.value.token, { limit: IMPORT_LIMIT });
       if (Array.isArray(payload.feeds)) feeds = payload.feeds;
       if (needImport) importPayload = payload;
+      if (Array.isArray(payload.articles)) starRows = payload.articles;
       listOk = true;
     } catch (e) {
       if (expireIfUnauthorized(e)) return;
@@ -490,6 +525,19 @@ async function refreshOnce() {
         .filter((id) => present.has(id));
       await markLocalArticlesRead(readIds, fetchedAt);
       await setLocalMeta('statesImportedV2', true);
+    }
+
+    // スター状態の同期 (サーバーが正本)。list 応答の starred /
+    // star_state でローカルレコードを上書きする。スター項目を
+    // 持たない応答 (サーバー未対応) では何もしない。付け外した
+    // 直後で未確定の記事 (pendingStarMarks) は、古い応答で
+    // 巻き戻さないよう対象から外す。
+    if (listOk) {
+      const rows = starRows.filter(
+        (a) => a && a.id && !pendingStarMarks.has(a.id)
+          && (typeof a.starred === 'boolean' || typeof a.star_state === 'string')
+      );
+      if (rows.length) await syncLocalArticleStars(rows);
     }
 
     // 保持ルール (既読60日・上限) でローカルを掃除する。
@@ -599,6 +647,50 @@ function onOpenArticle(article) {
   if (isOwner.value && !article.isRead) {
     // 元記事を開く操作は止めない。既読化はローカルに書くだけ。
     applyRead(article, true);
+  }
+}
+
+// スターの付け外し。スターはサーバーが正本なので、画面とローカルを
+// 楽観的に先に変えてから set_star を送る。サーバーへ届かなければ、
+// 画面・ローカルとも元の状態へ戻す。付けた場合は手動の印 'on'、
+// 外した場合は 'off' が star_state に残る (実効スター starred は
+// 次回の list 同期でもサーバー側の値に揃う)。
+async function applyStar(article, on) {
+  if (!isOwner.value || !session.value) return;
+  const prev = { starred: !!article.starred, starState: article.starState || '' };
+  const next = { starred: !!on, starState: on ? 'on' : 'off' };
+  if (prev.starred === next.starred && prev.starState === next.starState) return;
+  // 実行中の背景更新の読み直し・スター同期に巻き戻されないよう、
+  // 先に控える (reloadLocal が読み直した一覧へ重ね直す)。
+  pendingStarMarks.set(article.id, next);
+  state.value = {
+    ...state.value,
+    articles: patchArticle(state.value.articles, article.id, next),
+  };
+  try {
+    await setLocalArticleStar(article.id, next.starred, next.starState);
+  } catch (e) {
+    pendingStarMarks.delete(article.id);
+    listError.value = `保存できませんでした（${e.message}）。`;
+    return;
+  }
+  try {
+    await setStar(session.value.token, article.id, next.starred);
+  } catch (e) {
+    if (expireIfUnauthorized(e)) return;
+    // サーバーへ届かなかったので、画面・ローカルとも元へ戻す。
+    pendingStarMarks.delete(article.id);
+    state.value = {
+      ...state.value,
+      articles: patchArticle(state.value.articles, article.id, prev),
+    };
+    try {
+      await setLocalArticleStar(article.id, prev.starred, prev.starState);
+    } catch {
+      // ローカルへ戻せなくても、次回のスター同期でサーバーの
+      // 状態 (＝元の状態) に揃い直す。
+    }
+    listError.value = `スターを保存できませんでした（${e.message}）。`;
   }
 }
 
@@ -1037,11 +1129,13 @@ function loadEpisode(article, { resume = true } = {}) {
 }
 
 // ユーザーがカードから選んだとき: その時点の表示リスト (ジャンル・
-// チャンネル・既読状態の絞り込み適用後) の音声つき記事を、フィードを
-// 問わずキューとして固定し、ラウンドを数え直してから再生する。
-// 以後の自動送りはこのキューに対して行う。
+// チャンネル・既読状態の絞り込み適用後) の再生可能な記事をキュー
+// として固定し、ラウンドを数え直してから再生する。再生ボタンと
+// 同じ条件 (canPlay) で選ぶため、スターを外した YouTube 記事は
+// 音声URLが残っていてもキューに入らない。以後の自動送りは
+// このキューに対して行う。
 function startEpisode(article) {
-  playQueue.value = buildQueue(visible.value, article);
+  playQueue.value = buildQueue(visible.value.filter((a) => canPlay(a)), article);
   playedInRound = new Set([article.id]);
   playHistory = [];
   // 本人が選び直した開始では、連続失敗を数え直す。
@@ -2032,7 +2126,7 @@ onMounted(async () => {
             <div class="article-foot">
               <span v-if="!a.isRead" class="unread-dot" aria-label="未読"></span>
               <button
-                v-if="a.audioUrl"
+                v-if="canPlay(a)"
                 type="button"
                 class="play-btn"
                 :class="{ 'is-current': isCurrentEpisode(a), 'is-stale': a.audioStale }"
@@ -2044,7 +2138,16 @@ onMounted(async () => {
                 <svg v-else viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>
                 <span v-if="a.audioStale" class="play-btn-badge" aria-hidden="true"></span>
               </button>
-              <span v-if="a.audioUrl && a.durationSec" class="audio-duration">{{ formatTime(a.durationSec) }}</span>
+              <span v-if="canPlay(a) && a.durationSec" class="audio-duration">{{ formatTime(a.durationSec) }}</span>
+              <button
+                v-if="isOwner && isYouTubeArticle(a)"
+                type="button"
+                class="star-btn"
+                :class="{ 'is-starred': a.starred }"
+                :aria-label="a.starred ? 'スターを外す' : 'スターを付ける'"
+                :aria-pressed="a.starred ? 'true' : 'false'"
+                @click="applyStar(a, !a.starred)"
+              >{{ a.starred ? '⭐' : '☆' }}</button>
               <button
                 v-if="isOwner"
                 type="button"

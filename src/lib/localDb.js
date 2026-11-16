@@ -140,6 +140,12 @@ function buildUpsertRecords(existingById, resolved, feed, fetchedAtIso) {
       play_pos: 0,
       is_read: false,
       read_at: '',
+      // スターはサーバーが正本。取り込みでは作らず・消さず、
+      // list 応答からの同期 (syncLocalArticleStars) と付け外し
+      // (setLocalArticleStar) だけで変わる。既存レコードは
+      // 上の ...prev でそのまま保たれる。
+      starred: false,
+      star_state: '',
     };
   });
 }
@@ -304,6 +310,8 @@ export function articleRecordToView(record, feedTitle, nowMs = Date.now()) {
     durationSec: record.duration_sec ?? null,
     playPos: record.play_pos || 0,
     isRead: !!record.is_read,
+    starred: !!record.starred,
+    starState: record.star_state || '',
   };
 }
 
@@ -461,6 +469,40 @@ export async function markLocalArticlesRead(ids, readAtIso) {
       record.read_at = readAtIso || '';
       store.put(record);
     }
+  }
+  await txDone(tx);
+}
+
+// 記事1件のスター (実効スターと手動オーバーライド) を切り替える。
+export function setLocalArticleStar(id, starred, starState) {
+  return updateArticleRecord(id, (record) => {
+    record.starred = !!starred;
+    record.star_state = starState || '';
+  });
+}
+
+// サーバーの list 応答に含まれるスター状態で、ローカルレコードを
+// 一括で上書きする。rows はサーバー形 ({id, starred, star_state})。
+// ローカルに無い記事は作らない (記事の取り込みはフィード取得側の
+// 仕事)。値が変わるレコードだけを書き戻す。
+export async function syncLocalArticleStars(rows) {
+  const wanted = new Map();
+  (rows || []).forEach((row) => {
+    if (row && row.id) wanted.set(row.id, row);
+  });
+  if (!wanted.size) return;
+  const db = await openLocalDb();
+  const tx = db.transaction('articles', 'readwrite');
+  const store = tx.objectStore('articles');
+  for (const [id, row] of wanted) {
+    const record = await requestToPromise(store.get(id));
+    if (!record) continue;
+    const starred = !!row.starred;
+    const starState = row.star_state || '';
+    if (record.starred === starred && (record.star_state || '') === starState) continue;
+    record.starred = starred;
+    record.star_state = starState;
+    store.put(record);
   }
   await txDone(tx);
 }

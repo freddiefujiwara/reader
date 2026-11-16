@@ -42,6 +42,7 @@ const EP1 = rec('ep-1', 'エピソード1', '2026-11-14T00:00:00.000Z', 'https:/
 const EP2 = rec('ep-2', 'エピソード2', '2026-11-13T00:00:00.000Z', 'https://example.com/ep2.mp3');
 
 vi.mock('../src/lib/api.js', () => ({
+  setStar: vi.fn(async () => ({ ok: true })),
   deleteFeed: vi.fn(async () => ({ ok: true })),
   exchangeSession: vi.fn(async () => ({ ok: true })),
   exchangeShare: vi.fn(async () => ({ ok: true })),
