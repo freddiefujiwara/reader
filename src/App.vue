@@ -51,6 +51,7 @@ import {
   articleRecordToView,
   clearLocalArticleAudio,
   clearLocalArticlePlayPos,
+  closeLocalDb,
   deleteLocalArticles,
   getLocalMeta,
   ingestFeedArticles,
@@ -70,6 +71,7 @@ import {
 import { normalizeFeedIds } from './lib/feedHash.js';
 import { buildRoutePath, parseRoute, routeSegmentsFromPathname } from './lib/route.js';
 import { fetchAllFeeds, fetchFeedXml, fetchOneFeed } from './lib/feedFetch.js';
+import { withTimeout } from './lib/retry.js';
 import { createScrollRestorer } from './lib/scrollRestore.js';
 import { formatPublishedAt } from './lib/format.js';
 import {
@@ -490,18 +492,25 @@ async function refreshOnce() {
   }
 }
 
+// 起動時の読み込みが固まっても画面を出すための上限 (ミリ秒)。
+const BOOT_LOCAL_TIMEOUT_MS = 8000;
+const BOOT_REFRESH_TIMEOUT_MS = 60000;
+
 // 起動時: まずローカルを即座に出し、その後で背景更新する。
 // ローカルが空の初回だけ、背景更新の完了まで読み込み表示を続ける。
 async function initTimeline() {
   loading.value = true;
   try {
-    await reloadLocal();
+    // ローカル読み直しが固まると (DB 接続の競合など) 読み込み表示の
+    // まま止まるため、上限時間を設ける。読み直し自体は裏で続く。
+    await withTimeout(reloadLocal(), BOOT_LOCAL_TIMEOUT_MS);
   } catch (e) {
     listError.value = `ローカルデータを読み込めませんでした（${e.message}）。`;
   }
   const firstRun = !state.value.articles.length && !state.value.feeds.length;
   if (!firstRun) loading.value = false;
-  await refreshInBackground();
+  // 背景更新にも上限を設け、通信が固まっても読み込み表示を終わらせる。
+  await withTimeout(refreshInBackground(), BOOT_REFRESH_TIMEOUT_MS).catch(() => {});
   loading.value = false;
 }
 
@@ -1874,6 +1883,12 @@ async function tryShareFromHash() {
     return false;
   }
 }
+
+// ページが破棄・凍結 (bfcache) される前に DB 接続を閉じる。
+// 開いたまま凍結されると、次に開いたページの DB 読み込みが
+// その接続と競合して固まることがある (再生中に管理画面から
+// ヘッダーのタイトルで開き直すと再現した)。
+window.addEventListener('pagehide', () => { closeLocalDb(); });
 
 // しばらく離れて戻ってきたら、裏で背景更新する (復帰直後の
 // ネットワーク失敗をユーザーの操作ではなく背景更新側で受けるため)。
