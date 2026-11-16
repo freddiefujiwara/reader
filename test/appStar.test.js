@@ -147,6 +147,22 @@ const flush = async () => {
   }
 };
 
+const flushRound = async () => {
+  await new Promise((r) => setTimeout(r, 0));
+  await nextTick();
+};
+
+// 条件が満たされるまで待つ (固定回数の flush は、並列実行時の負荷で
+// 背景更新や IndexedDB 書き込みの完了前に尽きることがあるため、
+// 非同期処理の完了を待つ箇所ではこちらを使う)。
+const flushUntil = async (cond, maxRounds = 120) => {
+  for (let i = 0; i < maxRounds; i += 1) {
+    if (await cond()) return true;
+    await flushRound();
+  }
+  return !!(await cond());
+};
+
 const latestAudio = () => audioInstances[audioInstances.length - 1];
 
 async function mountApp(records) {
@@ -158,6 +174,8 @@ async function mountApp(records) {
   app.config.errorHandler = (err) => { errors.push(err); };
   app.mount(el);
   await flush();
+  // 起動時の読み直しでカードが描画されるまで待つ。
+  await flushUntil(() => el.querySelectorAll('.article-card').length > 0);
   expect(errors).toEqual([]);
 }
 
@@ -224,7 +242,9 @@ describe('スターの付け外し', () => {
     ]);
     const card = cardByTitle('新しい動画');
     card.querySelector('.star-btn').click();
-    await flush();
+    // 楽観的な DB 書き込みと set_star の送信が済むまで待つ。
+    await flushUntil(async () =>
+      setStar.mock.calls.length >= 1 && (await localRow('yt-new'))?.star_state === 'on');
 
     expect(errors).toEqual([]);
     expect(setStar).toHaveBeenCalledWith('tok', 'yt-new', true);
@@ -242,7 +262,9 @@ describe('スターの付け外し', () => {
     ]);
     expect(cardByTitle('再生できる動画').querySelector('.play-btn')).toBeTruthy();
     cardByTitle('再生できる動画').querySelector('.star-btn').click();
-    await flush();
+    // 楽観的な DB 書き込みと set_star の送信が済むまで待つ。
+    await flushUntil(async () =>
+      setStar.mock.calls.length >= 1 && (await localRow('yt-on'))?.star_state === 'off');
 
     expect(errors).toEqual([]);
     expect(setStar).toHaveBeenCalledWith('tok', 'yt-on', false);
@@ -261,7 +283,12 @@ describe('スターの付け外し', () => {
       rec('yt-on', YT_FEED_ID, '再生できる動画', '2026-11-15T00:00:00.000Z', { ...AUDIO, starred: true }),
     ]);
     cardByTitle('再生できる動画').querySelector('.star-btn').click();
-    await flush();
+    // 失敗の処理 (DB の巻き戻し→エラー表示) が終わるまで待つ。
+    // エラー表示は巻き戻しの DB 書き込みの後に立つので、「再試行」の
+    // 出現が処理完了の目印になる。
+    const findRetry = () =>
+      [...el.querySelectorAll('button')].find((b) => b.textContent.includes('再試行'));
+    await flushUntil(() => !!findRetry());
 
     expect(errors).toEqual([]);
     // 失敗時はエラー表示になり (既存の作法)、DB は元の状態へ戻る。
@@ -269,10 +296,14 @@ describe('スターの付け外し', () => {
     expect(row.starred).toBe(true);
     expect(row.star_state).toBe('');
     // エラーパネルの「再試行」で一覧に戻ると、表示も元のまま。
-    const retry = [...el.querySelectorAll('button')].find((b) => b.textContent.includes('再試行'));
+    const retry = findRetry();
     expect(retry, '再試行ボタンが出る').toBeTruthy();
     retry.click();
-    await flush();
+    await flushUntil(() => {
+      const c = cardByTitle('再生できる動画');
+      return !!c?.querySelector('.play-btn')
+        && c.querySelector('.star-btn')?.textContent === '⭐';
+    });
     const card = cardByTitle('再生できる動画');
     expect(card.querySelector('.star-btn').textContent, 'スターは点いたまま').toBe('⭐');
     expect(card.querySelector('.play-btn'), '再生ボタンも残る').toBeTruthy();
@@ -285,6 +316,10 @@ describe('スター状態の同期 (list 応答が正本)', () => {
     await mountApp([
       rec('yt-sync', YT_FEED_ID, '同期される動画', '2026-11-15T00:00:00.000Z', { ...AUDIO }),
     ]);
+    // 起動時の背景更新でスター同期が DB と表示へ届くまで待つ。
+    await flushUntil(async () =>
+      (await localRow('yt-sync'))?.starred === true
+      && cardByTitle('同期される動画')?.querySelector('.star-btn')?.textContent === '⭐');
     const card = cardByTitle('同期される動画');
     expect(card.querySelector('.star-btn').textContent).toBe('⭐');
     expect(card.querySelector('.play-btn'), '同期後は再生ボタンが出る').toBeTruthy();
@@ -302,14 +337,14 @@ describe('キューの抽出もスター条件に従う', () => {
       rec('yt-c', YT_FEED_ID, '動画C', '2026-11-13T00:00:00.000Z', { ...AUDIO, starred: true }),
     ]);
     cardByTitle('動画A').querySelector('.play-btn').click();
-    await flush();
+    await flushUntil(() => el.querySelector('.player-title')?.textContent === '動画A');
     expect(el.querySelector('.player-title').textContent).toBe('動画A');
 
     const audio = latestAudio();
     audio.ended = true;
     audio.paused = true;
     audio.dispatchEvent(new window.Event('ended'));
-    await flush();
+    await flushUntil(() => el.querySelector('.player-title')?.textContent === '動画C');
     expect(errors).toEqual([]);
     // B はスター無しなので、次は C になる。
     expect(el.querySelector('.player-title').textContent).toBe('動画C');

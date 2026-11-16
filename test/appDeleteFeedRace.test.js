@@ -218,9 +218,17 @@ describe('フィード削除と背景更新の競合', () => {
 
     // 保留していた更新を解放する。その更新は削除前の一覧で完了するが、
     // 削除の目印により完了後にもう一度更新され、最新の一覧 (削除済み)
-    // で揃え直されるはず。
+    // で揃え直されるはず。呼び出し回数の基準は解放前に取る。解放後の
+    // スナップショットは、追随更新の一覧取得が先に済んでいるかどうか
+    // というタイミングでぶれて基準にならない (解放前に始まった更新が
+    // ゲートで止まっている間は、呼び出し回数が増えないことが確定
+    // している)。
+    const listCallsBeforeRelease = listArticles.mock.calls.length;
     await releaseListGate();
-    const listCallsAfterRelease = listArticles.mock.calls.length;
+    // 追随更新が実際に走ること (一覧の取り直しが追加で起きること) を、
+    // 回数が増えるまで待って確かめる。
+    await flushUntil(() => listArticles.mock.calls.length > listCallsBeforeRelease);
+    expect(listArticles.mock.calls.length).toBeGreaterThan(listCallsBeforeRelease);
     await flushUntil(async () => {
       const feeds = await loadLocalFeeds();
       const records = await loadLocalArticles();
@@ -228,8 +236,6 @@ describe('フィード削除と背景更新の競合', () => {
         && records.map((r) => r.id).join(',') === 'art-b';
     });
     expect(errors).toEqual([]);
-    // 追随更新が実際に走ったこと (一覧の取り直しが追加で起きたこと)。
-    expect(listArticles.mock.calls.length).toBeGreaterThan(listCallsAfterRelease);
 
     const feeds = await loadLocalFeeds();
     expect(feeds.map((f) => f.id)).toEqual([FEED_B.id]);
