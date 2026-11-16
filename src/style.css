@@ -685,6 +685,9 @@ button.ghost.active {
 }
 
 /* YouTube 記事のスター付け外し。☆/⭐ の文字そのままを使う。
+   アクション行の左端に固定する: 再生ボタンの出現・消失はスターより
+   右側だけで完結させ、付け外しでスターの位置が動かないようにする。
+   ☆ と ⭐ はグリフ幅が違うため、ボタンの幅も固定する。
    read-toggle と違い右寄せはしない (既読ボタンが右端を担う)。 */
 .star-btn {
   border: 0;
@@ -692,7 +695,9 @@ button.ghost.active {
   font: inherit;
   font-size: 1.05rem;
   line-height: 1;
-  padding: 6px 4px;
+  width: 32px;
+  padding: 6px 0;
+  text-align: center;
   cursor: pointer;
   flex: none;
   touch-action: manipulation;

@@ -52,3 +52,18 @@ describe('共有リンクのボタンの配置', () => {
     expect(body).toContain('min-width: 0');
   });
 });
+
+describe('スターボタンの固定', () => {
+  it('スター (.star-btn) は固定幅で、☆/⭐ の切替で幅が変わらない', () => {
+    const body = ruleBody('.star-btn');
+    expect(body, 'スターのルールがある').not.toBe('');
+    expect(body).toContain('width: 32px');
+    expect(body).toContain('flex: none');
+  });
+
+  it('アクション行 (.article-foot) は横並びの flex で、スターが左端に来る前提を保つ', () => {
+    const body = ruleBody('.article-foot');
+    expect(body, 'アクション行のルールがある').not.toBe('');
+    expect(body).toContain('display: flex');
+  });
+});

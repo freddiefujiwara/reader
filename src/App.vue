@@ -2124,6 +2124,15 @@ onMounted(async () => {
             </h2>
             <p v-if="a.summary" class="article-summary">{{ a.summary }}</p>
             <div class="article-foot">
+              <button
+                v-if="isOwner && isYouTubeArticle(a)"
+                type="button"
+                class="star-btn"
+                :class="{ 'is-starred': a.starred }"
+                :aria-label="a.starred ? 'スターを外す' : 'スターを付ける'"
+                :aria-pressed="a.starred ? 'true' : 'false'"
+                @click="applyStar(a, !a.starred)"
+              >{{ a.starred ? '⭐' : '☆' }}</button>
               <span v-if="!a.isRead" class="unread-dot" aria-label="未読"></span>
               <button
                 v-if="canPlay(a)"
@@ -2139,15 +2148,6 @@ onMounted(async () => {
                 <span v-if="a.audioStale" class="play-btn-badge" aria-hidden="true"></span>
               </button>
               <span v-if="canPlay(a) && a.durationSec" class="audio-duration">{{ formatTime(a.durationSec) }}</span>
-              <button
-                v-if="isOwner && isYouTubeArticle(a)"
-                type="button"
-                class="star-btn"
-                :class="{ 'is-starred': a.starred }"
-                :aria-label="a.starred ? 'スターを外す' : 'スターを付ける'"
-                :aria-pressed="a.starred ? 'true' : 'false'"
-                @click="applyStar(a, !a.starred)"
-              >{{ a.starred ? '⭐' : '☆' }}</button>
               <button
                 v-if="isOwner"
                 type="button"
