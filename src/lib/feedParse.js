@@ -7,7 +7,10 @@
 // audioUrl / durationSec はポッドキャスト用 (enclosure と
 // itunes:duration) で、音声が無いエントリでは '' / null になる。
 
-const SUMMARY_MAX_CHARS = 500;
+// 要約の保存上限。カードの「もっと見る」展開で全文を読めるよう、
+// 旧上限 (500) から 5000 へ緩めた。切り詰めはここだけで、表示側は
+// CSS の line-clamp (3行) が担う。
+const SUMMARY_MAX_CHARS = 5000;
 
 export function decodeXmlEntities(text) {
   if (!text) return '';

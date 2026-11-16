@@ -330,8 +330,11 @@ describe('parseItunesDuration', () => {
 });
 
 describe('summarize', () => {
-  it('既定では500文字で切り詰める', () => {
-    expect(summarize('あ'.repeat(600)).length).toBe(500);
+  it('既定では5000文字で切り詰める', () => {
+    expect(summarize('あ'.repeat(6000)).length).toBe(5000);
+  });
+  it('旧上限 (500) を超える要約は全文を保持する', () => {
+    expect(summarize('あ'.repeat(600))).toBe('あ'.repeat(600));
   });
   it('maxChars を渡すとその長さで切り詰める', () => {
     expect(summarize('<p>' + 'x'.repeat(100) + '</p>', 10)).toBe('x'.repeat(10));
