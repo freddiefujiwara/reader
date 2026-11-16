@@ -41,6 +41,21 @@ describe('visibleArticles', () => {
     const s = { ...baseState(), filter: 'unread' };
     expect(visibleArticles(s).map((a) => a.id)).toEqual(['1', '3']);
   });
+  it('未読フィルタでも、保持集合に入れた既読は残す (Set でも配列でもよい)', () => {
+    const s = { ...baseState(), filter: 'unread' };
+    expect(visibleArticles(s, new Set(['2'])).map((a) => a.id)).toEqual(['1', '2', '3']);
+    expect(visibleArticles(s, ['2']).map((a) => a.id)).toEqual(['1', '2', '3']);
+    // 保持集合が無ければ従来どおり既読は出ない。
+    expect(visibleArticles(s, new Set()).map((a) => a.id)).toEqual(['1', '3']);
+  });
+  it('保持集合はフィード・カテゴリの絞り込みを越えない', () => {
+    const byFeed = { ...baseState(), filter: 'unread', feedId: 'zenn' };
+    expect(visibleArticles(byFeed, new Set(['2'])).map((a) => a.id)).toEqual(['3']);
+  });
+  it('すべて表示では保持集合は影響しない', () => {
+    const s = { ...baseState(), filter: 'all' };
+    expect(visibleArticles(s, new Set(['2'])).map((a) => a.id)).toEqual(['1', '2', '3']);
+  });
 });
 
 describe('patchArticle', () => {

@@ -298,6 +298,28 @@ describe('要約の展開と既読', () => {
     ).toBe(false);
   });
 
+  it('未読のみ表示で展開しても、カードは消えずに既読表示で残る', async () => {
+    await mountWithSummaries();
+    window.scrollTo = () => {};
+    const tabs = el.querySelector('[aria-label="表示切替"]');
+    [...tabs.querySelectorAll('button')].find((b) => b.textContent === '未読').click();
+    await flush();
+    expect(cardByTitle('長い要約の記事'), '未読のみでも未読カードは出る').toBeTruthy();
+
+    cardByTitle('長い要約の記事').querySelector('.summary-toggle').click();
+    await flush();
+
+    const card = cardByTitle('長い要約の記事');
+    expect(card, '展開して既読になってもカードは残る').toBeTruthy();
+    expect(card.classList.contains('is-read'), '既読スタイルになる').toBe(true);
+    expect(
+      card.querySelector('.article-summary').classList.contains('expanded'),
+      '要約は展開されたまま読める'
+    ).toBe(true);
+    expect((await localRow('long-1')).is_read).toBe(true);
+    expect(errors).toEqual([]);
+  });
+
   it('既に既読の記事を展開しても状態は変わらない', async () => {
     await mountWithSummaries();
     const card = cardByTitle('長い要約の記事');

@@ -5,9 +5,9 @@
 // 下部バー内で確認を取る。100件未満は確認なしで即座に実行する。
 // ここでは (1) 100件未満では確認なしで即座に既読化されること、
 // (2) 対象が現在のスコープ (フィード／全体) 内の未読だけである
-// こと、(3) 未読ゼロではボタンが押せないこと、(4) 未読のみ表示へ
-// 即時に反映されること、(5) 境界 (99件では確認なし／100件では
-// 確認あり) と100件でのキャンセルを固定する。
+// こと、(3) 未読ゼロではボタンが押せないこと、(4) 未読のみ表示で
+// すべて既読にしてもカードは消えず既読表示で残ること、(5) 境界
+// (99件では確認なし／100件では確認あり) と100件でのキャンセルを固定する。
 import 'fake-indexeddb/auto';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createApp, nextTick } from 'vue';
@@ -252,15 +252,19 @@ describe('すべて既読の確認とスコープ', () => {
     expect(errors).toEqual([]);
   });
 
-  it('未読のみ表示では、既読化した記事が即座に一覧から消える', async () => {
+  it('未読のみ表示では、すべて既読でもカードは消えず既読表示で残る', async () => {
     await seedAndMount();
     findButton(el, '未読').click();
     await flushRound();
     expect(articleTitles()).toEqual(['記事A1', '記事A2', '記事B']);
 
     findButton(el, 'すべて既読').click();
-    await flushUntil(() => articleTitles().length === 0);
-    expect(headerUnread()).toBe(null);
+    await flushUntil(() => headerUnread() === null);
+    // 未読数は即座にゼロになるが、カードは既読スタイルで残る。
+    expect(articleTitles()).toEqual(['記事A1', '記事A2', '記事B']);
+    expect(
+      [...el.querySelectorAll('.article-card')].every((c) => c.classList.contains('is-read'))
+    ).toBe(true);
     expect(await readFlags()).toEqual({ 'art-a1': true, 'art-a2': true, 'art-b': true });
     expect(errors).toEqual([]);
   });

@@ -136,6 +136,30 @@ const displayLimit = ref(DISPLAY_LIMIT);
 const state = ref(createListState());
 const signinEl = ref(null);
 
+// 未読のみ表示の間に既読へ遷移した記事の ID。既読になってもカードを
+// その場で消さず、既読スタイル (薄い表示) のまま残すための保持集合。
+// メモリ上だけに持ち、フィード・カテゴリ・既読フィルタの選択が
+// 変わった時点 (＝絞り込みの再適用) で空にする。ページを開き直せば
+// 自然に空になる。
+const stickyReadIds = ref(new Set());
+
+function clearStickyReadIds() {
+  if (stickyReadIds.value.size) stickyReadIds.value = new Set();
+}
+
+function keepStickyReadIds(ids) {
+  const next = new Set(stickyReadIds.value);
+  (ids || []).forEach((id) => next.add(id));
+  if (next.size !== stickyReadIds.value.size) stickyReadIds.value = next;
+}
+
+function dropStickyReadId(id) {
+  if (!stickyReadIds.value.has(id)) return;
+  const next = new Set(stickyReadIds.value);
+  next.delete(id);
+  stickyReadIds.value = next;
+}
+
 // 画面切替 ('timeline' | 'feeds')。フィード管理はオーナーのみ。
 const view = ref('timeline');
 const mgmtFeeds = ref([]);
@@ -194,7 +218,7 @@ const isYouTubeArticle = (a) => youtubeFeedIds.value.has(a.feedId);
 // 再生ボタンを出す (＝キューに入れる) 記事か。YouTube 記事は
 // スター付きのものだけ、それ以外は音声URLの有無で決まる。
 const canPlay = (a) => isPlayableArticle(a, youtubeFeedIds.value);
-const visible = computed(() => visibleArticles(state.value));
+const visible = computed(() => visibleArticles(state.value, stickyReadIds.value));
 const displayArticles = computed(() => visible.value.slice(0, displayLimit.value));
 const unreadTotalCount = computed(() =>
   state.value.feeds.reduce((n, f) => n + (f.unreadCount || 0), 0)
@@ -300,6 +324,8 @@ const queueTimelineCategoryClearCheck = createQueuedCheck(async () => {
   }
   if (!shouldClearCategorySelection(state.value.feeds, state.value.category)) return;
   // setCategory と同じく、カテゴリが外れるときはフィード選択も外す。
+  // 選択範囲が変わるので、未読表示中に残していた既読カードも畳む。
+  clearStickyReadIds();
   state.value = { ...state.value, category: '', feedId: '' };
   displayLimit.value = DISPLAY_LIMIT;
 });
@@ -338,6 +364,8 @@ watch(
     const feedId = state.value.feedId;
     if (!feedId || !feeds.length) return;
     if (!feeds.some((f) => f.id === feedId)) {
+      // 選択が外れて表示範囲が広がるので、残していた既読カードも畳む。
+      clearStickyReadIds();
       state.value = { ...state.value, feedId: '' };
     }
   }
@@ -372,11 +400,21 @@ function applyRoute(route) {
   if (view.value !== 'timeline') {
     backToTimeline();
   }
+  // URL が指す選択へ移る (絞り込みの再適用) なら、未読表示中に
+  // 残していた既読カードは畳む。同じ選択のままなら保持する。
+  const nextFilter = route.unread ? 'unread' : 'all';
+  if (
+    state.value.category !== route.category
+    || state.value.feedId !== route.feedId
+    || state.value.filter !== nextFilter
+  ) {
+    clearStickyReadIds();
+  }
   state.value = {
     ...state.value,
     category: route.category,
     feedId: route.feedId,
-    filter: route.unread ? 'unread' : 'all',
+    filter: nextFilter,
   };
   displayLimit.value = DISPLAY_LIMIT;
 }
@@ -650,6 +688,7 @@ function setFeed(feedId) {
   // (「すべて」チップは廃止し、トグル選択にした)。
   const next = state.value.feedId === feedId ? '' : feedId;
   if (next === state.value.feedId) return;
+  clearStickyReadIds();
   state.value = { ...state.value, feedId: next };
   displayLimit.value = DISPLAY_LIMIT;
   // 別のフィードの一覧へ移るので、先頭から見せる。
@@ -673,6 +712,7 @@ function setCategory(category) {
   // (「すべて」チップは廃止し、トグル選択にした)。
   const next = state.value.category === category ? '' : category;
   if (next === state.value.category) return;
+  clearStickyReadIds();
   // カテゴリを変えたらフィード選択は解除する (対象外フィードが残らないように)。
   state.value = { ...state.value, category: next, feedId: '' };
   displayLimit.value = DISPLAY_LIMIT;
@@ -681,6 +721,7 @@ function setCategory(category) {
 
 function setFilter(filter) {
   if (state.value.filter === filter) return;
+  clearStickyReadIds();
   state.value = { ...state.value, filter };
   displayLimit.value = DISPLAY_LIMIT;
   scrollToTop();
@@ -695,6 +736,11 @@ async function goUnreadAll() {
     refreshInBackground();
   }
   if (state.value.feedId === '' && state.value.category === '' && state.value.filter === 'unread' && !fromAdmin) return;
+  // 未読一覧へ移る (選択の組み合わせが変わる) なら、残していた
+  // 既読カードは畳む。管理画面から戻るだけで選択が同じなら保持する。
+  if (state.value.feedId !== '' || state.value.category !== '' || state.value.filter !== 'unread') {
+    clearStickyReadIds();
+  }
   state.value = { ...state.value, feedId: '', category: '', filter: 'unread' };
   displayLimit.value = DISPLAY_LIMIT;
   scrollToTop();
@@ -703,6 +749,15 @@ async function goUnreadAll() {
 // 既読の付け外しはローカルのみ (サーバーへは送らない)。
 async function applyRead(article, isRead) {
   if (!isOwner.value) return;
+  // 未読のみ表示の間に未読→既読へ遷移したら、そのカードは一覧に
+  // 残す (薄い既読表示になるだけ)。未読へ戻したら保持から外す
+  // (未読なのでどのみち表示される)。
+  const current = state.value.articles.find((a) => a.id === article.id) || article;
+  if (isRead) {
+    if (state.value.filter === 'unread' && !current.isRead) keepStickyReadIds([article.id]);
+  } else {
+    dropStickyReadId(article.id);
+  }
   // 実行中の背景更新の読み直しに巻き戻されないよう、先に控える
   // (reloadLocal が読み直した一覧へ重ね直す)。
   pendingReadMarks.set(article.id, isRead);
@@ -816,6 +871,9 @@ async function onMarkAllRead() {
   // v1 と同じ範囲 (フィード指定が優先、次にカテゴリ、無ければ全体)。
   const targetIds = markAllReadTargets(state.value, state.value.feedId, state.value.category)
     .map((a) => a.id);
+  // 未読のみ表示では、すべて既読でもカードはその場で消さずに残す
+  // (applyRead と同じ保持集合へ対象をまとめて入れる)。
+  if (state.value.filter === 'unread') keepStickyReadIds(targetIds);
   // 実行中の背景更新の読み直しに巻き戻されないよう、先に控える
   // (reloadLocal が読み直した一覧へ重ね直す)。
   targetIds.forEach((id) => { pendingReadMarks.set(id, true); });
