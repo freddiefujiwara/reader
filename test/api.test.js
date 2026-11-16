@@ -12,6 +12,8 @@ import {
   issueShareLink,
   getShareLinkStatus,
   revokeShareLink,
+  logEvents,
+  getStats,
 } from '../src/lib/api.js';
 
 const API = 'https://example.invalid/exec';
@@ -193,5 +195,31 @@ describe('共有リンクの action', () => {
     const fetcher = okFetcher({ ok: true });
     await revokeShareLink('tok', { fetcher, apiUrl: API });
     expect(lastBody(fetcher)).toEqual({ action: 'revokeShareLink', sessionToken: 'tok' });
+  });
+});
+
+describe('視聴ログの action', () => {
+  it('logEvents は log_events にイベント配列をそのまま送る', async () => {
+    const events = [
+      { ts: '2026-11-17T00:00:00.000Z', type: 'feed_view', feed_id: 'nhk', feed_title: 'NHK', article_id: '', article_title: '' },
+      { ts: '2026-11-17T00:01:00.000Z', type: 'play', feed_id: 'nhk', feed_title: 'NHK', article_id: 'a1', article_title: '記事', seconds: 42 },
+    ];
+    const fetcher = okFetcher({ ok: true, saved: 2 });
+    const data = await logEvents('tok', events, { fetcher, apiUrl: API });
+    expect(data.saved).toBe(2);
+    expect(lastBody(fetcher)).toEqual({ action: 'log_events', sessionToken: 'tok', events });
+  });
+  it('logEvents はネットワーク失敗でも再試行しない (二重に貯めない)', async () => {
+    const fetcher = vi.fn(async () => { throw new TypeError('Load failed'); });
+    await expect(logEvents('tok', [], { fetcher, apiUrl: API, retryDelayMs: 0 })).rejects.toThrow('Load failed');
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  it('getStats は stats を送り、weekly と current を返す', async () => {
+    const current = [{ week: '2026-11-16', feed_id: 'nhk', feed_title: 'NHK', views: 1, opens: 2, plays: 3, seconds: 600 }];
+    const fetcher = okFetcher({ ok: true, weekly: [], currentWeek: '2026-11-16', current });
+    const data = await getStats('tok', { fetcher, apiUrl: API });
+    expect(data.currentWeek).toBe('2026-11-16');
+    expect(data.current).toEqual(current);
+    expect(lastBody(fetcher)).toEqual({ action: 'stats', sessionToken: 'tok' });
   });
 });

@@ -100,6 +100,24 @@ export function reorderFeeds(sessionToken, feedIds, opts) {
   return postJson({ action: 'reorderFeeds', sessionToken, feedIds }, opts);
 }
 
+// 視聴ログの送信 (オーナーセッションのみ。readonly はサーバー側で
+// forbidden)。イベントは {ts, type, feed_id, feed_title, article_id,
+// article_title, seconds} の配列で、1リクエスト最大50件。視聴ログは
+// 落ちても困らない情報なので、postJson の再試行は切って1回だけ送る
+// (再送で二重に貯めない)。
+// -> { ok, saved }
+export function logEvents(sessionToken, events, opts) {
+  return postJson({ action: 'log_events', sessionToken, events }, { retries: 0, ...opts });
+}
+
+// 視聴の週次集計 (オーナーセッションのみ)。weekly は確定済みの週の
+// 集計、current は今週分 (未集計) をその場で集計したもので、どちらも
+// {week, feed_id, feed_title, views, opens, plays, seconds} の配列。
+// -> { ok, weekly, currentWeek, current }
+export function getStats(sessionToken, opts) {
+  return postJson({ action: 'stats', sessionToken }, opts);
+}
+
 // 共有リンク (マジックリンク) の発行 (オーナーセッションのみ)。
 // リンクは30日有効で、発行するとそれまでのリンクは無効になる。
 // -> { ok, token, expiresAt } (token は平文。この応答でしか得られない)
