@@ -145,6 +145,9 @@ const emptyGenreNote = () =>
 async function seedAndMount() {
   await saveLocalFeeds([{ ...FEED_A }, { ...FEED_B }]);
   await putLocalArticles([rec('art-a', FEED_A.id, '記事A'), rec('art-b', FEED_B.id, '記事B')]);
+  // トップの URL で開いたことにしてルーティングを有効にする (戻る
+  // 操作でタイムラインへ戻る経路を使うため)。
+  window.history.pushState(null, '', '/reader/');
   el = document.createElement('div');
   document.body.appendChild(el);
   app = createApp(App);
@@ -162,6 +165,14 @@ async function seedAndMount() {
 async function openAdmin() {
   findButton(el, '管理').click();
   await flushUntil(() => feedCards().length === serverFeeds.length);
+}
+
+// タイムラインへ戻る (ブラウザの戻る相当)。ブランドはトップへの
+// ページ遷移になったため、アプリ内で戻る経路は履歴だけになった。
+// 戻り先は管理へ入る前にいたタイムラインの URL を指定する。
+function backToTimelineByHistory(path) {
+  window.history.pushState(null, '', path);
+  window.dispatchEvent(new window.PopStateEvent('popstate'));
 }
 
 // フィードカード (index 番目) のジャンルを編集して保存する。
@@ -259,7 +270,7 @@ describe('タイムラインのカテゴリ選択の自動解除', () => {
     // フィード一覧が変わり、タイムライン側の選択も自動解除される。
     await openAdmin();
     await editFeedCategoryAt(0, 'ニュース');
-    el.querySelector('.brand').click();
+    backToTimelineByHistory(`/reader/${encodeURIComponent('ポッドキャスト')}`);
     // 戻る際の背景更新 (実行中だった更新の上書き→追随更新) が
     // 落ち着いた最終状態まで待つ。途中の状態 (選択は解除されたが
     // 一覧が旧ジャンルで上書きされた瞬間など) を掴まないため。
@@ -285,7 +296,7 @@ describe('タイムラインのカテゴリ選択の自動解除', () => {
     // ポッドキャスト (FEED_A) は残るので選択は維持される。
     await openAdmin();
     await editFeedCategoryAt(1, 'ニュース');
-    el.querySelector('.brand').click();
+    backToTimelineByHistory(`/reader/${encodeURIComponent('ポッドキャスト')}`);
     await flushUntil(
       () =>
         JSON.stringify(articleTitles()) === JSON.stringify(['記事A']) &&

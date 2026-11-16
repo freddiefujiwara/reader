@@ -153,6 +153,9 @@ const articleTitles = () =>
 async function seedAndMount() {
   await saveLocalFeeds([{ ...FEED_A }, { ...FEED_B }]);
   await putLocalArticles([rec('art-a', FEED_A.id, '記事A'), rec('art-b', FEED_B.id, '記事B')]);
+  // トップの URL で開いたことにしてルーティングを有効にする (戻る
+  // 操作でタイムラインへ戻る経路を使うため)。
+  window.history.pushState(null, '', '/reader/');
   el = document.createElement('div');
   document.body.appendChild(el);
   app = createApp(App);
@@ -165,6 +168,13 @@ async function seedAndMount() {
   );
   expect(articleTitles(), 'タイムラインに記事が2件出る').toEqual(['記事A', '記事B']);
   expect(categoryChips()).toEqual(['ポッドキャスト', 'private']);
+}
+
+// タイムラインへ戻る (ブラウザの戻る相当)。ブランドはトップへの
+// ページ遷移になったため、アプリ内で戻る経路は履歴だけになった。
+function backToTimelineByHistory() {
+  window.history.pushState(null, '', '/reader/');
+  window.dispatchEvent(new window.PopStateEvent('popstate'));
 }
 
 async function editFirstFeedCategory(category) {
@@ -222,7 +232,7 @@ describe('管理でのジャンル編集のタイムライン反映', () => {
     const cached = await loadLocalFeeds();
     expect(cached.find((f) => f.id === FEED_A.id).category).toBe('新ジャンル');
     // タイムラインへ戻ると、新しいジャンルのチップで絞れる。
-    el.querySelector('.brand').click();
+    backToTimelineByHistory();
     await flushUntil(
       () => JSON.stringify(categoryChips()) === JSON.stringify(['新ジャンル', 'private'])
     );
@@ -238,7 +248,7 @@ describe('管理でのジャンル編集のタイムライン反映', () => {
     holdList = true; // 初回の背景更新を保存後まで実行中に保つ
     await seedAndMount();
     await editFirstFeedCategory('新ジャンル');
-    el.querySelector('.brand').click();
+    backToTimelineByHistory();
     // 反映 (保存フローの最後の非同期処理) が状態へ届くまで待つ。
     await flushUntil(
       () => JSON.stringify(categoryChips()) === JSON.stringify(['新ジャンル', 'private'])
@@ -273,7 +283,7 @@ describe('管理でのジャンル編集のタイムライン反映', () => {
     holdList = true; // 初回の背景更新を、カテゴリ選択後まで実行中に保つ
     await seedAndMount();
     await editFirstFeedCategory('新ジャンル');
-    el.querySelector('.brand').click();
+    backToTimelineByHistory();
     await flushUntil(
       () => JSON.stringify(categoryChips()) === JSON.stringify(['新ジャンル', 'private'])
     );
