@@ -268,9 +268,33 @@ function measureSummaries() {
       if (clampedSummaryIds.value.has(id)) next.add(id);
       continue;
     }
+    if (el.scrollHeight === 0 && el.clientHeight === 0) {
+      // まだレイアウトされていない (描画前・非表示) 要素は測れない。
+      // 空振りの測定で判定を落とさないよう、前回を引き継ぐ。
+      if (clampedSummaryIds.value.has(id)) next.add(id);
+      continue;
+    }
     if (el.scrollHeight > el.clientHeight + 1) next.add(id);
   }
   clampedSummaryIds.value = next;
+}
+
+// 測定の予約。状態変更の直後 (nextTick) に測るだけでは、ブラウザが
+// line-clamp のレイアウトを確定させる前の値を読んで「省略なし」と
+// 誤判定し、ボタンが消えたままになることがある (起動直後や既読化の
+// 直後に発生)。次ティックで測ったうえで、レイアウトが落ち着く次の
+// アニメーションフレームでもう一度測り直して誤判定を正す。
+let measureFramePending = false;
+function scheduleMeasureSummaries() {
+  nextTick(measureSummaries);
+  if (measureFramePending) return;
+  measureFramePending = true;
+  const run = () => {
+    measureFramePending = false;
+    measureSummaries();
+  };
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+  else nextTick(run);
 }
 
 function toggleSummary(id) {
@@ -278,8 +302,8 @@ function toggleSummary(id) {
   if (next.has(id)) {
     next.delete(id);
     expandedSummaryIds.value = next;
-    // 折りたたみ直後は再描画を待ってから省略の有無を測り直す。
-    nextTick(measureSummaries);
+    // 折りたたみ直後は再描画とレイアウトの確定を待って測り直す。
+    scheduleMeasureSummaries();
   } else {
     next.add(id);
     expandedSummaryIds.value = next;
@@ -301,9 +325,9 @@ function toggleSummary(id) {
   }
 }
 
-watch(displayArticles, () => nextTick(measureSummaries));
-window.addEventListener('resize', measureSummaries);
-onUnmounted(() => window.removeEventListener('resize', measureSummaries));
+watch(displayArticles, () => scheduleMeasureSummaries());
+window.addEventListener('resize', scheduleMeasureSummaries);
+onUnmounted(() => window.removeEventListener('resize', scheduleMeasureSummaries));
 
 // 選択中のカテゴリ (ジャンル) を持つフィードが1つも無くなったら、
 // 選択を自動で解除して全件表示に戻す。最後の1件を別ジャンルへ
@@ -695,6 +719,9 @@ async function initTimeline() {
   // 背景更新にも上限を設け、通信が固まっても読み込み表示を終わらせる。
   await withTimeout(refreshInBackground(), BOOT_REFRESH_TIMEOUT_MS).catch(() => {});
   loading.value = false;
+  // 一覧が出揃った時点で要約の省略を測り直す (起動直後の測定は
+  // レイアウト確定前で空振りすることがあるため)。
+  scheduleMeasureSummaries();
 }
 
 async function onManualRefresh() {
@@ -2307,7 +2334,7 @@ document.addEventListener('visibilitychange', () => {
 onMounted(async () => {
   // Web フォントの読み込みで要約の行数が変わるため、確定後に測り直す。
   if (document.fonts && document.fonts.ready) {
-    document.fonts.ready.then(() => measureSummaries());
+    document.fonts.ready.then(() => scheduleMeasureSummaries());
   }
   if (!API_URL) {
     bootError.value = 'データAPIのURLが未設定です（ビルド時の設定待ち）。';
