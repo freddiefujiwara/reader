@@ -26,9 +26,9 @@ const FEED_A = {
   unreadCount: 1,
 };
 const FEED_B = {
-  id: '35797c975382389f', // https://a.ze.gs/x.freddie.xml のハッシュID
+  id: '33452296be85fdbc', // https://example.com/x.freddie.xml のハッシュID
   title: 'X freddie',
-  url: 'https://a.ze.gs/x.freddie.xml',
+  url: 'https://example.com/x.freddie.xml',
   category: 'private',
   lastStatus: '200',
   lastError: '',
