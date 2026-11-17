@@ -419,13 +419,6 @@ export function foregroundRecoveryAction({ hasEpisode, playWanted, ended, endFlo
   return 'none';
 }
 
-/* ---- 次の曲の先読み ---- */
-// 先読みの開始タイミングは App.vue 側が決める (再生中の曲が
-// 始まった時点)。かつては「残り60秒」の定数 (PRELOAD_REMAINING_SEC)
-// で残り時間方式だったが、二重バッファ化 (待機要素へ先読みし、
-// 終了時に役割交代で同期的に切り替える) に合わせて開始時点
-// 方式へ変えたため、定数は廃止した (2026-11-18)。
-
 /* ---- 再生モードの端末保存 (セッションキーと同じ環境分け) ---- */
 
 export function playModeKey(env) {
