@@ -75,6 +75,7 @@ vi.mock('../src/config.js', () => ({
 }));
 
 import App from '../src/App.vue';
+import { logEvents } from '../src/lib/api.js';
 import { fetchOneFeed } from '../src/lib/feedFetch.js';
 import { articleId } from '../src/lib/articleId.js';
 import { loadLocalArticles, saveLocalFeeds, putLocalArticles, deleteLocalArticles } from '../src/lib/localDb.js';
@@ -126,6 +127,9 @@ let el = null;
 let errors = [];
 
 const latestAudio = () => audioInstances[audioInstances.length - 1];
+
+// logEvents へ渡ったイベントをすべて平らに集める。
+const sentEvents = () => logEvents.mock.calls.flatMap((c) => c[1]);
 
 const flush = async () => {
   for (let i = 0; i < 6; i += 1) {
@@ -355,6 +359,41 @@ describe('ストール検知での自動スキップ', () => {
       expect(latestAudio().src).toBe('https://example.com/ep2.mp3');
       expect(latestAudio().paused).toBe(false);
       expect(audio.src).toBe('');
+    } finally {
+      nowSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('ストール検知が発動したら、止まった位置つきで stall が送られる', async () => {
+    vi.useFakeTimers();
+    let nowVal = 0;
+    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => nowVal);
+    try {
+      const flushFake = await mountFake([EP1, EP2]);
+      el.querySelectorAll('.article-card')[0].querySelector('.play-btn').click();
+      await flushFake();
+      const audio = latestAudio();
+      audio.currentTime = 30;
+      audio.dispatchEvent(new window.Event('playing'));
+      // 基準作りの tick (位置30・時刻0)。
+      await tick(flushFake, () => { nowVal = 0; });
+      // 位置が30のまま10秒を超えたら検知が発動し、次へ進む。
+      await tick(flushFake, () => { nowVal = 10_500; });
+      expect(errors).toEqual([]);
+      expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+      // 診断: 発動した検知が、止まった曲と位置 (30秒) で残る。
+      expect(sentEvents().filter((e) => e.type === 'stall')).toEqual([
+        expect.objectContaining({
+          feed_id: FEED_ID,
+          article_id: 'ep-1',
+          article_title: 'エピソード1',
+          seconds: 30,
+        }),
+      ]);
+      // 失敗時の送りは「曲の終了」ではないので、遷移の内訳
+      // (advance_*) は残らない。
+      expect(sentEvents().filter((e) => e.type.startsWith('advance_'))).toEqual([]);
     } finally {
       nowSpy.mockRestore();
       vi.useRealTimers();

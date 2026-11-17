@@ -1,5 +1,7 @@
 // 視聴ログ (feed_view / article_open / play / scroll / expand) の
-// クライアント側の受け皿。イベントはメモリ上のキューに貯め、操作の区切りで
+// クライアント側の受け皿。再生診断 (preload_error / advance_swap /
+// advance_load / stall / recover) も同じキューに相乗りする。
+// イベントはメモリ上のキューに貯め、操作の区切りで
 // まとめて送る。送信に失敗した分は捨てる (視聴ログのために
 // 再送やリトライで通信を増やさない)。
 

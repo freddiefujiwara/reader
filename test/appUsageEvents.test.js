@@ -391,9 +391,13 @@ describe('play の送信', () => {
     audio.paused = true;
     audio.dispatchEvent(new window.Event('ended'));
     await flushUntil(() => logEvents.mock.calls.length === 1);
+    // play と、遷移の内訳を示す診断 (advance_load) が同じ区切りで
+    // 送られる。article_open は送られない。
     expect(sentEvents()).toEqual([
+      expect.objectContaining({ type: 'advance_load', article_id: 'ep-2' }),
       expect.objectContaining({ type: 'play', article_id: 'ep-1', seconds: 40 }),
     ]);
+    expect(sentEvents().filter((e) => e.type === 'article_open')).toEqual([]);
     expect(errors).toEqual([]);
   });
 });

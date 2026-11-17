@@ -1358,6 +1358,141 @@ describe('フォアグラウンド復帰時の再生回復', () => {
   });
 });
 
+describe('再生診断ログ', () => {
+  // バックグラウンド再生の失敗を後から追うための診断イベント
+  // (視聴ログと同じ logEvents 経路)。固定したいのは、各種別が
+  // 正しい状況で・正しい曲の文脈で送られることと、送信が既存の
+  // 区切りに相乗りする (先読みエラーだけでは送られない) こと。
+  const DIAG_TYPES = ['preload_error', 'advance_swap', 'advance_load', 'stall', 'recover'];
+  const sentEvents = () => logEvents.mock.calls.flatMap((c) => c[1]);
+  const diagEvents = () => sentEvents().filter((e) => DIAG_TYPES.includes(e.type));
+
+  async function fireVisible() {
+    document.dispatchEvent(new window.Event('visibilitychange'));
+    await flush();
+  }
+
+  it('役割交代で進んだら advance_swap が次の曲の文脈で送られる', async () => {
+    await mountPlayer();
+    await startCard(0);
+    const audio = latestAudio();
+    // 再生開始で次曲の先読みを始める。
+    audio.dispatchEvent(new window.Event('playing'));
+    await flush();
+    expect(audioInstances.length).toBe(2);
+
+    audio.ended = true;
+    audio.paused = true;
+    audio.dispatchEvent(new window.Event('ended'));
+    await flush();
+    expect(errors).toEqual([]);
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+    expect(diagEvents()).toEqual([
+      expect.objectContaining({
+        type: 'advance_swap',
+        feed_id: FEED_ID,
+        feed_title: 'Rebuild',
+        article_id: 'ep-2',
+        article_title: 'エピソード2',
+      }),
+    ]);
+  });
+
+  it('先読みが無い状態で進んだら advance_load が送られる', async () => {
+    await mountPlayer();
+    await startCard(0);
+    // 'playing' を送らないので先読みは始まらず、従来経路で進む。
+    await fireEnded();
+    expect(errors).toEqual([]);
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+    expect(diagEvents()).toEqual([
+      expect.objectContaining({ type: 'advance_load', article_id: 'ep-2' }),
+    ]);
+  });
+
+  it('先読みでエラーが起きたら preload_error が先読み先の文脈で送られる', async () => {
+    await mountPlayer();
+    await startCard(0);
+    const audio = latestAudio();
+    audio.dispatchEvent(new window.Event('playing'));
+    await flush();
+    const pre = audioInstances[audioInstances.length - 1];
+    expect(pre.src).toBe('https://example.com/ep2.mp3');
+
+    pre.dispatchEvent(new window.Event('error'));
+    await flush();
+    expect(errors).toEqual([]);
+    // 送信は既存の区切りに相乗りするので、エラーの時点では
+    // まだ送られない (キューに残っている)。
+    expect(diagEvents()).toEqual([]);
+
+    // 曲が終わって次へ進む区切りで、先に残っていた preload_error
+    // と、その遷移の内訳 (読み直した試行での役割交代) が届く。
+    audio.ended = true;
+    audio.paused = true;
+    audio.dispatchEvent(new window.Event('ended'));
+    await flush();
+    expect(errors).toEqual([]);
+    expect(diagEvents()).toEqual([
+      expect.objectContaining({ type: 'preload_error', article_id: 'ep-2', article_title: 'エピソード2' }),
+      expect.objectContaining({ type: 'advance_swap', article_id: 'ep-2' }),
+    ]);
+  });
+
+  it('復帰回復で次へ進んだら recover が止まっていた曲の文脈で送られる', async () => {
+    await mountPlayer();
+    await startCard(0);
+    const audio = latestAudio();
+    // バックグラウンドで曲が終わったまま止まった状態で復帰する。
+    audio.ended = true;
+    audio.paused = true;
+    await fireVisible();
+    expect(errors).toEqual([]);
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+    // 遷移の内訳 (advance_load) と、回復の発動 (recover) が
+    // 対で残る。recover の対象は止まっていた側の曲。
+    expect(diagEvents()).toEqual([
+      expect.objectContaining({ type: 'advance_load', article_id: 'ep-2' }),
+      expect.objectContaining({ type: 'recover', article_id: 'ep-1', article_title: 'エピソード1' }),
+    ]);
+  });
+
+  it('復帰回復で再開したら recover がその曲の文脈で送られる', async () => {
+    await mountPlayer();
+    await startCard(0);
+    const audio = latestAudio();
+    // 自動送りの play() が NotAllowedError で拒否され、次曲で
+    // 止まったままになる状態 (既存の回復テストと同じ作り方)。
+    const originalPlay = audio.play.bind(audio);
+    audio.play = () => {
+      audio.ended = false;
+      audio.paused = true;
+      const err = new Error('blocked');
+      err.name = 'NotAllowedError';
+      return Promise.reject(err);
+    };
+    await fireEnded();
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+    audio.play = originalPlay;
+    await fireVisible();
+    expect(errors).toEqual([]);
+    expect(audio.paused).toBe(false);
+    expect(diagEvents()).toContainEqual(
+      expect.objectContaining({ type: 'recover', article_id: 'ep-2' })
+    );
+  });
+
+  it('本人が一時停止していたら recover は送られない', async () => {
+    await mountPlayer();
+    await startCard(0);
+    el.querySelectorAll('.article-card')[0].querySelector('.play-btn').click();
+    await flush();
+    await fireVisible();
+    expect(errors).toEqual([]);
+    expect(diagEvents().filter((e) => e.type === 'recover')).toEqual([]);
+  });
+});
+
 describe('タイトル押下と再生の継続', () => {
   it('再生中にタイトルを押しても、ページを開き直さず再生が続く', async () => {
     await mountPlayer();
