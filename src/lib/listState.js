@@ -49,7 +49,11 @@ export function shouldClearCategorySelection(feeds, category) {
 
 // 表示条件 (フィード＋カテゴリ＋ビュー) に合う記事だけを返す。
 // 楽観的更新で状態が変わった記事をその場で出し分けるためにクライアントで行う。
-export function visibleArticles(state) {
+// stickyReadIds は、未読のみ表示の間に既読へ遷移した記事の ID 集合
+// (Set でも配列でもよい)。未読フィルタでもその記事だけは既読のまま
+// 一覧に残す (絞り込みを再適用するまでのセッション内だけの扱い)。
+// フィード・カテゴリの絞り込みは従来どおり先に効く。
+export function visibleArticles(state, stickyReadIds) {
   let out = state.articles.slice();
   if (state.category) {
     const inCategory = {};
@@ -59,7 +63,10 @@ export function visibleArticles(state) {
     out = out.filter((a) => inCategory[a.feedId]);
   }
   if (state.feedId) out = out.filter((a) => a.feedId === state.feedId);
-  if (state.filter === 'unread') out = out.filter((a) => !a.isRead);
+  if (state.filter === 'unread') {
+    const sticky = stickyReadIds instanceof Set ? stickyReadIds : new Set(stickyReadIds || []);
+    out = out.filter((a) => !a.isRead || sticky.has(a.id));
+  }
   return out;
 }
 

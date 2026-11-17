@@ -228,7 +228,8 @@ describe('すべて既読と背景更新の読み直しの競合', () => {
     // 即座に実行される。画面へは即座に効き、DB へも書ける。
     findButton(el, 'すべて既読').click();
     await flushUntil(() => headerUnread() === 1);
-    expect(articleTitles()).toEqual([]);
+    // 未読のみ表示で既読化したカードは、その場では消えずに残る。
+    expect(articleTitles()).toEqual(['記事A']);
     gate.armed = false;
     const records = await loadLocalArticles();
     expect(records.find((r) => r.id === 'art-a').is_read).toBe(true);
@@ -239,13 +240,14 @@ describe('すべて既読と背景更新の読み直しの競合', () => {
     await releaseAllLoads();
     await flushRound();
     await flushRound();
-    expect(articleTitles()).toEqual([]);
+    // 背景更新は絞り込みの再適用ではないので、カードは残ったまま。
+    expect(articleTitles()).toEqual(['記事A']);
     expect(headerUnread()).toBe(1);
 
     // 次の背景更新 (今度は新しいスナップショット) でも既読のまま。
     findButton(el, '更新').click();
     await settleApp();
-    expect(articleTitles()).toEqual([]);
+    expect(articleTitles()).toEqual(['記事A']);
     expect(headerUnread()).toBe(1);
     expect(errors).toEqual([]);
   });
