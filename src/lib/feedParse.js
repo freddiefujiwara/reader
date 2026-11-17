@@ -137,7 +137,26 @@ export function stripTags(html) {
   // 先にデコードして、エスケープされたマークアップ (&lt;p&gt; 等) も
   // タグとして取り除く。プレーンテキストの実体参照はタグ除去を生き残る。
   const decoded = decodeXmlEntities(String(html || ''));
-  return decoded.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  // <br> と段落などの閉じタグは改行として残す。ダッシュボード系
+  // フィードの改行付きプレーンテキストと HTML の段落構造を、要約の
+  // 展開表示 (white-space: pre-line) で再現するため。
+  const withBreaks = decoded
+    .replace(/<br\b[^>]*>/gi, '\n')
+    .replace(/<\/(?:p|div|li|tr|blockquote|pre|h[1-6])>/gi, '\n');
+  return normalizeSummaryWhitespace(withBreaks.replace(/<[^>]*>/g, ' '));
+}
+
+// 要約テキストの空白整形。改行は保持し、行内の空白 (スペース・タブ・
+// 全角スペース等) の連続は1つのスペースに詰める。改行コードは \n に
+// 統一し、3つ以上連続する改行は2つに詰める。各行の前後の空白も落とす。
+function normalizeSummaryWhitespace(text) {
+  return String(text || '')
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 export function summarize(html, maxChars) {

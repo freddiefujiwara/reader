@@ -653,11 +653,14 @@ button.ghost.active {
   overflow: hidden;
 }
 
-/* 「もっと見る」で展開した要約: 行数制限を外して全文を出す。 */
+/* 「もっと見る」で展開した要約: 行数制限を外して全文を出す。
+   取り込みで残した改行は展開時だけ効かせる。閉じた状態 (通常の
+   white-space) では改行は空白として流れ、3行省略の見た目を保つ。 */
 .article-summary.expanded {
   display: block;
   -webkit-line-clamp: unset;
   overflow: visible;
+  white-space: pre-line;
 }
 
 /* 要約の展開ボタン。read-toggle と同じ控えめなテキストボタン。 */

@@ -42,6 +42,14 @@ describe('要約の展開表示', () => {
     expect(body).toContain('-webkit-line-clamp: unset');
     expect(body).toContain('overflow: visible');
   });
+
+  it('展開した要約では取り込みで残した改行が効く (white-space: pre-line)', () => {
+    expect(ruleBody('.article-summary.expanded')).toContain('white-space: pre-line');
+  });
+
+  it('閉じた要約では改行は効かない (pre-line を付けず、空白として流れる)', () => {
+    expect(ruleBody('.article-summary')).not.toContain('white-space: pre-line');
+  });
 });
 
 describe('ジャンル候補の配置', () => {
