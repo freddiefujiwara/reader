@@ -73,7 +73,7 @@ vi.mock('../src/lib/feedFetch.js', () => ({
 }));
 
 import App from '../src/App.vue';
-import { saveFeed, listFeeds, reorderFeeds } from '../src/lib/api.js';
+import { saveFeed, listFeeds, listArticles, reorderFeeds } from '../src/lib/api.js';
 import { fetchFeedXml } from '../src/lib/feedFetch.js';
 
 const scrollCalls = [];
@@ -809,6 +809,128 @@ describe('管理画面の YouTube チャンネル URL 追加', () => {
     expect(payload.title).toBe('');
     expect(payload.url).toBe('https://www.youtube.com/channel/UCxNfaRC6MbAnwSR1Dqqv69A');
     expect(cardTitles()).toContain('rakutentech');
+  });
+});
+
+describe('管理画面の YouTube プレイリストフィード', () => {
+  // 保存正規形 (www.youtube.com/playlist?list=...) のフィード。
+  // ID はその URL のハッシュ (feedHash で固定される規則)。
+  const PLAYLIST_FEED = {
+    id: '2b27a47b656bfcfd',
+    title: 'お気に入りプレイリスト',
+    url: 'https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjX9efdf',
+    category: '音楽',
+    lastStatus: '200',
+    lastError: '',
+    lastFetchedAt: '2026-11-15T01:00:00.000Z',
+    unreadCount: 2,
+  };
+  const WITH_PLAYLIST = [...FEEDS, PLAYLIST_FEED];
+  let saved = false;
+
+  beforeEach(() => {
+    saved = false;
+    saveFeed.mockImplementation(async () => {
+      saved = true;
+      return { ok: true, feed: PLAYLIST_FEED };
+    });
+    listFeeds.mockImplementation(async () => ({
+      ok: true,
+      feeds: saved ? WITH_PLAYLIST : FEEDS,
+    }));
+    listArticles.mockImplementation(async () => ({
+      ok: true,
+      feeds: saved ? WITH_PLAYLIST : FEEDS,
+      articles: [],
+    }));
+  });
+
+  afterEach(() => {
+    saveFeed.mockImplementation(async () => ({ ok: true, feed: FEEDS[0] }));
+    listFeeds.mockImplementation(async () => ({ ok: true, feeds: FEEDS }));
+    listArticles.mockImplementation(async () => ({ ok: true, feeds: FEEDS, articles: [] }));
+  });
+
+  async function submitAddUrl(url) {
+    await mountAdmin();
+    findButton(el, 'フィードを追加').click();
+    await flush();
+    const form = el.querySelector('.feed-form');
+    const input = form.querySelector('#feed-url');
+    input.value = url;
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+    form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+    await flush();
+    await flush();
+  }
+
+  // 最初からプレイリストフィードが一覧にいる状態で管理画面を開く。
+  async function mountAdminWithPlaylist() {
+    listFeeds.mockImplementation(async () => ({ ok: true, feeds: WITH_PLAYLIST }));
+    listArticles.mockImplementation(async () => ({ ok: true, feeds: WITH_PLAYLIST, articles: [] }));
+    el = document.createElement('div');
+    document.body.appendChild(el);
+    app = createApp(App);
+    app.config.errorHandler = (err) => { errors.push(err); };
+    app.mount(el);
+    await flush();
+    findButton(el, '管理').click();
+    await flush();
+    expect(el.querySelectorAll('.feed-card').length).toBe(WITH_PLAYLIST.length);
+  }
+
+  const playlistCard = () => el.querySelectorAll('.feed-card')[WITH_PLAYLIST.length - 1];
+
+  it('プレイリスト URL は取得を省き、正規形にそろえてタイトル空で保存する', async () => {
+    // music.youtube.com の形・余分なパラメータ付きで貼っても正規形になる。
+    await submitAddUrl('https://music.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjX9efdf&si=x');
+    expect(errors).toEqual([]);
+    expect(fetchFeedXml).not.toHaveBeenCalled();
+    expect(saveFeed).toHaveBeenCalledTimes(1);
+    const [token, payload] = saveFeed.mock.calls[0];
+    expect(token).toBe('tok');
+    expect(payload).toEqual({
+      title: '',
+      url: 'https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjX9efdf',
+      category: '',
+    });
+    expect(el.querySelector('.feed-form'), '保存後はフォームが閉じる').toBeNull();
+    const titles = [...el.querySelectorAll('.feed-card .feed-name')].map((n) => n.textContent.trim());
+    expect(titles).toContain('お気に入りプレイリスト');
+  });
+
+  it('プレイリストフィードには編集・削除の両方が出て、解除の案内文言は出ない', async () => {
+    await mountAdminWithPlaylist();
+    expect(errors).toEqual([]);
+    const card = playlistCard();
+    expect(findButton(card, '編集'), '編集ボタンが出る').toBeTruthy();
+    expect(findButton(card, '削除'), '削除ボタンが出る').toBeTruthy();
+    expect(card.querySelector('.feed-youtube-note'), '案内文言は出ない').toBeNull();
+  });
+
+  it('プレイリストフィードの編集は通常フィードと同じ注記で、ジャンルだけ保存できる', async () => {
+    await mountAdminWithPlaylist();
+    const form = await openEdit(WITH_PLAYLIST.length - 1);
+    expect(errors).toEqual([]);
+    expect(form, '編集フォームが開く').toBeTruthy();
+    expect(form.textContent).toContain('削除してから追加し直して');
+    expect(form.textContent).not.toContain('解除はYouTubeアプリで行ってください');
+    const input = form.querySelector('#feed-category');
+    input.value = 'お気に入り';
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await flush();
+    form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+    await flush();
+    await flush();
+    expect(errors).toEqual([]);
+    expect(saveFeed).toHaveBeenCalledTimes(1);
+    const [, payload] = saveFeed.mock.calls[0];
+    expect(payload).toMatchObject({
+      id: PLAYLIST_FEED.id,
+      title: PLAYLIST_FEED.title,
+      url: PLAYLIST_FEED.url,
+      category: 'お気に入り',
+    });
   });
 });
 

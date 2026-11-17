@@ -85,6 +85,38 @@ export function youtubeChannelIdFromUrl(url) {
   return m ? m[1] : '';
 }
 
+// プレイリストを受け付けるホスト (music.youtube.com を含む)。
+const YOUTUBE_PLAYLIST_HOSTS = [...YOUTUBE_HOSTS, 'music.youtube.com'];
+
+// YouTube プレイリストの URL (youtube.com/playlist?list=...) かどうか。
+// music.youtube.com の形や、list 以外のパラメータ (si など) が付いた
+// 形も対象にする。
+export function isYouTubePlaylistUrl(url) {
+  return youtubePlaylistIdFromUrl(url) !== '';
+}
+
+// YouTube のプレイリスト ID を URL から取り出す。プレイリストの
+// ページ (/playlist?list=...) だけを対象にし、取り出せなければ '' を
+// 返す。ID の形は英数・ハイフン・アンダースコア10文字以上にそろえる
+// (チャンネル ID の判定と同じ流儀)。
+export function youtubePlaylistIdFromUrl(url) {
+  const parsed = tryParseUrl(url);
+  if (!parsed || !YOUTUBE_PLAYLIST_HOSTS.includes(parsed.hostname)) return '';
+  if (parsed.pathname !== '/playlist') return '';
+  const id = parsed.searchParams.get('list') || '';
+  return /^[\w-]{10,}$/.test(id) ? id : '';
+}
+
+// プレイリスト URL の保存正規形。ホストの揺れと余分なパラメータを
+// 落とし、https://www.youtube.com/playlist?list=<ID> にそろえる
+// (サーバー側の保存形と同じ)。プレイリスト URL でなければ ''。
+// フィード ID は URL 文字列のハッシュで決まるため、揺れは保存前に
+// ここで吸収しないと別フィードになってしまう。
+export function normalizeYouTubePlaylistUrl(url) {
+  const id = youtubePlaylistIdFromUrl(url);
+  return id ? `https://www.youtube.com/playlist?list=${id}` : '';
+}
+
 // YouTube の動画 ID を記事リンクから取り出す。watch?v= と youtu.be/ と
 // /shorts/ に対応し、取り出せなければ '' を返す。記事 ID の付け替え
 // (ID = ハッシュ(フィードID + 動画ID)) に使う。
@@ -114,8 +146,11 @@ export function isYouTubeFeedInput(url) {
 
 // 新規追加の進め方を決める。YouTube の入力 (チャンネルページ・
 // @ハンドル) は取得を省いてタイトル '' で保存し ('youtube')、
+// プレイリストも同様に取得を省いてタイトル '' で保存する
+// ('playlist': 取り込みとタイトル補完はサーバーが行う)。
 // それ以外は保存前にフィードを取得してタイトルを取る ('fetch')。
 export function planFeedAdd(form) {
+  if (isYouTubePlaylistUrl(form?.url)) return { mode: 'playlist' };
   return { mode: isYouTubeFeedInput(form?.url) ? 'youtube' : 'fetch' };
 }
 
@@ -147,9 +182,12 @@ export function buildSaveFeedPayload(form, base = null) {
       category: String(form?.category || '').trim(),
     };
   }
+  const url = String(form?.url || '').trim();
   return {
     title: String(form?.title || '').trim(),
-    url: String(form?.url || '').trim(),
+    // プレイリスト URL は保存正規形にそろえてから送る (フィード ID が
+    // URL ハッシュで決まるため、揺れをここで吸収する)。
+    url: normalizeYouTubePlaylistUrl(url) || url,
     category: String(form?.category || '').trim(),
   };
 }

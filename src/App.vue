@@ -33,6 +33,7 @@ import {
   resolveFeedAddForm,
   validateFeedUrl,
   youtubeChannelIdFromUrl,
+  youtubePlaylistIdFromUrl,
 } from './lib/feedAdmin.js';
 import { clearSession, loadSession, saveSession } from './lib/session.js';
 import {
@@ -215,12 +216,12 @@ const formDirty = computed(() => isFeedFormDirty(formBase.value, form.value));
 const isReadonly = computed(() => session.value?.role === 'readonly');
 const isOwner = computed(() => session.value?.role === 'owner');
 // YouTube フィードの ID 集合。記事が YouTube 由来かどうかは、
-// フィードの保存 URL からチャンネル ID が取れるかで判定する
-// (サーバー側の RSS 出し分けと同じ判定)。
+// フィードの保存 URL からチャンネル ID かプレイリスト ID が取れるか
+// で判定する (サーバー側の RSS 出し分けと同じ判定)。
 const youtubeFeedIds = computed(() =>
   new Set(
     state.value.feeds
-      .filter((f) => youtubeChannelIdFromUrl(f.url))
+      .filter((f) => youtubeChannelIdFromUrl(f.url) || youtubePlaylistIdFromUrl(f.url))
       .map((f) => f.id)
   )
 );
@@ -2282,10 +2283,12 @@ async function submitFeedForm() {
     formError.value = urlInvalid;
     return;
   }
-  // YouTube (疑似フィード・チャンネルページ・@ハンドル) は直接読めない
-  // ため取得を省き、タイトル '' で保存する (URL の正規形への解決と
-  // タイトル補完はサーバーが行う)。
-  if (planFeedAdd(form.value).mode === 'youtube') {
+  // YouTube (疑似フィード・チャンネルページ・@ハンドル・プレイリスト)
+  // は直接読めないため取得を省き、タイトル '' で保存する (URL の
+  // 正規形への解決とタイトル補完はサーバーが行う。プレイリスト URL の
+  // 正規化は buildSaveFeedPayload が行う)。
+  const addMode = planFeedAdd(form.value).mode;
+  if (addMode === 'youtube' || addMode === 'playlist') {
     await saveFeedForm(buildSaveFeedPayload({ ...form.value, title: '' }));
     return;
   }
@@ -2637,7 +2640,7 @@ onMounted(async () => {
                 autocomplete="off"
                 placeholder="https://example.com/feed.xml"
               />
-              <p class="field-note">タイトルはフィードから自動で取得します。YouTube はチャンネルの URL でも登録できます。</p>
+              <p class="field-note">タイトルはフィードから自動で取得します。YouTube はチャンネルやプレイリストの URL でも登録できます。</p>
             </div>
             <div class="field">
               <label for="feed-category">ジャンル</label>
@@ -2742,12 +2745,14 @@ onMounted(async () => {
               <!-- 編集・削除はカード右側の空きに置く (カード本体の
                    フレックス行の3つ目の要素)。削除確認が出ている間は
                    隠す (確認のボタンは本体側に出る)。
-                   YouTube フィードは追加・解除が YouTube 側の正のため
-                   削除は出さない。ただしジャンルだけはリーダー側が正
-                   (購読同期は既存行のジャンルには触れない) なので、
-                   編集は通常どおり出し、解除は YouTube アプリ側での
-                   操作を案内する小さな注記を添える (並び替えも従来
-                   どおり可能)。 -->
+                   YouTube チャンネルフィードは追加・解除が YouTube
+                   側の正のため削除は出さない。ただしジャンルだけは
+                   リーダー側が正 (購読同期は既存行のジャンルには触れ
+                   ない) なので、編集は通常どおり出し、解除は YouTube
+                   アプリ側での操作を案内する小さな注記を添える
+                   (並び替えも従来どおり可能)。判定はチャンネル ID が
+                   取れるかで、プレイリストフィードは購読同期の対象外
+                   のため通常フィードと同じく削除も出す。 -->
               <div v-if="confirmDeleteId !== f.id" class="feed-actions feed-card-actions">
                 <p v-if="youtubeChannelIdFromUrl(f.url)" class="feed-youtube-note">解除はYouTubeアプリで</p>
                 <button class="ghost" type="button" @click="startEditFeed(f)">編集</button>
