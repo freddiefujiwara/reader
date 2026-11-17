@@ -89,6 +89,7 @@ import {
   createStallTracker,
   durationMismatch,
   failedEpisodePlan,
+  foregroundRecoveryAction,
   formatTime,
   interpretStoredPlayPos,
   isWithinEndGuard,
@@ -1049,6 +1050,12 @@ let currentSrcUrl = '';
    failedEpisodePlan が送り先を決める)。連続失敗が続く場合は
    上限で止める。1曲でも正常に再生が進んだら数え直す。 */
 let consecutivePlayFailures = 0;
+// アプリ側に「再生する意思」があるか。本人が一時停止・停止した
+// ときだけ下ろし、要素の 'pause' イベントでは下ろさない (曲の
+// 終端でも要素は止まるため)。フォアグラウンド復帰時の回復
+// (recoverPlaybackOnForeground) が、勝手に再開してよいかの
+// 判定に使う。
+let playWanted = false;
 // エピソードを要素へ載せるたびに増える番号と、失敗処理済みの
 // 番号。同じ読み込みへの二重の失敗通知 (error と play() 拒否の
 // 両方が来る等) で二重に送らないために使う。
@@ -1270,6 +1277,8 @@ function isCurrentEpisode(article) {
 }
 
 function tryPlayAudio() {
+  // 再生の意思を立てる (フォアグラウンド復帰時の回復判定用)。
+  playWanted = true;
   // 再生開始のたびに終端チェックのタイマーを張り直す
   // (loadEpisode・再開・単曲リピート・Media Session のいずれの
   // 経路でもここを通る)。
@@ -1285,6 +1294,11 @@ function tryPlayAudio() {
         // pause() や src の差し替えで中断されただけの拒否は、
         // そのエピソードの失敗ではない。
         if (err && err.name === 'AbortError') return;
+        // 再生がブロックされただけの拒否 (バックグラウンドでの
+        // 自動送り等) も、そのエピソードが壊れているわけでは
+        // ない。失敗として送らず、再生の意思だけ残しておく
+        // (フォアグラウンド復帰時の回復で再生し直す)。
+        if (err && err.name === 'NotAllowedError') return;
         // 既に別のエピソードへ切り替わっていたら、今の曲の
         // 失敗として扱わない。
         if (!currentEpisode.value || currentEpisode.value.id !== epId) return;
@@ -1336,7 +1350,12 @@ function updateMediaSession(article) {
       artist: article.feedTitle || article.feedId || '',
     });
     navigator.mediaSession.setActionHandler('play', () => tryPlayAudio());
-    navigator.mediaSession.setActionHandler('pause', () => audio.pause());
+    navigator.mediaSession.setActionHandler('pause', () => {
+      // ロック画面等からの明示的な一時停止は、本人の意思として
+      // 扱う (フォアグラウンド復帰時に勝手に再開しない)。
+      playWanted = false;
+      audio.pause();
+    });
     navigator.mediaSession.setActionHandler('seekbackward', () => skipBy(-15));
     navigator.mediaSession.setActionHandler('seekforward', () => skipBy(30));
     navigator.mediaSession.setActionHandler('previoustrack', () => skipByTrack(-1));
@@ -1449,6 +1468,7 @@ function togglePlay() {
     endFlowDone = false;
     tryPlayAudio();
   } else {
+    playWanted = false;
     audio.pause();
   }
 }
@@ -1561,6 +1581,7 @@ function onSeekInput(event) {
 }
 
 function stopPlayer() {
+  playWanted = false;
   savePlayPos();
   // 視聴ログ: プレイヤーを閉じるのが再生の終わりなので、積算した
   // 再生時間をここで確定して送る。
@@ -1707,6 +1728,7 @@ function handlePlaybackFailure() {
   }
   // 次が無い・連続失敗の上限: 終端の動作に合わせてその場で止める
   // (エピソードは表示したまま、再生だけ止める)。
+  playWanted = false;
   stopEndCheckTimer();
   audio.pause();
   isPlaying.value = false;
@@ -1747,10 +1769,41 @@ function handleEpisodeEnded() {
     playedIds: playedInRound,
   });
   // 次へ進む場合は loadEpisode 側で再生時間を確定する。進まずに
-  // 止まる場合は、ここが再生の終わりなので確定して送る。
-  if (!loadPlannedNext(plan)) flushPlayListen();
+  // 止まる場合は、ここが再生の終わりなので確定して送る (再生の
+  // 意思もここで下ろす。フォアグラウンド復帰時の回復で、末尾で
+  // 止まった状態を勝手に再生し直さないため)。
+  if (!loadPlannedNext(plan)) {
+    playWanted = false;
+    flushPlayListen();
+  }
 }
 audio.addEventListener('ended', handleEpisodeEnded);
+
+// フォアグラウンドへ戻ったときの再生回復。バックグラウンドで
+// タイマーが止まりページが suspend / freeze されると、その間に
+// 曲が終わっても次曲への進行が起きず、自動送りの play() が
+// 保留・拒否されたまま固まることがある (実機で「開くと次の曲が
+// 始まる」症状を確認)。復帰した時点で、再生の意思があるのに
+// 止まっている状態なら、その場で進行・再開する。判定は
+// player.js の foregroundRecoveryAction、本人が一時停止した
+// 場合は playWanted が下りているので何もしない。
+function recoverPlaybackOnForeground() {
+  const action = foregroundRecoveryAction({
+    hasEpisode: !!currentEpisode.value,
+    playWanted,
+    ended: audio.ended,
+    endFlowDone,
+    paused: audio.paused,
+    reachedEnd: !!currentEpisode.value && reachedKnownDurationEnd({
+      displayPos: toDisplayPosition(audio.currentTime || 0, mappingCtx.value),
+      trueSec: trueDuration.value,
+      elementDuration: duration.value,
+      hasMeasuredModel: !!measuredModel,
+    }),
+  });
+  if (action === 'advance') handleEpisodeEnded();
+  else if (action === 'resume') tryPlayAudio();
+}
 
 // セッションを破棄してサインイン画面へ戻る共通部分 (失効・ログアウト)。
 function detachSession() {
@@ -2340,6 +2393,10 @@ document.addEventListener('visibilitychange', () => {
     savePlayPos();
     return;
   }
+  // バックグラウンドで止まったままの再生があれば、復帰の
+  // タイミングで進行・再開する (背景更新の条件とは独立に、
+  // 復帰のたびに見る)。
+  recoverPlaybackOnForeground();
   if (session.value && view.value === 'timeline' && hiddenAt && Date.now() - hiddenAt > 60_000) {
     hiddenAt = 0;
     refreshInBackground();
