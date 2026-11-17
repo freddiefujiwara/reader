@@ -9,6 +9,8 @@
 //   再度押すと元の省略表示に戻る。複数カードは独立に開閉できる。
 // - 展開 (折りたたみ→展開) すると、その記事が既読になる (「既読にする」と
 //   同じ applyRead の経路)。閉じる操作では既読を取り消さない。
+// - 展開すると視聴ログの expand が送られる (閉じる操作では送らない。
+//   読み取り専用でも送らない)。
 import 'fake-indexeddb/auto';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createApp, nextTick } from 'vue';
@@ -65,6 +67,8 @@ vi.mock('../src/lib/api.js', () => ({
   getShareLinkStatus: vi.fn(async () => ({ ok: true, active: false, expiresAt: null })),
   issueShareLink: vi.fn(async () => ({ ok: true, token: 'dummy-share-token', expiresAt: '2026-12-16T05:47:00.000Z' })),
   revokeShareLink: vi.fn(async () => ({ ok: true })),
+  logEvents: vi.fn(async () => ({ ok: true, saved: 0 })),
+  getStats: vi.fn(async () => ({ ok: true, weekly: [], currentWeek: '', current: [] })),
   reorderFeeds: vi.fn(async () => ({ ok: true })),
   saveFeed: vi.fn(async () => ({ ok: true })),
 }));
@@ -81,6 +85,7 @@ vi.mock('../src/config.js', () => ({
 }));
 
 import App from '../src/App.vue';
+import { logEvents } from '../src/lib/api.js';
 import { loadLocalArticles, saveLocalFeeds, putLocalArticles, deleteLocalArticles } from '../src/lib/localDb.js';
 
 // jsdom の HTMLMediaElement は再生を実装しないため、App が使う
@@ -339,6 +344,56 @@ describe('要約の展開と既読', () => {
       card.querySelector('.article-summary').classList.contains('expanded'),
       '展開はできる'
     ).toBe(true);
+    expect(errors).toEqual([]);
+  });
+});
+
+describe('要約の展開と expand イベント', () => {
+  const expandEvents = () =>
+    logEvents.mock.calls.flatMap((c) => c[1]).filter((e) => e.type === 'expand');
+
+  it('展開すると expand が送られ、閉じる操作では送られない', async () => {
+    await mountWithSummaries();
+    const card = cardByTitle('長い要約の記事');
+
+    card.querySelector('.summary-toggle').click();
+    await flushUntil(() => expandEvents().length === 1);
+    expect(expandEvents()[0]).toEqual(
+      expect.objectContaining({
+        type: 'expand',
+        feed_id: POD_FEED_ID,
+        feed_title: 'Rebuild',
+        article_id: 'long-1',
+        article_title: '長い要約の記事',
+      })
+    );
+    expect(expandEvents()[0].seconds, 'seconds は付けない').toBeUndefined();
+
+    // 閉じる操作では送らない。
+    card.querySelector('.summary-toggle').click();
+    await flush();
+    expect(expandEvents()).toHaveLength(1);
+
+    // もう一度展開すれば、その分が送られる。
+    card.querySelector('.summary-toggle').click();
+    await flushUntil(() => expandEvents().length === 2);
+    expect(errors).toEqual([]);
+  });
+
+  it('読み取り専用では expand は送られない', async () => {
+    localStorage.setItem(
+      'reader:session:v1',
+      JSON.stringify({ token: 'tok', role: 'readonly', expiresAt: null })
+    );
+    await mountWithSummaries();
+    const card = cardByTitle('長い要約の記事');
+    card.querySelector('.summary-toggle').click();
+    await flush();
+    expect(
+      card.querySelector('.article-summary').classList.contains('expanded'),
+      '展開自体はできる'
+    ).toBe(true);
+    expect(logEvents).not.toHaveBeenCalled();
     expect(errors).toEqual([]);
   });
 });
