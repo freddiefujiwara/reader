@@ -39,9 +39,9 @@ const FEEDS = [
     unreadCount: 1,
   },
   {
-    id: '33452296be85fdbc',
+    id: '35797c975382389f',
     title: 'X freddie',
-    url: 'https://example.com/x.freddie.xml',
+    url: 'https://a.ze.gs/x.freddie.xml',
     category: 'private',
     lastStatus: '200',
     lastError: '',
@@ -166,8 +166,9 @@ describe('管理画面の編集フォーム', () => {
   });
 
   it('タイトル未取得のフィードでは「（未取得）」と表示して開ける', async () => {
-    // FEEDS[1] は YouTube フィードで、編集できなくなったため、
-    // タイトル未取得の非 YouTube フィードに差し替えて確かめる。
+    // 「（未取得）」の表示はフィード種別に依らないことの確認として、
+    // FEEDS[1] (YouTube) をタイトル未取得の非 YouTube フィードに
+    // 差し替えて確かめる。
     const untitled = FEEDS.map((f, i) =>
       i === 1 ? { ...f, title: '', url: 'https://example.com/feed.xml' } : f
     );
@@ -361,15 +362,52 @@ describe('管理画面の YouTube フィード', () => {
   // FEEDS[1] が YouTube フィード (videos.xml 形式の URL)。
   const youtubeCard = () => el.querySelectorAll('.feed-card')[1];
 
-  it('YouTube フィードには編集・削除ボタンが出ず、代わりに案内文言が出る', async () => {
+  it('YouTube フィードには編集ボタンが出て削除ボタンは出ず、解除の案内文言が出る', async () => {
     await mountAdmin();
     expect(errors).toEqual([]);
     const card = youtubeCard();
-    expect(findButton(card, '編集'), '編集ボタンは無い').toBeUndefined();
+    expect(findButton(card, '編集'), '編集ボタンが出る').toBeTruthy();
     expect(findButton(card, '削除'), '削除ボタンは無い').toBeUndefined();
     const note = card.querySelector('.feed-youtube-note');
     expect(note, '案内文言が出る').toBeTruthy();
-    expect(note.textContent.trim()).toBe('変更・解除はYouTubeアプリで');
+    expect(note.textContent.trim()).toBe('解除はYouTubeアプリで');
+  });
+
+  it('YouTube フィードの編集を開くとジャンルだけ変更でき、保存すると元の ID / タイトル / URL のまま saveFeed へ渡る', async () => {
+    await mountAdmin();
+    const form = await openEdit(1);
+    expect(errors).toEqual([]);
+    expect(form, '編集フォームが開く').toBeTruthy();
+    expect(form.querySelector('.feed-form-title').textContent).toContain('フィードを編集');
+    // タイトルと URL は表示専用で、入力欄はジャンルだけ。
+    expect(form.querySelectorAll('.field-static').length).toBe(2);
+    expect(form.querySelector('#feed-url')).toBeNull();
+    expect(form.querySelector('#feed-category').value).toBe('教養・ラジオ');
+    // URL の注記は、削除できない YouTube 向けの文言になる。
+    expect(form.textContent).toContain('解除はYouTubeアプリで行ってください');
+    expect(form.textContent).not.toContain('削除してから追加し直して');
+    // 未変更では保存ボタンは非活性 (通常フィードと同じ)。
+    const saveBtn = form.querySelector('.form-actions .primary');
+    expect(saveBtn.disabled, '未変更では非活性').toBe(true);
+    const input = form.querySelector('#feed-category');
+    input.value = '音楽';
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await flush();
+    expect(saveBtn.disabled, 'ジャンルを変えると活性化').toBe(false);
+    form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+    await flush();
+    await flush();
+    expect(errors).toEqual([]);
+    expect(saveFeed).toHaveBeenCalledTimes(1);
+    const [token, payload] = saveFeed.mock.calls[0];
+    expect(token).toBe('tok');
+    expect(payload).toMatchObject({
+      id: FEEDS[1].id,
+      title: FEEDS[1].title,
+      url: FEEDS[1].url,
+      category: '音楽',
+    });
+    expect(el.querySelector('.feed-form'), '保存後はフォームが閉じる').toBeNull();
   });
 
   it('YouTube 以外のフィードには従来どおり編集・削除ボタンが出て、案内文言は出ない', async () => {
@@ -387,7 +425,7 @@ describe('管理画面の YouTube フィード', () => {
     expect(youtubeCard().querySelector('button.drag-handle'), 'ドラッグハンドルが出る').toBeTruthy();
   });
 
-  it('ジャンルで絞った先が YouTube フィードだけでも、案内文言が出て編集・削除は出ない', async () => {
+  it('ジャンルで絞った先が YouTube フィードだけでも、案内文言と編集が出て削除は出ない', async () => {
     await mountAdmin();
     const tablist = el.querySelector('[aria-label="ジャンルで絞り込み"]');
     findButton(tablist, '教養・ラジオ').click();
@@ -395,7 +433,7 @@ describe('管理画面の YouTube フィード', () => {
     expect(errors).toEqual([]);
     const cards = el.querySelectorAll('.feed-card');
     expect(cards.length).toBe(1);
-    expect(findButton(cards[0], '編集')).toBeUndefined();
+    expect(findButton(cards[0], '編集'), '編集ボタンが出る').toBeTruthy();
     expect(findButton(cards[0], '削除')).toBeUndefined();
     expect(cards[0].querySelector('.feed-youtube-note'), '案内文言が出る').toBeTruthy();
   });
