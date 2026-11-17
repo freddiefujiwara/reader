@@ -1012,6 +1012,30 @@ function flushPlayListen() {
   sendPlayListen(finalizePlayListen());
 }
 
+// 再生診断ログ: バックグラウンド再生の失敗を後から追えるよう、
+// 再生まわりの出来事を視聴ログと同じ経路 (キュー → log_events)
+// で送る。種別は preload_error (次曲の先読みでエラーが起きた。
+// 対象は先読み先の曲) / advance_swap (曲の終了で、待機側への役割
+// 交代で次へ進んだ。対象は次の曲) / advance_load (曲の終了で、
+// 従来経路の新規読み込みで次へ進んだ。対象は次の曲) / stall
+// (ストール検知が発動した。seconds は止まった位置) / recover
+// (フォアグラウンド復帰時の回復が、止まっていた再生を再開・
+// 前進させた。対象は止まっていた曲) の5つ。いずれもキューヘの
+// push のみで、送信の開始は既存の区切りに相乗りする (再生開始を
+// 遅らせないため、この関数から flush はしない)。
+function queueDiagEvent(type, ep, seconds) {
+  if (!ep) return;
+  const event = {
+    type,
+    feed_id: ep.feedId,
+    feed_title: ep.feedTitle || feedTitleOf(ep.feedId),
+    article_id: ep.id,
+    article_title: ep.title || '',
+  };
+  if (seconds !== undefined) event.seconds = seconds;
+  queueEvent(event);
+}
+
 /* ---- ポッドキャスト再生 (端末ローカルのみ) ---- */
 
 // 音声要素は2つ持ち、再生用と先読み用で役割を交代させる二重
@@ -1251,6 +1275,10 @@ function checkPlaybackStall() {
   }
   if (!stalled) return false;
   stallTracker.reset(performance.now());
+  // 診断: 検知が発動したことを、止まった位置 (表示位置の秒) つき
+  // で残す。送信は失敗処理側の区切り (次へ進めば loadEpisode の
+  // flush) に相乗りする。
+  queueDiagEvent('stall', currentEpisode.value, Math.floor(pos));
   handlePlaybackFailure();
   return true;
 }
@@ -1370,6 +1398,8 @@ function updatePreload() {
 // 従来経路に倒れる (loadEpisode)。
 function handlePreloadError(el) {
   if (el !== existingStandby() || preloadId === null || preloadFailed) return;
+  // 診断: 先読みでエラーが起きたことを、先読み先の曲の文脈で残す。
+  queueDiagEvent('preload_error', state.value.articles.find((a) => a.id === preloadId));
   preloadFailed = true;
   const id = preloadId;
   if (preloadRetriedId === id) return;
@@ -1515,7 +1545,10 @@ function updateMediaSession(article) {
 // 切り替わりでも復元していた頃は、数秒だけ再生して止めたエピソード
 // に残った位置が次の曲の冒頭を飛ばして見えた (実機で 0:03 から
 // 始まる例を確認)。
-function loadEpisode(article, { resume = true } = {}) {
+// diagAdvance は「曲の終了で次へ進む」遷移のときだけ立て、遷移の
+// 内訳 (役割交代か従来経路か) を診断ログへ残すために使う。それ
+// 以外の開始 (本人の選択・失敗時の送り・前へ／次へ) では残さない。
+function loadEpisode(article, { resume = true, diagAdvance = false } = {}) {
   // 渡された記事は描画時点 (またはキュー固定時点) の控えで、その後の
   // 更新で durationSec / audioUrl が埋まっても古いままのことがある。
   // 開始時に状態側の最新を id で引き直し、見つからなければ渡された
@@ -1588,6 +1621,11 @@ function loadEpisode(article, { resume = true } = {}) {
     oldDeck.pause();
     unloadDeck(oldDeck);
   }
+  // 診断: 曲の終了で次へ進んだ場合だけ、遷移の内訳を次の曲の
+  // 文脈で残す。キューヘの push のみで、送信 (fetch) は直後の
+  // sendPlayListen の flush から始まる (play() より前に送信は
+  // 始まらない)。
+  if (diagAdvance) queueDiagEvent(swap ? 'advance_swap' : 'advance_load', ep);
   // 視聴ログ: 確定済みイベントの送信と、計測対象の新しいエピソード
   // への差し替えは、再生開始を出した後に行う。終了経路では、曲間
   // の無音の隙間にページが凍結されうるため、イベント送信 (fetch)
@@ -1619,14 +1657,16 @@ function startEpisode(article) {
 // 自動送りの計画 (nextEpisodePlan / failedEpisodePlan) どおりに
 // 次のエピソードへ移る。計画が「次へ」でない・遷移先がキューに
 // 無ければ false を返す。遷移先の保存位置は使わず頭から始める
-// (自動送り・失敗時の送りに共通の規則)。
-function loadPlannedNext(plan) {
+// (自動送り・失敗時の送りに共通の規則)。diagAdvance は終了経由の
+// 送り (handleEpisodeEnded) だけが立て、loadEpisode へそのまま
+// 渡す (失敗時の送りでは立てない)。
+function loadPlannedNext(plan, { diagAdvance = false } = {}) {
   if (!plan || plan.type !== 'advance') return false;
   const next = playQueue.value.find((a) => a.id === plan.id);
   if (!next) return false;
   if (plan.resetPlayed) playedInRound = new Set();
   playedInRound.add(next.id);
-  loadEpisode(next, { resume: false });
+  loadEpisode(next, { resume: false, diagAdvance });
   return true;
 }
 
@@ -2020,7 +2060,7 @@ function handleEpisodeEnded() {
   // 止まる場合は、ここが再生の終わりなので確定して送る (再生の
   // 意思もここで下ろす。フォアグラウンド復帰時の回復で、末尾で
   // 止まった状態を勝手に再生し直さないため)。
-  if (!loadPlannedNext(plan)) {
+  if (!loadPlannedNext(plan, { diagAdvance: true })) {
     playWanted = false;
     flushPlayListen();
   }
@@ -2036,6 +2076,7 @@ function handleEpisodeEnded() {
 // player.js の foregroundRecoveryAction、本人が一時停止した
 // 場合は playWanted が下りているので何もしない。
 function recoverPlaybackOnForeground() {
+  const stuck = currentEpisode.value;
   const action = foregroundRecoveryAction({
     hasEpisode: !!currentEpisode.value,
     playWanted,
@@ -2046,6 +2087,12 @@ function recoverPlaybackOnForeground() {
   });
   if (action === 'advance') handleEpisodeEnded();
   else if (action === 'resume') tryPlayAudio();
+  else return;
+  // 診断: 回復が実際に再開・前進させたことを、止まっていた曲の
+  // 文脈で残す。復帰時はフォアグラウンドなのでその場で送り、
+  // バックグラウンドの間にキューへ残っていた診断分も一緒に届ける。
+  queueDiagEvent('recover', stuck);
+  flushEventLog();
 }
 
 // セッションを破棄してサインイン画面へ戻る共通部分 (失効・ログアウト)。
