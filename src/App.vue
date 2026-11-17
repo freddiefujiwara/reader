@@ -98,11 +98,11 @@ import {
   nextEpisodePlan,
   nextRepeat,
   nextSpeed,
+  preloadLeadSec,
   progressRatio,
   reachedKnownDurationEnd,
   skipPlan,
   END_CHECK_INTERVAL_MS,
-  PRELOAD_REMAINING_SEC,
   REPEAT_LABELS,
   savePlayMode,
   saveTimeModel,
@@ -1206,12 +1206,12 @@ function stopEndCheckTimer() {
 
 /* ---- 次の曲の先読み ----
    切り替え時点で初めて読み込みが始まると、回線が遅いときに遷移で
-   長く待たされる。再生中の曲の残りが PRELOAD_REMAINING_SEC 以下に
-   なったら、2つ目の要素で次の曲の読み込みを温めておく (本体は
-   切り替え時に同じ URL を引くので、キャッシュが効いて開始が
-   速くなる)。先読み要素のエラーは無視し、本体には波及させない。
-   遷移・停止・エピソード変更では loadEpisode / stopPlayer が
-   必ず破棄する。 */
+   長く待たされる。再生中の曲の残りが、次の曲の実尺から決まる
+   リード秒数 (preloadLeadSec) 以下になったら、2つ目の要素で
+   次の曲の読み込みを温めておく (本体は切り替え時に同じ URL を
+   引くので、キャッシュが効いて開始が速くなる)。先読み要素の
+   エラーは無視し、本体には波及させない。遷移・停止・エピソード
+   変更では loadEpisode / stopPlayer が必ず破棄する。 */
 let preloadAudio = null;
 let preloadId = null;
 
@@ -1253,7 +1253,7 @@ function updatePreload() {
   if (preloadAudio && preloadId !== target.id) discardPreload();
   if (preloadAudio) return;
   const remaining = displayDuration.value - displayTime.value;
-  if (!Number.isFinite(remaining) || remaining > PRELOAD_REMAINING_SEC) return;
+  if (!Number.isFinite(remaining) || remaining > preloadLeadSec(target.durationSec)) return;
   preloadAudio = new Audio();
   preloadAudio.preload = 'auto';
   preloadId = target.id;
