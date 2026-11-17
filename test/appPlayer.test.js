@@ -930,9 +930,10 @@ describe('既知の長さへの到達による終了判定 (durationSec 到達)'
 // 偽タイマーを入れる前に、本物の setTimeout を控えておく (ポンプ用)。
 const realSetTimeout = globalThis.setTimeout;
 
-describe('次の曲の先読み', () => {
-  // 先読みは本体とは別の2つ目の要素で温める。要素は必要になる
-  // まで作られないので、作られたかどうかはインスタンス数で見る。
+describe('次の曲の先読み (二重バッファ)', () => {
+  // 先読みは待機側の2つ目の要素へ読み込み、終了時は役割交代で
+  // そのまま再生に使う。要素は必要になるまで作られないので、
+  // 作られたかどうかはインスタンス数で見る。
   const preloadInstance = () => audioInstances[audioInstances.length - 1];
 
   async function parkNearEnd(audio, pos) {
@@ -943,58 +944,114 @@ describe('次の曲の先読み', () => {
     await flush();
   }
 
-  it('残り60秒以下になると先読みし、それより前はしない', async () => {
+  // 再生が始まったことにして先読みを開始させ、待機要素を返す。
+  async function startPreload(audio) {
+    audio.dispatchEvent(new window.Event('playing'));
+    await flush();
+    return preloadInstance();
+  }
+
+  it('再生が始まるまでは先読みせず、始まったら残り時間によらず先読みする', async () => {
     await mountPlayer();
     await startCard(0);
     const audio = latestAudio();
+    // play() は呼ばれたが 'playing' (実際の再生開始) はまだ。
     expect(audioInstances.length).toBe(1);
 
-    // リードは固定60秒。残り100秒ではまだ先読みしない
-    // (開始直後から読み込まない)。
-    await parkNearEnd(audio, 1700);
-    expect(audioInstances.length).toBe(1);
-
-    // 残り50秒: 次の曲 (エピソード2) の先読みが始まる。
-    await parkNearEnd(audio, 1750);
+    // 再生が始まったら、その時点で次曲の先読みが始まる
+    // (かつての残り60秒方式ではない)。
+    const pre = await startPreload(audio);
     expect(audioInstances.length).toBe(2);
-    expect(preloadInstance()).not.toBe(audio);
-    expect(preloadInstance().src).toBe('https://example.com/ep2.mp3');
-    expect(preloadInstance().preload).toBe('auto');
+    expect(pre).not.toBe(audio);
+    expect(pre.src).toBe('https://example.com/ep2.mp3');
+    expect(pre.preload).toBe('auto');
     expect(errors).toEqual([]);
   });
 
-  it('次の曲の実尺が不明でも残り60秒で先読みする', async () => {
+  it('次の曲の実尺が不明でも、再生が始まれば先読みする', async () => {
     await mountWithRecords([{ ...EP1 }, { ...EP2, duration_sec: null }]);
     await startCard(0);
     const audio = latestAudio();
     expect(audioInstances.length).toBe(1);
 
-    // 残り100秒: リードは固定60秒なので、まだ先読みしない。
-    await parkNearEnd(audio, 1700);
-    expect(audioInstances.length).toBe(1);
-
-    // 残り50秒: 先読みが始まる。
-    await parkNearEnd(audio, 1750);
+    const pre = await startPreload(audio);
     expect(audioInstances.length).toBe(2);
-    expect(preloadInstance().src).toBe('https://example.com/ep2.mp3');
+    expect(pre.src).toBe('https://example.com/ep2.mp3');
     expect(errors).toEqual([]);
   });
 
-  it('遷移時に先読みは破棄される', async () => {
-    await mountPlayer();
+  it('終了時は先読み済みの要素へ役割交代し、旧要素は待機側として空になる', async () => {
+    // 次曲には保存位置 (900) があるが、自動送りでは使わない。
+    await mountWithRecords([{ ...EP1 }, { ...EP2, play_pos: 900 }]);
     await startCard(0);
     const audio = latestAudio();
-    await parkNearEnd(audio, 1750);
-    const pre = preloadInstance();
+    const pre = await startPreload(audio);
     expect(pre.src).toBe('https://example.com/ep2.mp3');
+    pre.duration = 1800; // 待機側でメタデータまで読めた状態
 
     audio.ended = true;
     audio.paused = true;
     audio.dispatchEvent(new window.Event('ended'));
     await flush();
-    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
-    expect(pre.src).toBe('');
     expect(errors).toEqual([]);
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+    // 遷移で新しい要素は作られず、先読み側がそのまま再生される。
+    expect(audioInstances.length).toBe(2);
+    expect(pre.paused).toBe(false);
+    expect(pre.src).toBe('https://example.com/ep2.mp3');
+    // 切り替わりでは保存位置を使わず頭から。長さは先読み側の
+    // メタデータから引き継がれる ('loadedmetadata' は来ない)。
+    expect(pre.currentTime).toBe(0);
+    expect(el.querySelector('.player-total').textContent).toBe('30:00');
+    // 旧要素は待機側になり、止めて空に戻される。
+    expect(audio.paused).toBe(true);
+    expect(audio.src).toBe('');
+    // 聴き終えた1件目は既読表示になる。
+    expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(true);
+  });
+
+  it('待機側のイベント (ended / pause) では進まず、状態も壊れない', async () => {
+    await mountPlayer();
+    await startCard(0);
+    const audio = latestAudio();
+    const pre = await startPreload(audio);
+
+    // 待機側で終端や停止のイベントが来ても、本体には響かない。
+    pre.ended = true;
+    pre.dispatchEvent(new window.Event('ended'));
+    pre.dispatchEvent(new window.Event('pause'));
+    await flush();
+    expect(errors).toEqual([]);
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
+    expect(audio.paused).toBe(false);
+    expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(false);
+  });
+
+  it('先読みが失敗したら、遷移時はアクティブ側へ読み込む従来経路に倒れる', async () => {
+    await mountPlayer();
+    await startCard(0);
+    const audio = latestAudio();
+    const pre = await startPreload(audio);
+
+    // 待機側の読み込みエラー (URL の再解決もモックでは失敗する)。
+    // 本体の再生には波及しない。
+    pre.dispatchEvent(new window.Event('error'));
+    await flush();
+    expect(errors).toEqual([]);
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
+    expect(audio.paused).toBe(false);
+
+    // 終了時は役割交代せず、従来どおりアクティブ側へ次曲を載せる。
+    audio.ended = true;
+    audio.paused = true;
+    audio.dispatchEvent(new window.Event('ended'));
+    await flush();
+    expect(errors).toEqual([]);
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+    expect(audio.src).toBe('https://example.com/ep2.mp3');
+    expect(audio.paused).toBe(false);
+    // 駄目だった先読みは破棄される。
+    expect(pre.src).toBe('');
   });
 
   it('単曲リピートでは先読みしない', async () => {

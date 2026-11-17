@@ -32,7 +32,6 @@ import {
   foregroundRecoveryAction,
   KNOWN_DURATION_END_TOLERANCE_SEC,
   END_CHECK_INTERVAL_MS,
-  PRELOAD_REMAINING_SEC,
   loadTimeModel,
   saveTimeModel,
   timeModelKey,
@@ -408,12 +407,6 @@ describe('isWithinStartGuard', () => {
     expect(isWithinStartGuard(-3)).toBe(false);
     expect(isWithinStartGuard(Number.NaN)).toBe(false);
     expect(isWithinStartGuard(null)).toBe(false);
-  });
-});
-
-describe('次の曲の先読み (PRELOAD_REMAINING_SEC)', () => {
-  it('先読みを始める残り秒数は固定60秒', () => {
-    expect(PRELOAD_REMAINING_SEC).toBe(60);
   });
 });
 

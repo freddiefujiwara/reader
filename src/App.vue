@@ -104,7 +104,6 @@ import {
   reachedKnownDurationEnd,
   skipPlan,
   END_CHECK_INTERVAL_MS,
-  PRELOAD_REMAINING_SEC,
   REPEAT_LABELS,
   savePlayMode,
   saveTimeModel,
@@ -1015,10 +1014,34 @@ function flushPlayListen() {
 
 /* ---- ポッドキャスト再生 (端末ローカルのみ) ---- */
 
-// アプリ全体で1つの Audio 要素を共有する。見た目は blog の
-// プレイヤー (.music-player) の部品に揃える (style.css の player-* )。
-const audio = new Audio();
-audio.preload = 'metadata';
+// 音声要素は2つ持ち、再生用と先読み用で役割を交代させる二重
+// バッファにする (次曲への切り替えを、読み込みを挟まず同期的に
+// 行うため。詳しくは「次の曲の先読み」の節)。`audio` は常に
+// アクティブな (再生用) 要素を指し、もう一方が待機 (先読み用)
+// になる。待機側は先読みが必要になるまで作らない (遅延生成)。
+// 見た目は blog のプレイヤー (.music-player) の部品に揃える
+// (style.css の player-* )。
+const deckA = new Audio();
+deckA.preload = 'metadata';
+let deckB = null;
+let audio = deckA;
+
+// 待機側 (先読み用) の要素。まだ無ければ作る (リスナーも付ける)。
+function standbyDeck() {
+  if (audio !== deckA) return deckA;
+  if (!deckB) {
+    deckB = new Audio();
+    deckB.preload = 'metadata';
+    attachDeckListeners(deckB);
+  }
+  return deckB;
+}
+
+// 待機側の要素 (作らない。先読みの破棄やエラーの判定など、
+// 無いなら何もしない場面用)。
+function existingStandby() {
+  return audio !== deckA ? deckA : deckB;
+}
 const currentEpisode = ref(null);
 const isPlaying = ref(false);
 // 音声データ待ち (初回再生前・シーク中) の読み込み表示。
@@ -1233,16 +1256,30 @@ function stopEndCheckTimer() {
   }
 }
 
-/* ---- 次の曲の先読み ----
-   切り替え時点で初めて読み込みが始まると、回線が遅いときに遷移で
-   長く待たされる。再生中の曲の残りが PRELOAD_REMAINING_SEC
-   (60秒) 以下になったら、2つ目の要素で
-   次の曲の読み込みを温めておく (本体は切り替え時に同じ URL を
-   引くので、キャッシュが効いて開始が速くなる)。先読み要素の
-   エラーは無視し、本体には波及させない。遷移・停止・エピソード
-   変更では loadEpisode / stopPlayer が必ず破棄する。 */
-let preloadAudio = null;
+/* ---- 次の曲の先読み (二重バッファ) ----
+   切り替え時点で初めて読み込みが始まると、その読み込みの間は
+   無音になり、バックグラウンドではその隙間にページが凍結されて
+   遷移ごと止まることがある。PR #109 で終了時の処理順序を
+   「次曲の play() を後処理より先に」へ直しても、読み込みの隙間
+   自体が残り、実機では遷移の成否が実行ごとのレースになった
+   (2曲続けて成功した回も、1曲目で詰まった回もある)。そこで
+   待機側の要素へ次曲を先読みしておき、終了時は要素の役割を
+   交代させて同期的に play() する (loadEpisode の役割交代)。
+   先読みは、再生中の曲が始まった時点 ('playing') から始める。
+   再生中はページが生きているので、その間に次曲を読み終える
+   のが狙い。かつての残り60秒方式では、読み終える前に曲が
+   終わることがあった。再生中トラックの初期読み込みと競合
+   しないよう、起点は 'playing' (実際に再生が始まった時点)
+   に置き、timeupdate でも対象の変化に追随する。
+   待機側のエラーは本体へ波及させない。その曲の URL を1回だけ
+   再解決して待機側へ張り直し (refreshPreloadUrl)、それでも
+   駄目なら先読み失敗として印を付け、遷移時は従来どおり
+   アクティブ側へ読み込む経路に倒す。 */
 let preloadId = null;
+// 待機側の読み込みがエラーになったか (再解決で張り直せたら下ろす)。
+let preloadFailed = false;
+// URL の再解決を既に試した先読み対象 (対象ごとに1回だけ試す)。
+let preloadRetriedId = null;
 
 // 次に再生することが事前に確定している記事 (無ければ null)。
 // 次曲の決定は本体の自動送り (nextEpisodePlan) と同じにするが、
@@ -1263,30 +1300,70 @@ function preloadTarget() {
   return next;
 }
 
+// 待機側の先読みを破棄する (待機要素を空に戻す)。
 function discardPreload() {
-  if (!preloadAudio) return;
-  preloadAudio.removeAttribute('src');
-  preloadAudio.load();
-  preloadAudio = null;
   preloadId = null;
+  preloadFailed = false;
+  preloadRetriedId = null;
+  const standby = existingStandby();
+  if (!standby) return;
+  standby.removeAttribute('src');
+  standby.load();
 }
 
-// timeupdate から呼ばれる。対象が変わっていたら張り替え、対象が
-// 無くなったら破棄する。残りが多い間は読み込みを始めない。
+// 'playing' と timeupdate から呼ばれる。対象が変わっていたら
+// 待機側へ張り替え、対象が無くなったら破棄する。先読みの開始
+// タイミングは呼び出し側 (再生が始まった時点) が決める。
 function updatePreload() {
   const target = preloadTarget();
   if (!target) {
-    discardPreload();
+    if (preloadId !== null) discardPreload();
     return;
   }
-  if (preloadAudio && preloadId !== target.id) discardPreload();
-  if (preloadAudio) return;
-  const remaining = displayDuration.value - displayTime.value;
-  if (!Number.isFinite(remaining) || remaining > PRELOAD_REMAINING_SEC) return;
-  preloadAudio = new Audio();
-  preloadAudio.preload = 'auto';
+  if (preloadId === target.id) return;
+  const standby = standbyDeck();
   preloadId = target.id;
-  preloadAudio.src = target.audioUrl;
+  preloadFailed = false;
+  preloadRetriedId = null;
+  standby.preload = 'auto';
+  standby.src = target.audioUrl;
+}
+
+// 待機側 (先読み) の読み込みエラー。本体には波及させず、その曲の
+// URL を1回だけ再解決して張り直す (refreshPreloadUrl)。再解決
+// できなければ preloadFailed を立てたままにし、遷移時は
+// アクティブ側へ読み込む従来経路に倒れる (loadEpisode)。
+function handlePreloadError(el) {
+  if (el !== existingStandby() || preloadId === null || preloadFailed) return;
+  preloadFailed = true;
+  const id = preloadId;
+  if (preloadRetriedId === id) return;
+  preloadRetriedId = id;
+  refreshPreloadUrl(id);
+}
+
+// 先読み対象のフィードを取り直して新鮮な URL を引き、待機側へ
+// 張り直す。stale なエピソードの開始時 (startStaleEpisode) と
+// 同じ経路。失効した YouTube の URL が、先読みを始めた時点で
+// 既に死んでいるケースの手当て。
+async function refreshPreloadUrl(id) {
+  try {
+    const article = state.value.articles.find((a) => a.id === id);
+    const feed = article && state.value.feeds.find((f) => f.id === article.feedId);
+    if (!feed) return;
+    const result = await fetchOneFeed(feed);
+    if (!result.ok) return;
+    await ingestFeedArticles(result.feed, result.entries, new Date().toISOString(), null);
+    await reloadLocal();
+    // 取り直している間に遷移・対象変更が起きていたら触らない。
+    if (preloadId !== id) return;
+    const fresh = state.value.articles.find((a) => a.id === id);
+    if (!fresh || !fresh.audioUrl) return;
+    preloadFailed = false;
+    standbyDeck().src = fresh.audioUrl;
+  } catch {
+    // 再解決できなければ preloadFailed のまま (遷移時に通常経路)。
+  }
 }
 
 const speedLabel = computed(() => `${speed.value}×`);
@@ -1392,17 +1469,33 @@ function updateMediaSession(article) {
 // に残った位置が次の曲の冒頭を飛ばして見えた (実機で 0:03 から
 // 始まる例を確認)。
 function loadEpisode(article, { resume = true } = {}) {
-  discardPreload();
-  savePlayPos();
   // 渡された記事は描画時点 (またはキュー固定時点) の控えで、その後の
   // 更新で durationSec / audioUrl が埋まっても古いままのことがある。
   // 開始時に状態側の最新を id で引き直し、見つからなければ渡された
   // ものをそのまま使う。
   const ep = state.value.articles.find((a) => a.id === article.id) || article;
+  // 二重バッファの役割交代ができるか: 待機側がこのエピソードを
+  // 先読み済みで、読み込みも失敗しておらず、URL が開始時点の
+  // 最新と一致するときだけ、待機側をそのままアクティブへ昇格
+  // させる (読み込みを挟まず同期的に切り替えるため)。それ以外は
+  // 先読みを破棄し、従来どおりアクティブ側へ URL を載せ直す。
+  const standby = existingStandby();
+  const swap = !!standby && preloadId === ep.id && !preloadFailed && !!ep.audioUrl
+    && standby.src === ep.audioUrl;
+  if (!swap) discardPreload();
+  savePlayPos();
   // 視聴ログ: 前のエピソードの再生時間は、切り替えの前に確定だけ
   // しておく (新しい曲の再生区間を確定に巻き込まないため)。確定
   // したイベントの送信と、計測対象の差し替えは再生開始の後に行う。
   const pendingListen = finalizePlayListen();
+  let oldDeck = null;
+  if (swap) {
+    oldDeck = audio;
+    audio = standby;
+    preloadId = null;
+    preloadFailed = false;
+    preloadRetriedId = null;
+  }
   currentEpisode.value = ep;
   currentSrcStale = !!ep.audioStale;
   currentSrcUrl = ep.audioUrl || '';
@@ -1424,10 +1517,31 @@ function loadEpisode(article, { resume = true } = {}) {
   pendingSeek = resume
     ? (playPosMemory.has(ep.id) ? playPosMemory.get(ep.id) : (ep.playPos || 0))
     : 0;
-  audio.src = ep.audioUrl;
-  audio.playbackRate = speed.value;
+  if (swap) {
+    audio.playbackRate = speed.value;
+    // 先読み側は 'loadedmetadata' を既に (待機側として) 受けて
+    // いて、昇格後には再び来ないため、メタデータ由来の初期化
+    // (長さの反映と再開位置の復元) はここで済ませる。メタデータ
+    // がまだなら、昇格後の 'loadedmetadata' が拾う。
+    if (Number.isFinite(audio.duration)) applyDeckMetadata(audio);
+    // 切り替わりでは保存位置を使わず頭から (メタデータ未着で
+    // 復元が走らなかった場合も含め、要素側の位置を 0 に揃える)。
+    if (!resume) audio.currentTime = 0;
+  } else {
+    audio.src = ep.audioUrl;
+    audio.playbackRate = speed.value;
+  }
   updateMediaSession(ep);
   tryPlayAudio();
+  if (oldDeck) {
+    // 旧要素は待機側になる。再生開始 (play()) を出した後で止めて
+    // 空に戻す (後処理を再生開始より先にしない原則は維持する)。
+    // 旧要素から遅れて来るイベントは、リスナー側のガード
+    // (アクティブでない要素は無視) で状態へ響かない。
+    oldDeck.pause();
+    oldDeck.removeAttribute('src');
+    oldDeck.load();
+  }
   // 視聴ログ: 確定済みイベントの送信と、計測対象の新しいエピソード
   // への差し替えは、再生開始を出した後に行う。終了経路では、曲間
   // の無音の隙間にページが凍結されうるため、イベント送信 (fetch)
@@ -1637,20 +1751,36 @@ function stopPlayer() {
   }
 }
 
-audio.addEventListener('loadedmetadata', () => {
-  duration.value = audio.duration;
-  audio.playbackRate = speed.value;
+// 要素のメタデータが読めたときの初期化 (長さの反映・速度・
+// 再開位置の復元)。'loadedmetadata' イベントから呼ばれるほか、
+// 先読み済み要素の役割交代 (loadEpisode) ではイベントが再び
+// 来ないため、そちらからも直接呼ばれる。
+function applyDeckMetadata(el) {
+  duration.value = el.duration;
+  el.playbackRate = speed.value;
   if (pendingSeek > 0) {
     // 保存値は正しい長さ基準。旧バージョンが要素スケールで保存した
     // 値は interpretStoredPlayPos で割り戻してから要素へ渡す。
     const ctx = mappingCtx.value;
     const restored = interpretStoredPlayPos(pendingSeek, ctx);
-    audio.currentTime = clampSeek(toElementPosition(restored, ctx), audio.duration);
-    currentTime.value = audio.currentTime;
+    el.currentTime = clampSeek(toElementPosition(restored, ctx), el.duration);
+    currentTime.value = el.currentTime;
   }
   pendingSeek = 0;
+}
+
+// 要素に紐づく処理は、すべて「現在アクティブな要素」に対して
+// だけ働く。2つの要素の両方へ同じリスナーを付け、各ハンドラの
+// 冒頭でアクティブ側かどうかを確認する。待機側のイベントは、
+// 先読みのエラー処理を除いて無視する (役割交代の前後で、旧要素
+// から遅れて来る 'pause' や 'error' で状態を壊さないため)。
+function attachDeckListeners(el) {
+el.addEventListener('loadedmetadata', () => {
+  if (el !== audio) return;
+  applyDeckMetadata(el);
 });
-audio.addEventListener('timeupdate', () => {
+el.addEventListener('timeupdate', () => {
+  if (el !== audio) return;
   if (!seeking.value) currentTime.value = audio.currentTime || 0;
   samplePlaybackRate();
   updatePreload();
@@ -1668,7 +1798,8 @@ audio.addEventListener('timeupdate', () => {
   // では有効にしない。reachedKnownDurationEnd 側で判定)。
   checkKnownDurationEnd();
 });
-audio.addEventListener('play', () => {
+el.addEventListener('play', () => {
+  if (el !== audio) return;
   isPlaying.value = true;
   // 視聴ログ: 再生区間を開く。
   listenTracker.start();
@@ -1676,7 +1807,8 @@ audio.addEventListener('play', () => {
   // 誤判定しないため)。
   stallTracker.reset(performance.now());
 });
-audio.addEventListener('pause', () => {
+el.addEventListener('pause', () => {
+  if (el !== audio) return;
   isPlaying.value = false;
   // 視聴ログ: 再生区間を閉じる (積算の確定は停止の区切りで行う)。
   listenTracker.pause();
@@ -1690,23 +1822,40 @@ audio.addEventListener('pause', () => {
   checkKnownDurationEnd();
 });
 // 読み込み表示: データ待ちの間だけ出し、再生可能になったら消す。
-audio.addEventListener('waiting', () => { isLoading.value = true; });
-audio.addEventListener('seeking', () => {
+el.addEventListener('waiting', () => {
+  if (el !== audio) return;
+  isLoading.value = true;
+});
+el.addEventListener('seeking', () => {
+  if (el !== audio) return;
   rateSample = null;
   if (audio.readyState < 3) isLoading.value = true;
 });
-audio.addEventListener('seeked', () => {
+el.addEventListener('seeked', () => {
+  if (el !== audio) return;
   if (audio.readyState >= 3) isLoading.value = false;
   // シーク直後はストール計測をやり直す (猶予を持たせる)。
   stallTracker.reset(performance.now());
 });
-audio.addEventListener('playing', () => {
+el.addEventListener('playing', () => {
+  if (el !== audio) return;
   isLoading.value = false;
   // 実際に再生が始まったので、ここからストール検知の対象になる。
   episodePlayStarted = true;
+  // 再生が始まったら、待機側で次曲の先読みを開始する
+  // (二重バッファ。再生中はページが生きている間に読み終える)。
+  updatePreload();
 });
-audio.addEventListener('canplay', () => { isLoading.value = false; });
-audio.addEventListener('error', () => {
+el.addEventListener('canplay', () => {
+  if (el !== audio) return;
+  isLoading.value = false;
+});
+el.addEventListener('error', () => {
+  if (el !== audio) {
+    // 待機側のエラーは先読み側で処理し、本体へは波及させない。
+    handlePreloadError(el);
+    return;
+  }
   isLoading.value = false;
   // 対象は要素に載っている当のURLへのエラーだけに限る
   // (src の差し替え・破棄に伴う遅れて来る error は失敗として
@@ -1714,6 +1863,12 @@ audio.addEventListener('error', () => {
   if (!currentEpisode.value || !currentSrcUrl || audio.src !== currentSrcUrl) return;
   handlePlaybackFailure();
 });
+el.addEventListener('ended', () => {
+  if (el === audio) handleEpisodeEnded();
+});
+}
+attachDeckListeners(deckA);
+// 待機側 (deckB) のリスナーは、生成時 (standbyDeck) に付ける。
 
 // 再生に失敗したときの共通処理 (error イベント・play() の拒否・
 // ストール検知から呼ばれる)。送り先は player.js の
@@ -1823,8 +1978,6 @@ function handleEpisodeEnded() {
   markEpisodeRead(ep);
   clearPlayPos(ep.id);
 }
-audio.addEventListener('ended', handleEpisodeEnded);
-
 // フォアグラウンドへ戻ったときの再生回復。バックグラウンドで
 // タイマーが止まりページが suspend / freeze されると、その間に
 // 曲が終わっても次曲への進行が起きず、自動送りの play() が
