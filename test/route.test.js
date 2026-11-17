@@ -14,7 +14,7 @@ import {
 
 const FEEDS = [
   { id: 'b81e59da11f890d2', category: 'ポッドキャスト' },
-  { id: '35797c975382389f', category: 'private' },
+  { id: '33452296be85fdbc', category: 'private' },
   { id: '85ce0e8df21fc1c6', category: '音楽' },
 ];
 const ID_A = 'b81e59da11f890d2';

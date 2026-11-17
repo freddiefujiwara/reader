@@ -39,9 +39,9 @@ const FEEDS = [
     unreadCount: 1,
   },
   {
-    id: '35797c975382389f',
+    id: '33452296be85fdbc',
     title: 'X freddie',
-    url: 'https://a.ze.gs/x.freddie.xml',
+    url: 'https://example.com/x.freddie.xml',
     category: 'private',
     lastStatus: '200',
     lastError: '',
