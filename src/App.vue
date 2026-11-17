@@ -1042,6 +1042,13 @@ function standbyDeck() {
 function existingStandby() {
   return audio !== deckA ? deckA : deckB;
 }
+
+// 要素の読み込みを空に戻す (src を外して読み直させる)。先読みの
+// 破棄・役割交代後の旧要素の片付け・プレイヤー停止で共通に使う。
+function unloadDeck(el) {
+  el.removeAttribute('src');
+  el.load();
+}
 const currentEpisode = ref(null);
 const isPlaying = ref(false);
 // 音声データ待ち (初回再生前・シーク中) の読み込み表示。
@@ -1065,6 +1072,11 @@ let playedInRound = new Set();
 // 再生した順の記事ID列 (ランダム時の「前へ」でさかのぼるため、
 // blog の musicPlayer の history と同じく上限100件で保持する)。
 let playHistory = [];
+// 再生キューの記事ID列 (自動送り・失敗時の送り・前へ／次へ・
+// 先読み対象の決定で共通に使う)。
+function queueIds() {
+  return playQueue.value.map((a) => a.id);
+}
 // 再生位置のメモリ上の控え (DB 読み直しを待たずに再開するため)。
 const playPosMemory = new Map();
 let pendingSeek = 0;
@@ -1190,13 +1202,25 @@ function samplePlaybackRate() {
    始め、stopPlayer と終了フローで確実に止める。 */
 let endCheckTimer = null;
 
+// 現在の再生位置が既知の長さ (durationSec) へ到達したか。
+// 位置は要素の現在値から変換して求める (終端で timeupdate が
+// 止まると、currentTime ref は最後のイベントの値のままになり、
+// 要素側だけが終端まで進んでいることがあるため)。到達判定
+// (checkKnownDurationEnd) とフォアグラウンド復帰時の回復
+// (recoverPlaybackOnForeground) で共通に使う。
+function reachedEndNow() {
+  return reachedKnownDurationEnd({
+    displayPos: toDisplayPosition(audio.currentTime || 0, mappingCtx.value),
+    trueSec: trueDuration.value,
+    elementDuration: duration.value,
+    hasMeasuredModel: !!measuredModel,
+  });
+}
+
 // 既知の長さへの到達判定。timeupdate とタイマーの tick と
-// 'pause' イベントの3経路から呼ばれる。位置は要素の現在値
-// から変換して求める (終端で timeupdate が止まると、
-// currentTime ref は最後のイベントの値のままになり、要素側
-// だけが終端まで進んでいることがあるため)。到達していれば
-// 即座に終了フローへ進むので、tick (0.5秒間隔) 経由でも
-// 到達から1秒以内に遷移する。
+// 'pause' イベントの3経路から呼ばれる。到達していれば即座に
+// 終了フローへ進むので、tick (0.5秒間隔) 経由でも到達から
+// 1秒以内に遷移する。
 // 入口の条件は「再生の意思 (playWanted) があること」で見る。
 // 要素の 'pause' で駆動される isPlaying を条件にしていた頃は、
 // 要素が終端で 'ended' を出さず 'pause' だけ出すと、その
@@ -1206,13 +1230,7 @@ let endCheckTimer = null;
 // ので、そちらでは発火しない。
 function checkKnownDurationEnd() {
   if (!currentEpisode.value || !playWanted || endFlowDone) return false;
-  const pos = toDisplayPosition(audio.currentTime || 0, mappingCtx.value);
-  if (!reachedKnownDurationEnd({
-    displayPos: pos,
-    trueSec: trueDuration.value,
-    elementDuration: duration.value,
-    hasMeasuredModel: !!measuredModel,
-  })) return false;
+  if (!reachedEndNow()) return false;
   handleEpisodeEnded();
   return true;
 }
@@ -1281,6 +1299,14 @@ let preloadFailed = false;
 // URL の再解決を既に試した先読み対象 (対象ごとに1回だけ試す)。
 let preloadRetriedId = null;
 
+// 先読みの追跡状態を初期状態へ戻す (先読みの破棄と、役割交代で
+// 待機側が先読みでなくなるときに使う)。
+function resetPreloadState() {
+  preloadId = null;
+  preloadFailed = false;
+  preloadRetriedId = null;
+}
+
 // 次に再生することが事前に確定している記事 (無ければ null)。
 // 次曲の決定は本体の自動送り (nextEpisodePlan) と同じにするが、
 // ランダムは次が遷移時の抽選で決まるため対象外とし、単曲
@@ -1288,7 +1314,7 @@ let preloadRetriedId = null;
 function preloadTarget() {
   if (!currentEpisode.value || shuffleOn.value || repeatMode.value === 'one') return null;
   const plan = nextEpisodePlan({
-    queue: playQueue.value.map((a) => a.id),
+    queue: queueIds(),
     currentId: currentEpisode.value.id,
     repeat: repeatMode.value,
     shuffle: false,
@@ -1302,13 +1328,10 @@ function preloadTarget() {
 
 // 待機側の先読みを破棄する (待機要素を空に戻す)。
 function discardPreload() {
-  preloadId = null;
-  preloadFailed = false;
-  preloadRetriedId = null;
+  resetPreloadState();
   const standby = existingStandby();
   if (!standby) return;
-  standby.removeAttribute('src');
-  standby.load();
+  unloadDeck(standby);
 }
 
 // 'playing' と timeupdate から呼ばれる。対象が変わっていたら
@@ -1492,9 +1515,7 @@ function loadEpisode(article, { resume = true } = {}) {
   if (swap) {
     oldDeck = audio;
     audio = standby;
-    preloadId = null;
-    preloadFailed = false;
-    preloadRetriedId = null;
+    resetPreloadState();
   }
   currentEpisode.value = ep;
   currentSrcStale = !!ep.audioStale;
@@ -1539,8 +1560,7 @@ function loadEpisode(article, { resume = true } = {}) {
     // 旧要素から遅れて来るイベントは、リスナー側のガード
     // (アクティブでない要素は無視) で状態へ響かない。
     oldDeck.pause();
-    oldDeck.removeAttribute('src');
-    oldDeck.load();
+    unloadDeck(oldDeck);
   }
   // 視聴ログ: 確定済みイベントの送信と、計測対象の新しいエピソード
   // への差し替えは、再生開始を出した後に行う。終了経路では、曲間
@@ -1670,7 +1690,7 @@ function playButtonLabel(a) {
 function skipByTrack(delta) {
   if (!currentEpisode.value) return;
   const plan = skipPlan({
-    queue: playQueue.value.map((a) => a.id),
+    queue: queueIds(),
     currentId: currentEpisode.value.id,
     delta,
     shuffle: shuffleOn.value,
@@ -1687,14 +1707,20 @@ function skipByTrack(delta) {
   loadEpisode(target, { resume: false });
 }
 
+// 表示スケールの位置へシークする (補正が効いている曲では要素の
+// スケールへ変換してから渡す)。スキップとシークバーで共通に使う。
+// 変換を挟んだ窓は実測モデルのサンプルとして使えないため捨てる。
+function seekToDisplayPosition(displayPos) {
+  audio.currentTime = toElementPosition(displayPos, mappingCtx.value);
+  currentTime.value = audio.currentTime;
+  rateSample = null;
+}
+
 function skipBy(delta) {
   if (!currentEpisode.value) return;
   if (mappingOn.value) {
     // スキップ量は表示 (正しい長さ) 基準で解釈し、要素へ戻して渡す。
-    const target = clampSeek(displayTime.value + delta, displayDuration.value);
-    audio.currentTime = toElementPosition(target, mappingCtx.value);
-    currentTime.value = audio.currentTime;
-    rateSample = null;
+    seekToDisplayPosition(clampSeek(displayTime.value + delta, displayDuration.value));
     return;
   }
   audio.currentTime = clampSeek((audio.currentTime || 0) + delta, audio.duration);
@@ -1710,9 +1736,7 @@ function onSeekInput(event) {
   const value = Number(event.target.value);
   if (mappingOn.value) {
     // バーの値は表示スケール。要素のスケールへ変換してから渡す。
-    audio.currentTime = toElementPosition(value, mappingCtx.value);
-    currentTime.value = audio.currentTime;
-    rateSample = null;
+    seekToDisplayPosition(value);
     return;
   }
   currentTime.value = value;
@@ -1729,8 +1753,7 @@ function stopPlayer() {
   stopEndCheckTimer();
   discardPreload();
   audio.pause();
-  audio.removeAttribute('src');
-  audio.load();
+  unloadDeck(audio);
   currentEpisode.value = null;
   currentSrcStale = false;
   currentSrcUrl = '';
@@ -1775,97 +1798,97 @@ function applyDeckMetadata(el) {
 // 先読みのエラー処理を除いて無視する (役割交代の前後で、旧要素
 // から遅れて来る 'pause' や 'error' で状態を壊さないため)。
 function attachDeckListeners(el) {
-el.addEventListener('loadedmetadata', () => {
-  if (el !== audio) return;
-  applyDeckMetadata(el);
-});
-el.addEventListener('timeupdate', () => {
-  if (el !== audio) return;
-  if (!seeking.value) currentTime.value = audio.currentTime || 0;
-  samplePlaybackRate();
-  updatePreload();
-  if (Date.now() - lastPosSaveAt > 10_000) {
-    lastPosSaveAt = Date.now();
+  el.addEventListener('loadedmetadata', () => {
+    if (el !== audio) return;
+    applyDeckMetadata(el);
+  });
+  el.addEventListener('timeupdate', () => {
+    if (el !== audio) return;
+    if (!seeking.value) currentTime.value = audio.currentTime || 0;
+    samplePlaybackRate();
+    updatePreload();
+    if (Date.now() - lastPosSaveAt > 10_000) {
+      lastPosSaveAt = Date.now();
+      savePlayPos();
+    }
+    // 既知の長さ (durationSec) が判明している曲では、表示位置が
+    // その長さに達した時点で終了フローへ進める ('ended' と二重に
+    // は走らない)。iOS では fMP4 の終端で要素が止まって 'ended'
+    // が来ないことがあり、要素 duration と一致する通常の曲でも
+    // これが唯一の到達判定になる。要素 duration とずれている曲
+    // では、モデル変換の誤りで早期終了しないよう、この曲で実測
+    // したモデルがある場合に限る (端末保存の learned の流用だけ
+    // では有効にしない。reachedKnownDurationEnd 側で判定)。
+    checkKnownDurationEnd();
+  });
+  el.addEventListener('play', () => {
+    if (el !== audio) return;
+    isPlaying.value = true;
+    // 視聴ログ: 再生区間を開く。
+    listenTracker.start();
+    // 再開のたびにストール計測をやり直す (一時停止を挟んだ窓で
+    // 誤判定しないため)。
+    stallTracker.reset(performance.now());
+  });
+  el.addEventListener('pause', () => {
+    if (el !== audio) return;
+    isPlaying.value = false;
+    // 視聴ログ: 再生区間を閉じる (積算の確定は停止の区切りで行う)。
+    listenTracker.pause();
     savePlayPos();
-  }
-  // 既知の長さ (durationSec) が判明している曲では、表示位置が
-  // その長さに達した時点で終了フローへ進める ('ended' と二重に
-  // は走らない)。iOS では fMP4 の終端で要素が止まって 'ended'
-  // が来ないことがあり、要素 duration と一致する通常の曲でも
-  // これが唯一の到達判定になる。要素 duration とずれている曲
-  // では、モデル変換の誤りで早期終了しないよう、この曲で実測
-  // したモデルがある場合に限る (端末保存の learned の流用だけ
-  // では有効にしない。reachedKnownDurationEnd 側で判定)。
-  checkKnownDurationEnd();
-});
-el.addEventListener('play', () => {
-  if (el !== audio) return;
-  isPlaying.value = true;
-  // 視聴ログ: 再生区間を開く。
-  listenTracker.start();
-  // 再開のたびにストール計測をやり直す (一時停止を挟んだ窓で
-  // 誤判定しないため)。
-  stallTracker.reset(performance.now());
-});
-el.addEventListener('pause', () => {
-  if (el !== audio) return;
-  isPlaying.value = false;
-  // 視聴ログ: 再生区間を閉じる (積算の確定は停止の区切りで行う)。
-  listenTracker.pause();
-  savePlayPos();
-  // 要素が終端で 'ended' を出さずに止まった場合は、この
-  // 'pause' が最後の検出機会になる。位置が既知の終端近傍に
-  // あり、再生の意思が残っているときだけ終了フローへ進む
-  // (条件の判定は checkKnownDurationEnd 側)。本人の一時停止
-  // (プレイヤーのボタン・Media Session) は、先に playWanted
-  // を下ろしてから要素を止めるため、ここでは発火しない。
-  checkKnownDurationEnd();
-});
-// 読み込み表示: データ待ちの間だけ出し、再生可能になったら消す。
-el.addEventListener('waiting', () => {
-  if (el !== audio) return;
-  isLoading.value = true;
-});
-el.addEventListener('seeking', () => {
-  if (el !== audio) return;
-  rateSample = null;
-  if (audio.readyState < 3) isLoading.value = true;
-});
-el.addEventListener('seeked', () => {
-  if (el !== audio) return;
-  if (audio.readyState >= 3) isLoading.value = false;
-  // シーク直後はストール計測をやり直す (猶予を持たせる)。
-  stallTracker.reset(performance.now());
-});
-el.addEventListener('playing', () => {
-  if (el !== audio) return;
-  isLoading.value = false;
-  // 実際に再生が始まったので、ここからストール検知の対象になる。
-  episodePlayStarted = true;
-  // 再生が始まったら、待機側で次曲の先読みを開始する
-  // (二重バッファ。再生中はページが生きている間に読み終える)。
-  updatePreload();
-});
-el.addEventListener('canplay', () => {
-  if (el !== audio) return;
-  isLoading.value = false;
-});
-el.addEventListener('error', () => {
-  if (el !== audio) {
-    // 待機側のエラーは先読み側で処理し、本体へは波及させない。
-    handlePreloadError(el);
-    return;
-  }
-  isLoading.value = false;
-  // 対象は要素に載っている当のURLへのエラーだけに限る
-  // (src の差し替え・破棄に伴う遅れて来る error は失敗として
-  // 扱わない)。実際の処理は共通の失敗処理へ集約する。
-  if (!currentEpisode.value || !currentSrcUrl || audio.src !== currentSrcUrl) return;
-  handlePlaybackFailure();
-});
-el.addEventListener('ended', () => {
-  if (el === audio) handleEpisodeEnded();
-});
+    // 要素が終端で 'ended' を出さずに止まった場合は、この
+    // 'pause' が最後の検出機会になる。位置が既知の終端近傍に
+    // あり、再生の意思が残っているときだけ終了フローへ進む
+    // (条件の判定は checkKnownDurationEnd 側)。本人の一時停止
+    // (プレイヤーのボタン・Media Session) は、先に playWanted
+    // を下ろしてから要素を止めるため、ここでは発火しない。
+    checkKnownDurationEnd();
+  });
+  // 読み込み表示: データ待ちの間だけ出し、再生可能になったら消す。
+  el.addEventListener('waiting', () => {
+    if (el !== audio) return;
+    isLoading.value = true;
+  });
+  el.addEventListener('seeking', () => {
+    if (el !== audio) return;
+    rateSample = null;
+    if (audio.readyState < 3) isLoading.value = true;
+  });
+  el.addEventListener('seeked', () => {
+    if (el !== audio) return;
+    if (audio.readyState >= 3) isLoading.value = false;
+    // シーク直後はストール計測をやり直す (猶予を持たせる)。
+    stallTracker.reset(performance.now());
+  });
+  el.addEventListener('playing', () => {
+    if (el !== audio) return;
+    isLoading.value = false;
+    // 実際に再生が始まったので、ここからストール検知の対象になる。
+    episodePlayStarted = true;
+    // 再生が始まったら、待機側で次曲の先読みを開始する
+    // (二重バッファ。再生中はページが生きている間に読み終える)。
+    updatePreload();
+  });
+  el.addEventListener('canplay', () => {
+    if (el !== audio) return;
+    isLoading.value = false;
+  });
+  el.addEventListener('error', () => {
+    if (el !== audio) {
+      // 待機側のエラーは先読み側で処理し、本体へは波及させない。
+      handlePreloadError(el);
+      return;
+    }
+    isLoading.value = false;
+    // 対象は要素に載っている当のURLへのエラーだけに限る
+    // (src の差し替え・破棄に伴う遅れて来る error は失敗として
+    // 扱わない)。実際の処理は共通の失敗処理へ集約する。
+    if (!currentEpisode.value || !currentSrcUrl || audio.src !== currentSrcUrl) return;
+    handlePlaybackFailure();
+  });
+  el.addEventListener('ended', () => {
+    if (el === audio) handleEpisodeEnded();
+  });
 }
 attachDeckListeners(deckA);
 // 待機側 (deckB) のリスナーは、生成時 (standbyDeck) に付ける。
@@ -1895,7 +1918,7 @@ function handlePlaybackFailure() {
   }
   consecutivePlayFailures += 1;
   const plan = failedEpisodePlan({
-    queue: playQueue.value.map((a) => a.id),
+    queue: queueIds(),
     currentId: ep.id,
     repeat: repeatMode.value,
     shuffle: shuffleOn.value,
@@ -1961,7 +1984,7 @@ function handleEpisodeEnded() {
     return;
   }
   const plan = nextEpisodePlan({
-    queue: playQueue.value.map((a) => a.id),
+    queue: queueIds(),
     currentId: ep.id,
     repeat: repeatMode.value,
     shuffle: shuffleOn.value,
@@ -1993,12 +2016,7 @@ function recoverPlaybackOnForeground() {
     ended: audio.ended,
     endFlowDone,
     paused: audio.paused,
-    reachedEnd: !!currentEpisode.value && reachedKnownDurationEnd({
-      displayPos: toDisplayPosition(audio.currentTime || 0, mappingCtx.value),
-      trueSec: trueDuration.value,
-      elementDuration: duration.value,
-      hasMeasuredModel: !!measuredModel,
-    }),
+    reachedEnd: !!currentEpisode.value && reachedEndNow(),
   });
   if (action === 'advance') handleEpisodeEnded();
   else if (action === 'resume') tryPlayAudio();
