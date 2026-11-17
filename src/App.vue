@@ -1289,10 +1289,14 @@ function stopEndCheckTimer() {
    終わることがあった。再生中トラックの初期読み込みと競合
    しないよう、起点は 'playing' (実際に再生が始まった時点)
    に置き、timeupdate でも対象の変化に追随する。
-   待機側のエラーは本体へ波及させない。その曲の URL を1回だけ
-   再解決して待機側へ張り直し (refreshPreloadUrl)、それでも
-   駄目なら先読み失敗として印を付け、遷移時は従来どおり
-   アクティブ側へ読み込む経路に倒す。 */
+   待機側のエラーは本体へ波及させない。エラーの印 (preloadFailed)
+   は「現在の読み込みの試行」に対するもので、初回のエラーでは
+   その場で同じ URL を読み直して試行を作り直す
+   (handlePreloadError)。あわせてその曲の URL を1回だけ再解決し
+   (refreshPreloadUrl)、新しい URL が来たら張り替える。作り直
+   した試行もエラーになり、再解決でも回復しなければ先読み失敗
+   として印を付け、遷移時は従来どおりアクティブ側へ読み込む
+   経路に倒す。 */
 let preloadId = null;
 // 待機側の読み込みがエラーになったか (再解決で張り直せたら下ろす)。
 let preloadFailed = false;
@@ -1352,16 +1356,29 @@ function updatePreload() {
   standby.src = target.audioUrl;
 }
 
-// 待機側 (先読み) の読み込みエラー。本体には波及させず、その曲の
-// URL を1回だけ再解決して張り直す (refreshPreloadUrl)。再解決
-// できなければ preloadFailed を立てたままにし、遷移時は
-// アクティブ側へ読み込む従来経路に倒れる (loadEpisode)。
+// 待機側 (先読み) の読み込みエラー。本体には波及させない。エラー
+// になったのは現在の読み込みの試行で、URL 自体が死んでいるとは
+// 限らない (中継や回線の一時的な失敗、ブラウザが先読みの取得を
+// 途中で止めるなど)。初回のエラーでは、まずその場で同じ URL を
+// 読み直して試行を作り直し、作り直した試行については印を下ろす。
+// 非同期の URL 再解決 (refreshPreloadUrl) の完了を待たないと
+// 役割交代できない形だと、前の曲が短いときに再解決が終わり切ら
+// ず、遷移が従来経路へ倒れて無音の隙間で止まる (実機で前曲
+// 121秒・61秒のときに遷移失敗、前曲が長いときは成功を確認)。
+// 作り直した試行もエラーになった場合は印を立てたままにし、
+// 再解決でも回復しなければ遷移時はアクティブ側へ読み込む
+// 従来経路に倒れる (loadEpisode)。
 function handlePreloadError(el) {
   if (el !== existingStandby() || preloadId === null || preloadFailed) return;
   preloadFailed = true;
   const id = preloadId;
   if (preloadRetriedId === id) return;
   preloadRetriedId = id;
+  // その場で同じ URL を読み直して試行を作り直す。作り直した
+  // 試行はまだエラーではないので、印はここで下ろす (遷移時の
+  // 役割交代は、この印ではなく現在の試行の状態で決まる)。
+  el.load();
+  preloadFailed = false;
   refreshPreloadUrl(id);
 }
 
@@ -1382,10 +1399,17 @@ async function refreshPreloadUrl(id) {
     if (preloadId !== id) return;
     const fresh = state.value.articles.find((a) => a.id === id);
     if (!fresh || !fresh.audioUrl) return;
+    const standby = standbyDeck();
+    // その場で読み直した試行が生きていて URL も同じなら、張り
+    // 替えると読み込みが最初からやり直しになるので触らない。
+    // 試行がエラーになっているか URL が変わったときだけ張り替える。
+    if (!preloadFailed && standby.src === fresh.audioUrl) return;
     preloadFailed = false;
-    standbyDeck().src = fresh.audioUrl;
+    standby.src = fresh.audioUrl;
   } catch {
-    // 再解決できなければ preloadFailed のまま (遷移時に通常経路)。
+    // 再解決できなくても、その場で読み直した試行が生きていれば
+    // 遷移は役割交代で進む。試行もエラーになっていれば
+    // preloadFailed のまま (遷移時に通常経路)。
   }
 }
 
@@ -1498,10 +1522,12 @@ function loadEpisode(article, { resume = true } = {}) {
   // ものをそのまま使う。
   const ep = state.value.articles.find((a) => a.id === article.id) || article;
   // 二重バッファの役割交代ができるか: 待機側がこのエピソードを
-  // 先読み済みで、読み込みも失敗しておらず、URL が開始時点の
-  // 最新と一致するときだけ、待機側をそのままアクティブへ昇格
-  // させる (読み込みを挟まず同期的に切り替えるため)。それ以外は
-  // 先読みを破棄し、従来どおりアクティブ側へ URL を載せ直す。
+  // 先読み対象にしていて、現在の読み込みの試行がエラーになって
+  // おらず、URL が開始時点の最新と一致するときに、待機側をその
+  // ままアクティブへ昇格させる。読み込みの完了は条件にしない
+  // (途中の要素でも、昇格後の play() で取得が続き、再生しながら
+  // 残りを読み込めるため)。それ以外は先読みを破棄し、従来どおり
+  // アクティブ側へ URL を載せ直す。
   const standby = existingStandby();
   const swap = !!standby && preloadId === ep.id && !preloadFailed && !!ep.audioUrl
     && standby.src === ep.audioUrl;

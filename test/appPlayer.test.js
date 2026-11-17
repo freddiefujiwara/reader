@@ -1027,14 +1027,69 @@ describe('次の曲の先読み (二重バッファ)', () => {
     expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(false);
   });
 
-  it('先読みが失敗したら、遷移時はアクティブ側へ読み込む従来経路に倒れる', async () => {
+  it('先読みが始まった直後 (ほぼ進んでいない状態) でも役割交代する', async () => {
+    // 前の曲が短く、先読みの窓がほとんど無いケース。待機側は
+    // src をセットしただけで、メタデータも来ていない。
+    await mountPlayer();
+    await startCard(0);
+    const audio = latestAudio();
+    const pre = await startPreload(audio);
+    expect(pre.src).toBe('https://example.com/ep2.mp3');
+    expect(Number.isFinite(pre.duration)).toBe(false);
+
+    audio.ended = true;
+    audio.paused = true;
+    audio.dispatchEvent(new window.Event('ended'));
+    await flush();
+    expect(errors).toEqual([]);
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+    // 読み込み途中の待機側がそのまま昇格して再生される。
+    expect(audioInstances.length).toBe(2);
+    expect(pre.paused).toBe(false);
+    expect(pre.src).toBe('https://example.com/ep2.mp3');
+    expect(audio.src).toBe('');
+  });
+
+  it('先読みが1回失敗しても、その場で読み直した試行が生きていれば役割交代する', async () => {
     await mountPlayer();
     await startCard(0);
     const audio = latestAudio();
     const pre = await startPreload(audio);
 
-    // 待機側の読み込みエラー (URL の再解決もモックでは失敗する)。
-    // 本体の再生には波及しない。
+    // 待機側の読み込みエラー (一時的な失敗)。本体の再生には
+    // 波及しない。その場で同じ URL の読み直しが始まり、非同期の
+    // URL 再解決 (モックでは失敗する) の完了は待たない。
+    pre.dispatchEvent(new window.Event('error'));
+    await flush();
+    expect(errors).toEqual([]);
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
+    expect(audio.paused).toBe(false);
+    expect(pre.src).toBe('https://example.com/ep2.mp3');
+
+    // 終了時は、読み直した試行のまま役割交代して再生される。
+    audio.ended = true;
+    audio.paused = true;
+    audio.dispatchEvent(new window.Event('ended'));
+    await flush();
+    expect(errors).toEqual([]);
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+    expect(audioInstances.length).toBe(2);
+    expect(pre.paused).toBe(false);
+    expect(pre.src).toBe('https://example.com/ep2.mp3');
+    expect(audio.src).toBe('');
+  });
+
+  it('先読みが繰り返し失敗したら、遷移時はアクティブ側へ読み込む従来経路に倒れる', async () => {
+    await mountPlayer();
+    await startCard(0);
+    const audio = latestAudio();
+    const pre = await startPreload(audio);
+
+    // 1回目のエラーではその場で読み直すが、読み直した試行も
+    // エラーになり、URL の再解決 (モック) も失敗する。本体の
+    // 再生には波及しない。
+    pre.dispatchEvent(new window.Event('error'));
+    await flush();
     pre.dispatchEvent(new window.Event('error'));
     await flush();
     expect(errors).toEqual([]);
@@ -1051,6 +1106,28 @@ describe('次の曲の先読み (二重バッファ)', () => {
     expect(audio.src).toBe('https://example.com/ep2.mp3');
     expect(audio.paused).toBe(false);
     // 駄目だった先読みは破棄される。
+    expect(pre.src).toBe('');
+  });
+
+  it('待機側の URL が遷移先と食い違っていたら役割交代しない', async () => {
+    await mountPlayer();
+    await startCard(0);
+    const audio = latestAudio();
+    const pre = await startPreload(audio);
+
+    // 先読み対象は次曲のまま、待機側に載っている URL だけが
+    // 食い違っている状態 (古い URL のまま残った等)。
+    pre.src = 'https://example.com/other.mp3';
+
+    audio.ended = true;
+    audio.paused = true;
+    audio.dispatchEvent(new window.Event('ended'));
+    await flush();
+    expect(errors).toEqual([]);
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+    // 役割交代せず、アクティブ側へ遷移先の URL を載せ直す。
+    expect(audio.src).toBe('https://example.com/ep2.mp3');
+    expect(audio.paused).toBe(false);
     expect(pre.src).toBe('');
   });
 
