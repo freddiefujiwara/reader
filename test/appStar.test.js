@@ -36,7 +36,22 @@ const POD_FEED = {
   lastFetchedAt: '',
   unreadCount: 0,
 };
-const FEEDS = [YT_FEED, POD_FEED];
+// 保存正規形 (www.youtube.com/playlist?list=...) のプレイリストフィード。
+// ID はその URL のハッシュ (feedHash で固定される規則)。ファイル全体で
+// 同じフィード集合を使う (テストごとに集合を変えると、前テストの
+// 背景更新が残した孤児掃除と競合して記事が消えることがあるため)。
+const PLAYLIST_FEED_ID = '2b27a47b656bfcfd';
+const PLAYLIST_FEED = {
+  id: PLAYLIST_FEED_ID,
+  title: 'お気に入りプレイリスト',
+  url: 'https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjX9efdf',
+  category: '音楽',
+  lastStatus: '200',
+  lastError: '',
+  lastFetchedAt: '',
+  unreadCount: 0,
+};
+const FEEDS = [YT_FEED, POD_FEED, PLAYLIST_FEED];
 
 // サーバー (list 応答) が返す記事。スター同期の検証で差し替える。
 let serverArticles = [];
@@ -234,6 +249,30 @@ describe('スターと再生ボタンの表示', () => {
     const pod = cardByTitle('ポッドキャスト');
     expect(pod.querySelector('.star-btn'), 'ポッドキャストにスターボタンは出ない').toBeNull();
     expect(pod.querySelector('.play-btn'), 'ポッドキャストは従来どおり再生ボタンが出る').toBeTruthy();
+  });
+});
+
+describe('プレイリストフィードの記事', () => {
+  it('プレイリスト記事にもスターボタンが出て、再生ボタンはスター付きのときだけ出る', async () => {
+    await mountApp([
+      rec('pl-starred', PLAYLIST_FEED_ID, 'プレイリストのスター付き', '2026-11-15T00:00:00.000Z', { ...AUDIO, starred: true }),
+      rec('pl-plain', PLAYLIST_FEED_ID, 'プレイリストのスター無し', '2026-11-14T00:00:00.000Z', { ...AUDIO }),
+    ]);
+    // フィード一覧の反映 (背景更新の読み直し) が済むまで待つ。
+    // カード自体はローカル分だけで先に出るため、スターボタンの
+    // 出現を反映完了の目印にする。
+    await flushUntil(() => cardByTitle('プレイリストのスター付き')?.querySelector('.star-btn'));
+
+    const starred = cardByTitle('プレイリストのスター付き');
+    expect(starred, 'スター付きカードが出る').toBeTruthy();
+    expect(starred.querySelector('.star-btn'), 'スターボタンが出る').toBeTruthy();
+    expect(starred.querySelector('.star-btn').textContent).toBe('⭐');
+    expect(starred.querySelector('.play-btn'), 'スター付きには再生ボタン').toBeTruthy();
+
+    const plain = cardByTitle('プレイリストのスター無し');
+    expect(plain, 'スター無しカードが出る').toBeTruthy();
+    expect(plain.querySelector('.star-btn').textContent).toBe('☆');
+    expect(plain.querySelector('.play-btn'), 'スター無しのプレイリスト記事に再生ボタンは出ない').toBeNull();
   });
 });
 

@@ -7,6 +7,9 @@ import {
   isYouTubeChannelUrl,
   isYouTubeFeedInput,
   youtubeChannelIdFromUrl,
+  isYouTubePlaylistUrl,
+  youtubePlaylistIdFromUrl,
+  normalizeYouTubePlaylistUrl,
   youtubeVideoIdFromLink,
   planFeedAdd,
   resolveFeedAddForm,
@@ -165,6 +168,47 @@ describe('youtubeVideoIdFromLink (動画 ID の抽出)', () => {
   });
 });
 
+describe('YouTube プレイリスト URL の判定・抽出・正規化', () => {
+  const PL = 'PLrAXtmErZgOeiKm4sgNOknGvNjX9efdf';
+  const CANONICAL = `https://www.youtube.com/playlist?list=${PL}`;
+
+  it('www / 素 / m / music の各ホストで判定できる', () => {
+    expect(isYouTubePlaylistUrl(CANONICAL)).toBe(true);
+    expect(isYouTubePlaylistUrl(`https://youtube.com/playlist?list=${PL}`)).toBe(true);
+    expect(isYouTubePlaylistUrl(`https://m.youtube.com/playlist?list=${PL}`)).toBe(true);
+    expect(isYouTubePlaylistUrl(`https://music.youtube.com/playlist?list=${PL}`)).toBe(true);
+  });
+  it('list 以外のパラメータが付いていても判定できる', () => {
+    expect(isYouTubePlaylistUrl(`${CANONICAL}&si=abcdef`)).toBe(true);
+    expect(youtubePlaylistIdFromUrl(`https://music.youtube.com/playlist?si=x&list=${PL}`)).toBe(PL);
+  });
+  it('プレイリストでない URL は該当しない', () => {
+    // watch の list パラメータは動画側の文脈なので対象にしない。
+    expect(isYouTubePlaylistUrl(`https://www.youtube.com/watch?v=xNfaRC6MbAnw&list=${PL}`)).toBe(false);
+    expect(isYouTubePlaylistUrl('https://www.youtube.com/playlist')).toBe(false);
+    expect(isYouTubePlaylistUrl('https://www.youtube.com/playlist?list=')).toBe(false);
+    // WL / LL のような短い特殊 ID は形で弾く (API で引けないため)。
+    expect(isYouTubePlaylistUrl('https://www.youtube.com/playlist?list=WL')).toBe(false);
+    expect(isYouTubePlaylistUrl('https://www.youtube.com/playlist?list=LL')).toBe(false);
+    expect(isYouTubePlaylistUrl(`https://example.com/playlist?list=${PL}`)).toBe(false);
+    expect(isYouTubePlaylistUrl('https://www.youtube.com/channel/UCxNfaRC6MbAnwSR1Dqqv69A')).toBe(false);
+    expect(isYouTubePlaylistUrl('not-a-url')).toBe(false);
+    expect(isYouTubePlaylistUrl('')).toBe(false);
+  });
+  it('ID の抽出はチャンネル ID と混ざらない', () => {
+    expect(youtubePlaylistIdFromUrl(CANONICAL)).toBe(PL);
+    expect(youtubeChannelIdFromUrl(CANONICAL)).toBe('');
+    expect(youtubePlaylistIdFromUrl('https://www.youtube.com/channel/UCxNfaRC6MbAnwSR1Dqqv69A')).toBe('');
+  });
+  it('正規化はホストの揺れと余分なパラメータを落として正規形にする', () => {
+    expect(normalizeYouTubePlaylistUrl(`https://music.youtube.com/playlist?list=${PL}&si=x`)).toBe(CANONICAL);
+    expect(normalizeYouTubePlaylistUrl(`https://youtube.com/playlist?list=${PL}`)).toBe(CANONICAL);
+    expect(normalizeYouTubePlaylistUrl(CANONICAL)).toBe(CANONICAL);
+    expect(normalizeYouTubePlaylistUrl('https://feeds.rebuild.fm/rebuildfm')).toBe('');
+    expect(normalizeYouTubePlaylistUrl('')).toBe('');
+  });
+});
+
 describe('planFeedAdd (追加の進め方)', () => {
   it('YouTube 疑似フィード (videos.xml) は取得を省かない (互換は削除済み)', () => {
     expect(planFeedAdd({ url: 'https://www.youtube.com/feeds/videos.xml?channel_id=UCx' }))
@@ -175,6 +219,12 @@ describe('planFeedAdd (追加の進め方)', () => {
       .toEqual({ mode: 'youtube' });
     expect(planFeedAdd({ url: 'https://www.youtube.com/@rakutentech' }))
       .toEqual({ mode: 'youtube' });
+  });
+  it('プレイリストも取得を省く (playlist)', () => {
+    expect(planFeedAdd({ url: 'https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjX9efdf' }))
+      .toEqual({ mode: 'playlist' });
+    expect(planFeedAdd({ url: 'https://music.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjX9efdf' }))
+      .toEqual({ mode: 'playlist' });
   });
   it('それ以外は保存前に取得する', () => {
     expect(planFeedAdd({ url: 'https://feeds.rebuild.fm/rebuildfm' })).toEqual({ mode: 'fetch' });
@@ -217,6 +267,19 @@ describe('buildSaveFeedPayload', () => {
       title: 'Rebuild',
       url: 'https://feeds.rebuild.fm/rebuildfm',
       category: 'tech',
+    });
+    expect('id' in payload).toBe(false);
+  });
+  it('新規 (プレイリスト) は URL を保存正規形にそろえて送る', () => {
+    const payload = buildSaveFeedPayload({
+      title: '',
+      url: ' https://music.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjX9efdf&si=x ',
+      category: ' 音楽 ',
+    });
+    expect(payload).toEqual({
+      title: '',
+      url: 'https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjX9efdf',
+      category: '音楽',
     });
     expect('id' in payload).toBe(false);
   });
