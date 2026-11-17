@@ -782,11 +782,51 @@ describe('既知の長さへの到達による終了判定 (durationSec 到達)'
     expect(errors).toEqual([]);
   });
 
-  it('一時停止中は、位置が既知の長さに達していても終了しない', async () => {
+  it('本人が一時停止していたら、位置が既知の長さに達していても終了しない', async () => {
     const audio = await startKnown([knownRec(EP1), knownRec(EP2)]);
+    audio.currentTime = 100;
+    // 再生中のカードのボタンをもう一度押す = 本人の一時停止
+    // (playWanted が下りる)。到達判定の入口は再生の意思で見る
+    // ため、'pause' 経由でも timeupdate 経由でも進まない。
+    el.querySelectorAll('.article-card')[0].querySelector('.play-btn').click();
+    await flush();
+    expect(audio.paused).toBe(true);
+    audio.dispatchEvent(new window.Event('timeupdate'));
+    await flush();
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
+    expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(false);
+    expect(errors).toEqual([]);
+  });
+
+  it('終端で要素が ended を出さずに止まっても、pause 経由の検出で次へ進む', async () => {
+    const audio = await startKnown([knownRec(EP1), knownRec(EP2)]);
+    // 要素側の都合で終端に止まった (本人の操作ではない)。
+    // 以前は、この 'pause' で isPlaying が下りて到達判定自体が
+    // 無効化され、進まなかった。
     audio.currentTime = 100;
     audio.pause();
     await flush();
+    expect(audio.ended).toBe(false);
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+    expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(true);
+    expect(errors).toEqual([]);
+  });
+
+  it('中盤で要素が止まっても、pause 経由では進まない', async () => {
+    const audio = await startKnown([knownRec(EP1), knownRec(EP2)]);
+    audio.currentTime = 50;
+    audio.pause();
+    await flush();
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
+    expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(false);
+    expect(errors).toEqual([]);
+  });
+
+  it('ポッドキャストは残り2秒 (YouTube のリード内) でも前倒ししない', async () => {
+    const audio = await startKnown([knownRec(EP1), knownRec(EP2)]);
+    // 残り 2 秒は YouTube 曲のリード (2.5秒) の内側だが、
+    // ポッドキャストの許容は 0.6 秒のままなので進まない。
+    audio.currentTime = 98;
     audio.dispatchEvent(new window.Event('timeupdate'));
     await flush();
     expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
@@ -862,19 +902,19 @@ describe('次の曲の先読み', () => {
     await flush();
   }
 
-  it('次の曲の実尺の10%以下になると先読みし、それより前はしない', async () => {
+  it('残り60秒以下になると先読みし、それより前はしない', async () => {
     await mountPlayer();
     await startCard(0);
     const audio = latestAudio();
     expect(audioInstances.length).toBe(1);
 
-    // 次の曲は30分 (1800秒) なのでリードは180秒。残り200秒では
-    // まだ先読みしない (開始直後から読み込まない)。
-    await parkNearEnd(audio, 1600);
+    // リードは固定60秒。残り100秒ではまだ先読みしない
+    // (開始直後から読み込まない)。
+    await parkNearEnd(audio, 1700);
     expect(audioInstances.length).toBe(1);
 
-    // 残り100秒: 次の曲 (エピソード2) の先読みが始まる。
-    await parkNearEnd(audio, 1700);
+    // 残り50秒: 次の曲 (エピソード2) の先読みが始まる。
+    await parkNearEnd(audio, 1750);
     expect(audioInstances.length).toBe(2);
     expect(preloadInstance()).not.toBe(audio);
     expect(preloadInstance().src).toBe('https://example.com/ep2.mp3');
@@ -882,13 +922,13 @@ describe('次の曲の先読み', () => {
     expect(errors).toEqual([]);
   });
 
-  it('次の曲の実尺が不明なら従来どおり残り60秒で先読みする', async () => {
+  it('次の曲の実尺が不明でも残り60秒で先読みする', async () => {
     await mountWithRecords([{ ...EP1 }, { ...EP2, duration_sec: null }]);
     await startCard(0);
     const audio = latestAudio();
     expect(audioInstances.length).toBe(1);
 
-    // 残り100秒: リードは下限の60秒なので、まだ先読みしない。
+    // 残り100秒: リードは固定60秒なので、まだ先読みしない。
     await parkNearEnd(audio, 1700);
     expect(audioInstances.length).toBe(1);
 

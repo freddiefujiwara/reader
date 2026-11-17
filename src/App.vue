@@ -99,12 +99,14 @@ import {
   nextEpisodePlan,
   nextRepeat,
   nextSpeed,
-  preloadLeadSec,
   progressRatio,
   reachedKnownDurationEnd,
   skipPlan,
   END_CHECK_INTERVAL_MS,
+  KNOWN_DURATION_END_TOLERANCE_SEC,
+  PRELOAD_REMAINING_SEC,
   REPEAT_LABELS,
+  YOUTUBE_END_LEAD_SEC,
   savePlayMode,
   saveTimeModel,
   toDisplayPosition,
@@ -1148,28 +1150,45 @@ function samplePlaybackRate() {
         確認済み)。
    到達判定は timeupdate からも呼ぶが、終端では timeupdate
    自体が止まることがあるため、再生中はタイマーでも定期的に
-   呼ぶ。再生開始はすべて tryPlayAudio に集約されているので、
-   そこでタイマーを始め、stopPlayer と終了フローで確実に
-   止める。 */
+   呼ぶ。さらに、要素が終端で 'ended' を出さずに無言で止まった
+   場合は、その 'pause' イベントからも呼ぶ (その場面では
+   timeupdate もタイマーも来ないことがあるため)。再生開始は
+   すべて tryPlayAudio に集約されているので、そこでタイマーを
+   始め、stopPlayer と終了フローで確実に止める。 */
 let endCheckTimer = null;
 
-// 既知の長さへの到達判定。timeupdate とタイマーの tick の
-// 両方から呼ばれる。位置は要素の現在値から変換して求める
-// (終端で timeupdate が止まると、currentTime ref は最後の
-// イベントの値のままになり、要素側だけが終端まで進んでいる
-// ことがあるため)。到達していれば即座に終了フローへ進む
-// ので、tick (0.5秒間隔) 経由でも到達から1秒以内に遷移する。
-// 再生中かどうかの正はアプリ側の isPlaying で見る (要素が
-// 終端で無言で paused になっても、アプリが再生中のつもり
-// なら到達を判定する)。
+// 到達判定の許容 (真の長さの手前をどこまで到達とみなすか)。
+// YouTube 曲は中継経由の fMP4 で終端検出の窓が狭いため専用の
+// リード (YOUTUBE_END_LEAD_SEC = 約2.5秒) を使い、それ以外は
+// 従来の許容 (KNOWN_DURATION_END_TOLERANCE_SEC = 0.6秒)。
+function currentEndToleranceSec() {
+  const ep = currentEpisode.value;
+  return ep && isYouTubeArticle(ep) ? YOUTUBE_END_LEAD_SEC : KNOWN_DURATION_END_TOLERANCE_SEC;
+}
+
+// 既知の長さへの到達判定。timeupdate とタイマーの tick と
+// 'pause' イベントの3経路から呼ばれる。位置は要素の現在値
+// から変換して求める (終端で timeupdate が止まると、
+// currentTime ref は最後のイベントの値のままになり、要素側
+// だけが終端まで進んでいることがあるため)。到達していれば
+// 即座に終了フローへ進むので、tick (0.5秒間隔) 経由でも
+// 到達から1秒以内に遷移する。
+// 入口の条件は「再生の意思 (playWanted) があること」で見る。
+// 要素の 'pause' で駆動される isPlaying を条件にしていた頃は、
+// 要素が終端で 'ended' を出さず 'pause' だけ出すと、その
+// 'pause' で isPlaying が下りて判定自体が無効化され、意図
+// (要素が無言で止まっても到達を判定する) と実装が食い違って
+// いた。本人が一時停止した場合は playWanted が下りている
+// ので、そちらでは発火しない。
 function checkKnownDurationEnd() {
-  if (!currentEpisode.value || !isPlaying.value || endFlowDone) return false;
+  if (!currentEpisode.value || !playWanted || endFlowDone) return false;
   const pos = toDisplayPosition(audio.currentTime || 0, mappingCtx.value);
   if (!reachedKnownDurationEnd({
     displayPos: pos,
     trueSec: trueDuration.value,
     elementDuration: duration.value,
     hasMeasuredModel: !!measuredModel,
+    toleranceSec: currentEndToleranceSec(),
   })) return false;
   handleEpisodeEnded();
   return true;
@@ -1216,8 +1235,8 @@ function stopEndCheckTimer() {
 
 /* ---- 次の曲の先読み ----
    切り替え時点で初めて読み込みが始まると、回線が遅いときに遷移で
-   長く待たされる。再生中の曲の残りが、次の曲の実尺から決まる
-   リード秒数 (preloadLeadSec) 以下になったら、2つ目の要素で
+   長く待たされる。再生中の曲の残りが PRELOAD_REMAINING_SEC
+   (60秒) 以下になったら、2つ目の要素で
    次の曲の読み込みを温めておく (本体は切り替え時に同じ URL を
    引くので、キャッシュが効いて開始が速くなる)。先読み要素の
    エラーは無視し、本体には波及させない。遷移・停止・エピソード
@@ -1263,7 +1282,7 @@ function updatePreload() {
   if (preloadAudio && preloadId !== target.id) discardPreload();
   if (preloadAudio) return;
   const remaining = displayDuration.value - displayTime.value;
-  if (!Number.isFinite(remaining) || remaining > preloadLeadSec(target.durationSec)) return;
+  if (!Number.isFinite(remaining) || remaining > PRELOAD_REMAINING_SEC) return;
   preloadAudio = new Audio();
   preloadAudio.preload = 'auto';
   preloadId = target.id;
@@ -1656,6 +1675,13 @@ audio.addEventListener('pause', () => {
   // 視聴ログ: 再生区間を閉じる (積算の確定は停止の区切りで行う)。
   listenTracker.pause();
   savePlayPos();
+  // 要素が終端で 'ended' を出さずに止まった場合は、この
+  // 'pause' が最後の検出機会になる。位置が既知の終端近傍に
+  // あり、再生の意思が残っているときだけ終了フローへ進む
+  // (条件の判定は checkKnownDurationEnd 側)。本人の一時停止
+  // (プレイヤーのボタン・Media Session) は、先に playWanted
+  // を下ろしてから要素を止めるため、ここでは発火しない。
+  checkKnownDurationEnd();
 });
 // 読み込み表示: データ待ちの間だけ出し、再生可能になったら消す。
 audio.addEventListener('waiting', () => { isLoading.value = true; });
@@ -1799,6 +1825,7 @@ function recoverPlaybackOnForeground() {
       trueSec: trueDuration.value,
       elementDuration: duration.value,
       hasMeasuredModel: !!measuredModel,
+      toleranceSec: currentEndToleranceSec(),
     }),
   });
   if (action === 'advance') handleEpisodeEnded();
