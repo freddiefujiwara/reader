@@ -349,7 +349,12 @@ describe('ストール検知での自動スキップ', () => {
       await tick(flushFake, () => { nowVal = 55_500; });
       expect(errors).toEqual([]);
       expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
-      expect(audio.src).toBe('https://example.com/ep2.mp3');
+      // 二重バッファ: 'playing' の時点で待機側へ先読みされていた
+      // 次曲へ、役割交代で切り替わって再生される (旧要素は待機側
+      // になり、src は空に戻る)。
+      expect(latestAudio().src).toBe('https://example.com/ep2.mp3');
+      expect(latestAudio().paused).toBe(false);
+      expect(audio.src).toBe('');
     } finally {
       nowSpy.mockRestore();
       vi.useRealTimers();
