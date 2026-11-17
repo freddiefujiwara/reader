@@ -2610,7 +2610,8 @@ onMounted(async () => {
               <div class="field">
                 <span class="field-label">URL</span>
                 <p class="field-static">{{ form.url }}</p>
-                <p class="field-note">URLは変更できません。変える場合は削除してから追加し直してください。</p>
+                <p v-if="youtubeChannelIdFromUrl(form.url)" class="field-note">URLは変更できません。解除はYouTubeアプリで行ってください。</p>
+                <p v-else class="field-note">URLは変更できません。変える場合は削除してから追加し直してください。</p>
               </div>
             </template>
             <div v-else class="field">
@@ -2727,16 +2728,16 @@ onMounted(async () => {
               <!-- 編集・削除はカード右側の空きに置く (カード本体の
                    フレックス行の3つ目の要素)。削除確認が出ている間は
                    隠す (確認のボタンは本体側に出る)。
-                   YouTube フィードは YouTube 側が正で、購読同期が
-                   リーダー側の変更を上書きしてしまうため、編集・削除
-                   は出さず、YouTube アプリ側での操作を案内する小さな
-                   注記に替える (並び替えは従来どおり可能)。 -->
+                   YouTube フィードは追加・解除が YouTube 側の正のため
+                   削除は出さない。ただしジャンルだけはリーダー側が正
+                   (購読同期は既存行のジャンルには触れない) なので、
+                   編集は通常どおり出し、解除は YouTube アプリ側での
+                   操作を案内する小さな注記を添える (並び替えも従来
+                   どおり可能)。 -->
               <div v-if="confirmDeleteId !== f.id" class="feed-actions feed-card-actions">
-                <p v-if="youtubeChannelIdFromUrl(f.url)" class="feed-youtube-note">変更・解除はYouTubeアプリで</p>
-                <template v-else>
-                  <button class="ghost" type="button" @click="startEditFeed(f)">編集</button>
-                  <button class="ghost danger" type="button" @click="askDeleteFeed(f)">削除</button>
-                </template>
+                <p v-if="youtubeChannelIdFromUrl(f.url)" class="feed-youtube-note">解除はYouTubeアプリで</p>
+                <button class="ghost" type="button" @click="startEditFeed(f)">編集</button>
+                <button v-if="!youtubeChannelIdFromUrl(f.url)" class="ghost danger" type="button" @click="askDeleteFeed(f)">削除</button>
               </div>
             </article>
             </template>
