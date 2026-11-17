@@ -393,8 +393,8 @@ describe('キューの抽出もスター条件に従う', () => {
   });
 });
 
-describe('YouTube 曲の終了判定 (リード付き)', () => {
-  it('終端の約2.5秒手前で次へ進む (ポッドキャストの 0.6 秒より前倒し)', async () => {
+describe('YouTube 曲の終了判定 (許容は 0.6 秒に統一)', () => {
+  it('残り2秒では進まず、許容 (0.6秒) 内に入ると次へ進む', async () => {
     await mountApp([
       rec('yt-a', YT_FEED_ID, '動画A', '2026-11-15T00:00:00.000Z', { ...AUDIO, starred: true, duration_sec: 100 }),
       rec('yt-b', YT_FEED_ID, '動画B', '2026-11-14T00:00:00.000Z', { ...AUDIO, starred: true, duration_sec: 100 }),
@@ -406,16 +406,16 @@ describe('YouTube 曲の終了判定 (リード付き)', () => {
     audio.dispatchEvent(new window.Event('loadedmetadata'));
     await flush();
 
-    // 残り 4 秒 (リード 2.5 秒の外) では、まだ進まない。
-    audio.currentTime = 96;
+    // 残り 2 秒では、まだ進まない。PR #105 では YouTube 曲だけ
+    // 2.5 秒の前倒しで進んでいたが、曲の末尾を切り捨てる形に
+    // なるため廃止し、ポッドキャストと同じ 0.6 秒に統一した。
+    audio.currentTime = 98;
     audio.dispatchEvent(new window.Event('timeupdate'));
     await flush();
     expect(el.querySelector('.player-title').textContent).toBe('動画A');
 
-    // 残り 2 秒 (リードの内側) で、'ended' なしに次へ進む。
-    // バックグラウンドで検出を取りこぼさないよう、音が鳴って
-    // いる間に送るための前倒し。
-    audio.currentTime = 98;
+    // 許容 (0.6秒) の内側に入ると、'ended' なしに次へ進む。
+    audio.currentTime = 99.7;
     audio.dispatchEvent(new window.Event('timeupdate'));
     await flushUntil(() => el.querySelector('.player-title')?.textContent === '動画B');
     expect(audio.ended).toBe(false);

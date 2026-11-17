@@ -31,7 +31,6 @@ import {
   reachedKnownDurationEnd,
   foregroundRecoveryAction,
   KNOWN_DURATION_END_TOLERANCE_SEC,
-  YOUTUBE_END_LEAD_SEC,
   END_CHECK_INTERVAL_MS,
   PRELOAD_REMAINING_SEC,
   loadTimeModel,
@@ -514,19 +513,26 @@ describe('reachedKnownDurationEnd', () => {
       displayPos: 103.8, trueSec: 104, elementDuration: 208, hasMeasuredModel: true,
     })).toBe(true);
   });
-  it('toleranceSec を渡すと、その幅で到達を判定する (YouTube 曲のリード)', () => {
-    expect(YOUTUBE_END_LEAD_SEC).toBe(2.5);
-    // リード 2.5 秒: 残り 2.5 秒の位置は到達、残り 2.6 秒は未到達。
+  it('既定の許容 (0.6秒) では、残り 2 秒の位置は到達としない (前倒しはしない)', () => {
+    // PR #105 で YouTube 曲だけ 2.5 秒の前倒しを入れたが、曲の
+    // 末尾を切り捨てる形になるため取りやめ、種別によらず既定の
+    // 0.6 秒に統一した。残り 2 秒では YouTube 曲でも進まない
+    // ことの固定 (アプリ側の固定は appStar.test.js)。
     expect(reachedKnownDurationEnd({
-      displayPos: 100 - YOUTUBE_END_LEAD_SEC, trueSec: 100, elementDuration: 100, hasMeasuredModel: false, toleranceSec: YOUTUBE_END_LEAD_SEC,
+      displayPos: 98, trueSec: 100, elementDuration: 100, hasMeasuredModel: false,
+    })).toBe(false);
+    expect(reachedKnownDurationEnd({
+      displayPos: 100 - KNOWN_DURATION_END_TOLERANCE_SEC, trueSec: 100, elementDuration: 100, hasMeasuredModel: false,
+    })).toBe(true);
+  });
+  it('toleranceSec を明示すると、その幅で到達を判定する', () => {
+    // 引数自体は判定の幅を差し替える口として残している
+    // (アプリは現在、常に既定を使う)。
+    expect(reachedKnownDurationEnd({
+      displayPos: 97.5, trueSec: 100, elementDuration: 100, hasMeasuredModel: false, toleranceSec: 2.5,
     })).toBe(true);
     expect(reachedKnownDurationEnd({
-      displayPos: 100 - YOUTUBE_END_LEAD_SEC - 0.1, trueSec: 100, elementDuration: 100, hasMeasuredModel: false, toleranceSec: YOUTUBE_END_LEAD_SEC,
-    })).toBe(false);
-    // 既定 (0.6秒) では、残り 2.5 秒の位置は到達としない
-    // (ポッドキャストは前倒ししない)。
-    expect(reachedKnownDurationEnd({
-      displayPos: 100 - YOUTUBE_END_LEAD_SEC, trueSec: 100, elementDuration: 100, hasMeasuredModel: false,
+      displayPos: 97.4, trueSec: 100, elementDuration: 100, hasMeasuredModel: false, toleranceSec: 2.5,
     })).toBe(false);
   });
   it('不正な toleranceSec は既定の 0.6 秒に倒れる', () => {

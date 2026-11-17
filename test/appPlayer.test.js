@@ -822,10 +822,11 @@ describe('既知の長さへの到達による終了判定 (durationSec 到達)'
     expect(errors).toEqual([]);
   });
 
-  it('ポッドキャストは残り2秒 (YouTube のリード内) でも前倒ししない', async () => {
+  it('残り2秒では次へ進まない (到達の許容は 0.6 秒に統一)', async () => {
     const audio = await startKnown([knownRec(EP1), knownRec(EP2)]);
-    // 残り 2 秒は YouTube 曲のリード (2.5秒) の内側だが、
-    // ポッドキャストの許容は 0.6 秒のままなので進まない。
+    // 到達の許容は曲の種別によらず 0.6 秒。残り 2 秒は許容の
+    // 外なので進まない (PR #105 の YouTube 曲だけの前倒しは
+    // 末尾を切り捨てるため廃止した)。
     audio.currentTime = 98;
     audio.dispatchEvent(new window.Event('timeupdate'));
     await flush();
