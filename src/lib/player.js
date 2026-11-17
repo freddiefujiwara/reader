@@ -380,11 +380,23 @@ export function reachedKnownDurationEnd({ displayPos, trueSec, elementDuration, 
 export const END_CHECK_INTERVAL_MS = 500;
 
 /* ---- 次の曲の先読み ---- */
-// 再生中の曲の残りがこの秒数以下になったら、次に再生することが
-// 確定している曲の読み込みを2つ目の要素で温め始める (App.vue
-// 側)。曲の開始直後から読み込むとデータ消費が増えるため、
-// 終盤に限る。
-export const PRELOAD_REMAINING_SEC = 60;
+// 先読みを始めるタイミングは、次に再生する曲の実尺の割合で決める
+// (App.vue 側)。次の曲が長いほど読み込みにも時間がかかるため、
+// 固定秒数ではなく実尺の10%を目安にし、下限・上限で収める。
+// 実尺が不明な曲は従来どおり60秒。
+export const PRELOAD_LEAD_RATIO = 0.1;
+export const PRELOAD_LEAD_MIN_SEC = 60;
+export const PRELOAD_LEAD_MAX_SEC = 300;
+
+// 次の曲の実尺 (秒) から、先読みを始める「再生中の曲の残り秒数」を
+// 返す。実尺が不明 (null・0以下・非数) なら下限の60秒。
+export function preloadLeadSec(nextDurationSec) {
+  if (!Number.isFinite(nextDurationSec) || nextDurationSec <= 0) {
+    return PRELOAD_LEAD_MIN_SEC;
+  }
+  const lead = nextDurationSec * PRELOAD_LEAD_RATIO;
+  return Math.min(PRELOAD_LEAD_MAX_SEC, Math.max(PRELOAD_LEAD_MIN_SEC, lead));
+}
 
 /* ---- 再生モードの端末保存 (セッションキーと同じ環境分け) ---- */
 

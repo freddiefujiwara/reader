@@ -862,22 +862,40 @@ describe('次の曲の先読み', () => {
     await flush();
   }
 
-  it('残り60秒以下になると次の曲を先読みし、それより前はしない', async () => {
+  it('次の曲の実尺の10%以下になると先読みし、それより前はしない', async () => {
     await mountPlayer();
     await startCard(0);
     const audio = latestAudio();
     expect(audioInstances.length).toBe(1);
 
-    // 残り100秒: まだ先読みしない (開始直後から読み込まない)。
-    await parkNearEnd(audio, 1700);
+    // 次の曲は30分 (1800秒) なのでリードは180秒。残り200秒では
+    // まだ先読みしない (開始直後から読み込まない)。
+    await parkNearEnd(audio, 1600);
     expect(audioInstances.length).toBe(1);
 
-    // 残り50秒: 次の曲 (エピソード2) の先読みが始まる。
-    await parkNearEnd(audio, 1750);
+    // 残り100秒: 次の曲 (エピソード2) の先読みが始まる。
+    await parkNearEnd(audio, 1700);
     expect(audioInstances.length).toBe(2);
     expect(preloadInstance()).not.toBe(audio);
     expect(preloadInstance().src).toBe('https://example.com/ep2.mp3');
     expect(preloadInstance().preload).toBe('auto');
+    expect(errors).toEqual([]);
+  });
+
+  it('次の曲の実尺が不明なら従来どおり残り60秒で先読みする', async () => {
+    await mountWithRecords([{ ...EP1 }, { ...EP2, duration_sec: null }]);
+    await startCard(0);
+    const audio = latestAudio();
+    expect(audioInstances.length).toBe(1);
+
+    // 残り100秒: リードは下限の60秒なので、まだ先読みしない。
+    await parkNearEnd(audio, 1700);
+    expect(audioInstances.length).toBe(1);
+
+    // 残り50秒: 先読みが始まる。
+    await parkNearEnd(audio, 1750);
+    expect(audioInstances.length).toBe(2);
+    expect(preloadInstance().src).toBe('https://example.com/ep2.mp3');
     expect(errors).toEqual([]);
   });
 

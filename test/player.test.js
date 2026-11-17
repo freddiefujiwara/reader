@@ -31,7 +31,7 @@ import {
   reachedKnownDurationEnd,
   KNOWN_DURATION_END_TOLERANCE_SEC,
   END_CHECK_INTERVAL_MS,
-  PRELOAD_REMAINING_SEC,
+  preloadLeadSec,
   loadTimeModel,
   saveTimeModel,
   timeModelKey,
@@ -410,9 +410,32 @@ describe('isWithinStartGuard', () => {
   });
 });
 
-describe('次の曲の先読み', () => {
-  it('先読みを始める残り時間は60秒', () => {
-    expect(PRELOAD_REMAINING_SEC).toBe(60);
+describe('次の曲の先読み (preloadLeadSec)', () => {
+  it('次の曲の実尺の10%をリード秒数にする', () => {
+    expect(preloadLeadSec(1200)).toBe(120);
+    expect(preloadLeadSec(1800)).toBe(180);
+  });
+  it('10%が60秒未満なら下限の60秒に切り上げる', () => {
+    expect(preloadLeadSec(300)).toBe(60);
+    expect(preloadLeadSec(599)).toBe(60);
+  });
+  it('10%がちょうど60秒なら60秒', () => {
+    expect(preloadLeadSec(600)).toBe(60);
+  });
+  it('10%が300秒を超えたら上限の300秒に切り下げる', () => {
+    expect(preloadLeadSec(3600)).toBe(300);
+    expect(preloadLeadSec(7200)).toBe(300);
+  });
+  it('10%がちょうど300秒なら300秒', () => {
+    expect(preloadLeadSec(3000)).toBe(300);
+  });
+  it('実尺が不明なら従来どおり60秒', () => {
+    expect(preloadLeadSec(null)).toBe(60);
+    expect(preloadLeadSec(undefined)).toBe(60);
+    expect(preloadLeadSec(0)).toBe(60);
+    expect(preloadLeadSec(-30)).toBe(60);
+    expect(preloadLeadSec(Number.NaN)).toBe(60);
+    expect(preloadLeadSec(Infinity)).toBe(60);
   });
 });
 
