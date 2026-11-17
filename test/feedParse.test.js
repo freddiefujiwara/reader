@@ -73,6 +73,34 @@ describe('parseFeedXml (RSS 2.0)', () => {
   });
 });
 
+// ダッシュボード系フィード (健康ウィークリー等) は description に
+// 改行付きプレーンテキストを CDATA で送る。要約にも改行が残ること。
+const RSS_DASHBOARD = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>ダッシュボード</title>
+    <item>
+      <title>今日のダッシュボード</title>
+      <link>https://example.com/dashboard/1</link>
+      <guid>urn:example:dash-1</guid>
+      <pubDate>Mon, 17 Nov 2026 06:20:00 GMT</pubDate>
+      <description><![CDATA[【結論】
+資産は増えました。
+
+【内訳】
+現金 100万円]]></description>
+    </item>
+  </channel>
+</rss>`;
+
+describe('parseFeedXml (改行付きプレーンテキスト)', () => {
+  it('CDATA の改行は要約に残る', () => {
+    const entries = parseFeedXml(RSS_DASHBOARD, { id: 'dash' });
+    expect(entries.length).toBe(1);
+    expect(entries[0].summary).toBe('【結論】\n資産は増えました。\n\n【内訳】\n現金 100万円');
+  });
+});
+
 describe('parseFeedXml (Atom)', () => {
   const entries = parseFeedXml(ATOM, { id: 'atom' });
   it('entry の id を guid、alternate リンクを採用する', () => {
@@ -342,14 +370,29 @@ describe('summarize', () => {
   it('短い文はそのまま返す', () => {
     expect(summarize('短い')).toBe('短い');
   });
+  it('改行付きテキストは改行を保持する', () => {
+    expect(summarize('1行目\n2行目\n3行目')).toBe('1行目\n2行目\n3行目');
+  });
+  it('改行以外の空白 (スペース・タブ) の連続は1つに詰める', () => {
+    expect(summarize('a   b\t\tc')).toBe('a b c');
+    expect(summarize('行頭の空白\n  次の行')).toBe('行頭の空白\n次の行');
+  });
+  it('改行コードを \\n に統一し、3つ以上の連続改行は2つに詰める', () => {
+    expect(summarize('a\r\nb\rc')).toBe('a\nb\nc');
+    expect(summarize('a\n\n\n\nb')).toBe('a\n\nb');
+  });
+  it('<br> と段落の区切りは改行になる', () => {
+    expect(summarize('a<br>b')).toBe('a\nb');
+    expect(summarize('<p>a</p><p>b</p>')).toBe('a\nb');
+  });
 });
 
 describe('補助関数', () => {
   it('decodeXmlEntities は数値参照と名前付き参照を戻す', () => {
     expect(decodeXmlEntities('a &amp; b &lt;tag&gt; &#65;&#x42;')).toBe('a & b <tag> AB');
   });
-  it('stripTags はエスケープされたタグも取り除き空白を詰める', () => {
-    expect(stripTags('&lt;p&gt;hello&lt;/p&gt;\n  world')).toBe('hello world');
+  it('stripTags はエスケープされたタグも取り除き、段落の区切りは改行として残す', () => {
+    expect(stripTags('&lt;p&gt;hello&lt;/p&gt;\n  world')).toBe('hello\n\nworld');
   });
   it('toIsoDate は解釈できない値を空文字にする', () => {
     expect(toIsoDate('not-a-date')).toBe('');
