@@ -103,10 +103,8 @@ import {
   reachedKnownDurationEnd,
   skipPlan,
   END_CHECK_INTERVAL_MS,
-  KNOWN_DURATION_END_TOLERANCE_SEC,
   PRELOAD_REMAINING_SEC,
   REPEAT_LABELS,
-  YOUTUBE_END_LEAD_SEC,
   savePlayMode,
   saveTimeModel,
   toDisplayPosition,
@@ -1157,15 +1155,6 @@ function samplePlaybackRate() {
    始め、stopPlayer と終了フローで確実に止める。 */
 let endCheckTimer = null;
 
-// 到達判定の許容 (真の長さの手前をどこまで到達とみなすか)。
-// YouTube 曲は中継経由の fMP4 で終端検出の窓が狭いため専用の
-// リード (YOUTUBE_END_LEAD_SEC = 約2.5秒) を使い、それ以外は
-// 従来の許容 (KNOWN_DURATION_END_TOLERANCE_SEC = 0.6秒)。
-function currentEndToleranceSec() {
-  const ep = currentEpisode.value;
-  return ep && isYouTubeArticle(ep) ? YOUTUBE_END_LEAD_SEC : KNOWN_DURATION_END_TOLERANCE_SEC;
-}
-
 // 既知の長さへの到達判定。timeupdate とタイマーの tick と
 // 'pause' イベントの3経路から呼ばれる。位置は要素の現在値
 // から変換して求める (終端で timeupdate が止まると、
@@ -1188,7 +1177,6 @@ function checkKnownDurationEnd() {
     trueSec: trueDuration.value,
     elementDuration: duration.value,
     hasMeasuredModel: !!measuredModel,
-    toleranceSec: currentEndToleranceSec(),
   })) return false;
   handleEpisodeEnded();
   return true;
@@ -1825,7 +1813,6 @@ function recoverPlaybackOnForeground() {
       trueSec: trueDuration.value,
       elementDuration: duration.value,
       hasMeasuredModel: !!measuredModel,
-      toleranceSec: currentEndToleranceSec(),
     }),
   });
   if (action === 'advance') handleEpisodeEnded();
