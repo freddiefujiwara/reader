@@ -365,10 +365,29 @@ export function interpretStoredPlayPos(stored, ctx) {
 // 判定されうるが、丸め誤差を吸収するために必要。
 export const KNOWN_DURATION_END_TOLERANCE_SEC = 0.6;
 
-export function reachedKnownDurationEnd({ displayPos, trueSec, elementDuration, hasMeasuredModel } = {}) {
+// 中継経由の YouTube 曲で到達判定を前倒しするリード (秒)。
+// YouTube 曲の音声は中継経由の fMP4 で、終端で要素の 'ended' が
+// 来ないことがあるうえ、バックグラウンドでは timeupdate も
+// タイマーも間引かれるため、0.6 秒の許容だけでは実効の発火窓が
+// 約0.1〜0.6秒しかなく、終端の検出を取りこぼして止まったままに
+// なる。音が鳴っている間 (＝ページが生きていて timeupdate が
+// 届く間) に次へ送るため、YouTube 曲に限って終端の約2.5秒手前
+// で到達とみなす。代償として末尾が最大で約2.5秒早く切り替わる
+// (末尾はフェードや無音が多い)。ポッドキャストは 'ended' が
+// 実機で正しく来ることを確認済みのため、従来の 0.6 秒のまま。
+export const YOUTUBE_END_LEAD_SEC = 2.5;
+
+// toleranceSec は到達とみなす幅 (真の長さより手前をどこまで
+// 許すか) で、呼び出し側が曲の種別で差し替える (YouTube 曲は
+// YOUTUBE_END_LEAD_SEC、それ以外は既定の
+// KNOWN_DURATION_END_TOLERANCE_SEC)。不正な値は既定に倒す。
+export function reachedKnownDurationEnd({ displayPos, trueSec, elementDuration, hasMeasuredModel, toleranceSec = KNOWN_DURATION_END_TOLERANCE_SEC } = {}) {
   if (!Number.isFinite(trueSec) || trueSec <= 0) return false;
   if (!Number.isFinite(displayPos)) return false;
-  if (displayPos < trueSec - KNOWN_DURATION_END_TOLERANCE_SEC) return false;
+  const tolerance = Number.isFinite(toleranceSec) && toleranceSec >= 0
+    ? toleranceSec
+    : KNOWN_DURATION_END_TOLERANCE_SEC;
+  if (displayPos < trueSec - tolerance) return false;
   if (!durationMismatch(trueSec, elementDuration)) return true;
   return hasMeasuredModel === true;
 }
@@ -410,23 +429,12 @@ export function foregroundRecoveryAction({ hasEpisode, playWanted, ended, endFlo
 }
 
 /* ---- 次の曲の先読み ---- */
-// 先読みを始めるタイミングは、次に再生する曲の実尺の割合で決める
-// (App.vue 側)。次の曲が長いほど読み込みにも時間がかかるため、
-// 固定秒数ではなく実尺の10%を目安にし、下限・上限で収める。
-// 実尺が不明な曲は従来どおり60秒。
-export const PRELOAD_LEAD_RATIO = 0.1;
-export const PRELOAD_LEAD_MIN_SEC = 60;
-export const PRELOAD_LEAD_MAX_SEC = 300;
-
-// 次の曲の実尺 (秒) から、先読みを始める「再生中の曲の残り秒数」を
-// 返す。実尺が不明 (null・0以下・非数) なら下限の60秒。
-export function preloadLeadSec(nextDurationSec) {
-  if (!Number.isFinite(nextDurationSec) || nextDurationSec <= 0) {
-    return PRELOAD_LEAD_MIN_SEC;
-  }
-  const lead = nextDurationSec * PRELOAD_LEAD_RATIO;
-  return Math.min(PRELOAD_LEAD_MAX_SEC, Math.max(PRELOAD_LEAD_MIN_SEC, lead));
-}
+// 先読みを始めるタイミングは、再生中の曲の残りがこの秒数以下に
+// なった時点 (App.vue 側)。PR #100 で次曲の実尺の割合方式
+// (10%・下限60秒・上限300秒) にしたが、長い次曲では開始が最大
+// 300秒前倒しになり、再生中トラックの取得と先読みが競合する窓が
+// 広がったため、固定60秒に戻した (2026-11-17)。
+export const PRELOAD_REMAINING_SEC = 60;
 
 /* ---- 再生モードの端末保存 (セッションキーと同じ環境分け) ---- */
 

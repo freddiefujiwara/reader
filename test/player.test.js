@@ -31,8 +31,9 @@ import {
   reachedKnownDurationEnd,
   foregroundRecoveryAction,
   KNOWN_DURATION_END_TOLERANCE_SEC,
+  YOUTUBE_END_LEAD_SEC,
   END_CHECK_INTERVAL_MS,
-  preloadLeadSec,
+  PRELOAD_REMAINING_SEC,
   loadTimeModel,
   saveTimeModel,
   timeModelKey,
@@ -411,32 +412,9 @@ describe('isWithinStartGuard', () => {
   });
 });
 
-describe('次の曲の先読み (preloadLeadSec)', () => {
-  it('次の曲の実尺の10%をリード秒数にする', () => {
-    expect(preloadLeadSec(1200)).toBe(120);
-    expect(preloadLeadSec(1800)).toBe(180);
-  });
-  it('10%が60秒未満なら下限の60秒に切り上げる', () => {
-    expect(preloadLeadSec(300)).toBe(60);
-    expect(preloadLeadSec(599)).toBe(60);
-  });
-  it('10%がちょうど60秒なら60秒', () => {
-    expect(preloadLeadSec(600)).toBe(60);
-  });
-  it('10%が300秒を超えたら上限の300秒に切り下げる', () => {
-    expect(preloadLeadSec(3600)).toBe(300);
-    expect(preloadLeadSec(7200)).toBe(300);
-  });
-  it('10%がちょうど300秒なら300秒', () => {
-    expect(preloadLeadSec(3000)).toBe(300);
-  });
-  it('実尺が不明なら従来どおり60秒', () => {
-    expect(preloadLeadSec(null)).toBe(60);
-    expect(preloadLeadSec(undefined)).toBe(60);
-    expect(preloadLeadSec(0)).toBe(60);
-    expect(preloadLeadSec(-30)).toBe(60);
-    expect(preloadLeadSec(Number.NaN)).toBe(60);
-    expect(preloadLeadSec(Infinity)).toBe(60);
+describe('次の曲の先読み (PRELOAD_REMAINING_SEC)', () => {
+  it('先読みを始める残り秒数は固定60秒', () => {
+    expect(PRELOAD_REMAINING_SEC).toBe(60);
   });
 });
 
@@ -535,6 +513,33 @@ describe('reachedKnownDurationEnd', () => {
     expect(reachedKnownDurationEnd({
       displayPos: 103.8, trueSec: 104, elementDuration: 208, hasMeasuredModel: true,
     })).toBe(true);
+  });
+  it('toleranceSec を渡すと、その幅で到達を判定する (YouTube 曲のリード)', () => {
+    expect(YOUTUBE_END_LEAD_SEC).toBe(2.5);
+    // リード 2.5 秒: 残り 2.5 秒の位置は到達、残り 2.6 秒は未到達。
+    expect(reachedKnownDurationEnd({
+      displayPos: 100 - YOUTUBE_END_LEAD_SEC, trueSec: 100, elementDuration: 100, hasMeasuredModel: false, toleranceSec: YOUTUBE_END_LEAD_SEC,
+    })).toBe(true);
+    expect(reachedKnownDurationEnd({
+      displayPos: 100 - YOUTUBE_END_LEAD_SEC - 0.1, trueSec: 100, elementDuration: 100, hasMeasuredModel: false, toleranceSec: YOUTUBE_END_LEAD_SEC,
+    })).toBe(false);
+    // 既定 (0.6秒) では、残り 2.5 秒の位置は到達としない
+    // (ポッドキャストは前倒ししない)。
+    expect(reachedKnownDurationEnd({
+      displayPos: 100 - YOUTUBE_END_LEAD_SEC, trueSec: 100, elementDuration: 100, hasMeasuredModel: false,
+    })).toBe(false);
+  });
+  it('不正な toleranceSec は既定の 0.6 秒に倒れる', () => {
+    // 残り 1 秒の位置は、既定の 0.6 秒では未到達。
+    expect(reachedKnownDurationEnd({
+      displayPos: 99, trueSec: 100, elementDuration: 100, hasMeasuredModel: false, toleranceSec: Number.NaN,
+    })).toBe(false);
+    expect(reachedKnownDurationEnd({
+      displayPos: 99, trueSec: 100, elementDuration: 100, hasMeasuredModel: false, toleranceSec: -5,
+    })).toBe(false);
+    expect(reachedKnownDurationEnd({
+      displayPos: 99, trueSec: 100, elementDuration: 100, hasMeasuredModel: false, toleranceSec: undefined,
+    })).toBe(false);
   });
 });
 
