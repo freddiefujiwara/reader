@@ -11,6 +11,8 @@
 //   同じ applyRead の経路)。閉じる操作では既読を取り消さない。
 // - 展開すると視聴ログの expand が送られる (閉じる操作では送らない。
 //   読み取り専用でも送らない)。
+// - 既読にしてもボタンは消えない。測定は次ティック＋次のフレームの
+//   二段で行い、レイアウト確定前の空振りの測定で判定を落とさない。
 import 'fake-indexeddb/auto';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createApp, nextTick } from 'vue';
@@ -344,6 +346,101 @@ describe('要約の展開と既読', () => {
       card.querySelector('.article-summary').classList.contains('expanded'),
       '展開はできる'
     ).toBe(true);
+    expect(errors).toEqual([]);
+  });
+});
+
+describe('既読化と「もっと見る」ボタン', () => {
+  it('「既読にする」ボタンで既読化した後もボタンが残る (resize 後も)', async () => {
+    await mountWithSummaries();
+    const card = cardByTitle('長い要約の記事');
+    expect(card.querySelector('.summary-toggle'), '前提: ボタンがある').toBeTruthy();
+
+    card.querySelector('.read-toggle').click();
+    await flush();
+
+    const after = cardByTitle('長い要約の記事');
+    expect(after.classList.contains('is-read'), '既読表示になる').toBe(true);
+    expect(after.querySelector('.summary-toggle'), '既読化してもボタンは残る').toBeTruthy();
+    expect(after.querySelector('.summary-toggle').textContent).toBe('もっと見る');
+
+    window.dispatchEvent(new window.Event('resize'));
+    await flush();
+    expect(
+      cardByTitle('長い要約の記事').querySelector('.summary-toggle'),
+      '測り直してもボタンは残る'
+    ).toBeTruthy();
+    expect(errors).toEqual([]);
+  });
+
+  it('展開して既読化し、閉じた後もボタンが「もっと見る」に戻る', async () => {
+    await mountWithSummaries();
+    const card = cardByTitle('長い要約の記事');
+
+    card.querySelector('.summary-toggle').click();
+    await flush();
+    expect((await localRow('long-1')).is_read).toBe(true);
+    expect(
+      cardByTitle('長い要約の記事').querySelector('.summary-toggle')?.textContent,
+      '展開中は「閉じる」が出ている'
+    ).toBe('閉じる');
+
+    cardByTitle('長い要約の記事').querySelector('.summary-toggle').click();
+    await flush();
+
+    const closed = cardByTitle('長い要約の記事');
+    expect(closed.querySelector('.summary-toggle'), '閉じた後もボタンは残る').toBeTruthy();
+    expect(closed.querySelector('.summary-toggle').textContent).toBe('もっと見る');
+
+    window.dispatchEvent(new window.Event('resize'));
+    await flush();
+    expect(
+      cardByTitle('長い要約の記事').querySelector('.summary-toggle'),
+      '測り直してもボタンは残る'
+    ).toBeTruthy();
+    expect(errors).toEqual([]);
+  });
+
+  it('レイアウト確定前の誤った測定で消えても、フレーム後の測り直しでボタンが戻る', async () => {
+    await mountWithSummaries();
+    // 起動時の背景更新由来の測定が遅れて割り込まないよう、十分に
+    // 落ち着かせておく (対照を決定的にするため)。
+    await flush();
+    await flush();
+    const card = cardByTitle('長い要約の記事');
+    expect(card.querySelector('.summary-toggle'), '前提: ボタンがある').toBeTruthy();
+
+    // 次の測定 (2回分の読み取り) だけ「省略なし」と読める状態にする。
+    // レイアウトが確定する前に測ると、省略されている要約でも高さが
+    // 潰れて読めることがあり、その空振りで判定が落ちる状況の再現。
+    const p = card.querySelector('.article-summary');
+    let badReads = 2;
+    Object.defineProperty(p, 'scrollHeight', {
+      configurable: true,
+      get() {
+        if (badReads > 0) {
+          badReads -= 1;
+          return 66;
+        }
+        return 220;
+      },
+    });
+    Object.defineProperty(p, 'clientHeight', { configurable: true, value: 66 });
+
+    card.querySelector('.read-toggle').click();
+
+    // まず誤った測定でボタンが落ちること (再現) を確認し、その後
+    // フレーム後の測り直しで戻ることを確認する。先に「戻った」だけを
+    // 待つと、落ちる前の DOM で成功してしまうため二段で待つ。
+    const gone = await flushUntil(
+      () => !cardByTitle('長い要約の記事')?.querySelector('.summary-toggle')
+    );
+    expect(gone, '誤った測定でボタンが一度消える').toBe(true);
+    expect(badReads, '誤った測定が実際に挟まった').toBe(0);
+    const back = await flushUntil(
+      () => !!cardByTitle('長い要約の記事')?.querySelector('.summary-toggle')
+    );
+    expect(back, 'フレーム後の測り直しでボタンが戻る').toBe(true);
     expect(errors).toEqual([]);
   });
 });
