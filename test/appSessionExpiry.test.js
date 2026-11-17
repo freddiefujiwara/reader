@@ -100,7 +100,7 @@ function mountApp() {
 
 function expectExpiredToSignin() {
   expect(signinShown(), 'サインイン画面に戻る').toBe(true);
-  expect(el.textContent).toContain('セッションの期限が切れました。もう一度サインインしてください。');
+  expect(el.textContent).toContain('ログインの有効期限が切れました。再度ログインしてください。');
   expect(localStorage.getItem('reader:session:v1')).toBeNull();
   expect(findButton(el, 'ログアウト')).toBeUndefined();
   expect(findButton(el, '管理')).toBeUndefined();
