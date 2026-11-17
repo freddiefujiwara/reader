@@ -125,10 +125,13 @@ const topUrl = import.meta.env.BASE_URL;
 const session = ref(loadSession());
 const bootError = ref('');
 // 起動中 (セッション復元・共有リンク交換) とサインイン交換中は
-// ログインボタンを出さず「サインインしています…」にする (戻ってきた直後に
-// ボタンが見えて未ログインと誤解されるのを防ぐ)。
+// ログインボタンを出さず、スピナー＋「読み込んでいます…」にする
+// (戻ってきた直後にボタンが見えて未ログインと誤解されるのを防ぐ)。
 const booting = ref(true);
 const signingIn = ref(false);
+// GIS スクリプトが読み込めなかった (広告ブロック等) ときに、ボタンが
+// 描画できない理由をサインインボックスへ出すためのフラグ。
+const googleScriptError = ref(false);
 const loading = ref(true);
 const refreshing = ref(false);
 const listError = ref('');
@@ -1760,7 +1763,7 @@ function detachSession() {
 // セッション失効時の共通処理。保存分を消してサインイン画面に戻す。
 function expireSession() {
   detachSession();
-  bootError.value = 'セッションの期限が切れました。もう一度サインインしてください。';
+  bootError.value = 'ログインの有効期限が切れました。再度ログインしてください。';
   renderSigninButton();
 }
 
@@ -2255,7 +2258,11 @@ async function onCredential(response) {
     applyRoute(initialRoute);
     await initTimeline();
   } catch (e) {
-    bootError.value = `サインインできませんでした（${e.message}）。許可されたアカウントでお試しください。`;
+    // 権限のないアカウントはサーバーが forbidden を返す (他 API と同じ
+    // 呼び名)。それ以外は内部の事情を見せず、汎用の文言にする。
+    bootError.value = e.message === 'forbidden'
+      ? 'このアカウントでは利用できません。'
+      : 'ログインに失敗しました。もう一度お試しください。';
     loading.value = false;
   } finally {
     signingIn.value = false;
@@ -2265,7 +2272,13 @@ async function onCredential(response) {
 function renderSigninButton() {
   // GIS スクリプトの読み込み完了を待ってから描画する (tweet と同じ load 待ち)。
   const render = () => {
-    if (!window.google) return;
+    if (!window.google) {
+      // 読み込みが終わっても GIS が無い (広告ブロック等で失敗した) 場合は、
+      // ボタンが描画できない理由をサインインボックスに出す。
+      googleScriptError.value = true;
+      return;
+    }
+    googleScriptError.value = false;
     if (!signinEl.value) {
       nextTick(render);
       return;
@@ -2275,9 +2288,11 @@ function renderSigninButton() {
       theme: 'outline',
       size: 'large',
       text: 'signin_with',
+      shape: 'pill',
     });
   };
   if (window.google) render();
+  else if (document.readyState === 'complete') render();
   else window.addEventListener('load', render, { once: true });
 }
 
@@ -2300,7 +2315,7 @@ async function tryShareFromHash() {
     adoptSession(data);
     return true;
   } catch {
-    bootError.value = '共有リンクが無効か、期限が切れています。';
+    bootError.value = 'この一時アクセスリンクは無効か、期限切れです。発行者に新しいリンクを依頼してください。';
     return false;
   }
 }
@@ -2389,7 +2404,9 @@ onMounted(async () => {
 
       <template v-if="!session">
         <section class="panel center signin-box">
-          <p class="hint">{{ booting || signingIn ? 'サインインしています…' : 'Googleログインが必要です。許可されたアカウントでサインインしてください。' }}</p>
+          <p v-if="booting || signingIn" class="hint"><span class="spinner"></span>読み込んでいます…</p>
+          <p v-else class="hint">Googleログインが必要です。許可されたアカウントでサインインしてください。</p>
+          <p v-if="googleScriptError" class="error">Googleログインスクリプトの読み込みに失敗しました。広告ブロック等を解除して再読み込みしてください。</p>
           <div v-show="!booting && !signingIn" ref="signinEl"></div>
         </section>
       </template>
@@ -2425,7 +2442,7 @@ onMounted(async () => {
         <p v-if="listError" class="panel center error">{{ listError }}
           <button class="ghost" type="button" @click="refreshInBackground()">再試行</button>
         </p>
-        <p v-else-if="loading" class="panel center"><span class="spinner"></span>読み込み中...</p>
+        <p v-else-if="loading" class="panel center"><span class="spinner"></span>読み込み中…</p>
         <template v-else>
           <p v-if="displayArticles.length === 0" class="panel empty-note">記事がありません。</p>
           <article
@@ -2585,7 +2602,7 @@ onMounted(async () => {
           <p v-if="mgmtError" class="panel center error">{{ mgmtError }}
             <button class="ghost" type="button" @click="loadFeeds">再試行</button>
           </p>
-          <p v-else-if="mgmtLoading" class="panel center"><span class="spinner"></span>読み込み中...</p>
+          <p v-else-if="mgmtLoading" class="panel center"><span class="spinner"></span>読み込み中…</p>
           <template v-else>
             <!-- フィード編集中はフォームに集中できるよう、ジャンル選択と
                  一覧は隠す。adminCategory 等の状態はそのまま保持し、
@@ -2674,7 +2691,7 @@ onMounted(async () => {
           <section class="panel share-link-panel">
             <h2 class="feed-form-title">共有リンク</h2>
             <p class="hint">このリンクを開くと、ログインなしで読み取り専用として閲覧できます。有効期限は発行から1か月です。</p>
-            <p v-if="shareLoading && !shareStatus" class="hint"><span class="spinner"></span>読み込み中...</p>
+            <p v-if="shareLoading && !shareStatus" class="hint"><span class="spinner"></span>読み込み中…</p>
             <template v-else>
               <p v-if="shareStatus && shareStatus.active" class="share-status">
                 有効なリンクがあります<template v-if="formatShareExpiry(shareStatus.expiresAt)">（{{ formatShareExpiry(shareStatus.expiresAt) }} まで）</template>。
@@ -2747,7 +2764,7 @@ onMounted(async () => {
                開いたときの1回だけ。 -->
           <section class="panel usage-stats-panel">
             <h2 class="feed-form-title">今週の視聴</h2>
-            <p v-if="statsLoading && !statsData" class="hint"><span class="spinner"></span>読み込み中...</p>
+            <p v-if="statsLoading && !statsData" class="hint"><span class="spinner"></span>読み込み中…</p>
             <template v-else-if="statsData">
               <ul v-if="currentWeekListening.length" class="usage-stats-list">
                 <li v-for="s in currentWeekListening" :key="s.feed_id">

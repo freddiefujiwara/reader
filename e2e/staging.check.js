@@ -64,6 +64,6 @@ test("reader staging shows no player bar before any episode is chosen", async ({
 // read-only gate.
 test("reader staging rejects an invalid share link and strips the hash", async ({ page }) => {
   await page.goto("/reader/staging/#share=invalid-token");
-  await expect(page.getByText("共有リンクが無効か、期限が切れています")).toBeVisible();
+  await expect(page.getByText("この一時アクセスリンクは無効か、期限切れです")).toBeVisible();
   expect(await page.evaluate(() => location.hash)).toBe("");
 });
