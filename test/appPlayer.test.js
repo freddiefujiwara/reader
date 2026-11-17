@@ -1148,6 +1148,169 @@ describe('次の曲の先読み (二重バッファ)', () => {
   });
 });
 
+describe('ランダム再生の先読み (確定した次曲への役割交代)', () => {
+  // ランダムでは次曲が遷移時の抽選で決まっていたため先読みの
+  // 対象外だったが、武装の時点で1件抽選して確定させることで、
+  // リスト順と同じく役割交代 (advance_swap) で進めるようにする。
+  // 固定したいのは、確定と遷移先が一致することと、確定が無効に
+  // なる操作 (モード切替・本人の選び直し) で破棄されること、
+  // ラウンド内で同じ曲が二重に選ばれないこと。
+  const EP3 = rec('ep-3', 'エピソード3', '2026-11-12T00:00:00.000Z', 'https://example.com/ep3.mp3');
+
+  afterEach(async () => {
+    // ep-3 は共有の IndexedDB に残ると、他のテストの種まき
+    // (2件前提) を壊すので毎回消しておく。
+    await deleteLocalArticles(['ep-3']);
+  });
+
+  async function mountWithEpisodes(records) {
+    await saveLocalFeeds([FEED]);
+    await putLocalArticles(records);
+    el = document.createElement('div');
+    document.body.appendChild(el);
+    app = createApp(App);
+    app.config.errorHandler = (err) => { errors.push(err); };
+    app.mount(el);
+    await flush();
+    expect(el.querySelectorAll('.article-card').length, '記事カードが出る').toBe(records.length);
+  }
+
+  async function toggleShuffleBtn(bar) {
+    bar.querySelector('button[aria-label^="ランダム"]').click();
+    await flush();
+  }
+
+  // 再生が始まったことにして先読みを開始させ、待機要素を返す。
+  async function armPreload(active) {
+    active.dispatchEvent(new window.Event('playing'));
+    await flush();
+    return audioInstances[audioInstances.length - 1];
+  }
+
+  async function endActive(active) {
+    active.ended = true;
+    active.paused = true;
+    active.dispatchEvent(new window.Event('ended'));
+    await flush();
+  }
+
+  it('ランダムでも再生開始で次曲が確定して先読みされ、終了時はその曲へ役割交代する', async () => {
+    await mountWithEpisodes([{ ...EP1 }, { ...EP2 }]);
+    const bar = await startCard(0);
+    await toggleShuffleBtn(bar);
+    expect(bar.querySelector('button[aria-label^="ランダム"]').getAttribute('aria-label')).toBe('ランダム：オン');
+    const audio = latestAudio();
+
+    // 候補は ep-2 だけなので、抽選は一意に定まる。
+    const pre = await armPreload(audio);
+    expect(audioInstances.length).toBe(2);
+    expect(pre.src).toBe('https://example.com/ep2.mp3');
+
+    await endActive(audio);
+    expect(errors).toEqual([]);
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+    // 役割交代で進み、診断にも advance_swap が残る。
+    expect(audioInstances.length).toBe(2);
+    expect(pre.paused).toBe(false);
+    expect(audio.src).toBe('');
+    const diag = logEvents.mock.calls.flatMap((c) => c[1]).filter((e) => e.type.startsWith('advance_'));
+    expect(diag).toEqual([
+      expect.objectContaining({ type: 'advance_swap', article_id: 'ep-2' }),
+    ]);
+  });
+
+  it('ランダムをオフにすると確定が破棄され、リスト順の次曲へ進む', async () => {
+    await mountWithEpisodes([{ ...EP1 }, { ...EP2 }, { ...EP3 }]);
+    const bar = await startCard(0);
+    await toggleShuffleBtn(bar);
+    const audio = latestAudio();
+
+    // 抽選を候補の末尾 (ep-3) に寄せて確定させる。
+    const spy = vi.spyOn(Math, 'random').mockReturnValue(0.99);
+    const pre = await armPreload(audio);
+    spy.mockRestore();
+    expect(pre.src).toBe('https://example.com/ep3.mp3');
+
+    // ランダムをオフにすると確定は破棄され、先読みはリスト順の
+    // 次曲 (ep-2) へ張り替わる。
+    await toggleShuffleBtn(bar);
+    audio.dispatchEvent(new window.Event('timeupdate'));
+    await flush();
+    expect(pre.src).toBe('https://example.com/ep2.mp3');
+
+    // 終了時は確定していた ep-3 ではなく、リスト順の ep-2 へ進む。
+    await endActive(audio);
+    expect(errors).toEqual([]);
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+  });
+
+  it('本人が別の曲を選ぶと確定が破棄され、選び直した曲の先読みが新たに始まる', async () => {
+    await mountWithEpisodes([{ ...EP1 }, { ...EP2 }, { ...EP3 }]);
+    const bar = await startCard(0);
+    await toggleShuffleBtn(bar);
+    const audio = latestAudio();
+
+    const spy = vi.spyOn(Math, 'random').mockReturnValue(0.99);
+    const pre = await armPreload(audio);
+    expect(pre.src).toBe('https://example.com/ep3.mp3');
+
+    // 本人が ep-2 のカードを選ぶと、確定 (ep-3) は破棄され、
+    // 先読み側は空に戻る (確定曲へ誤って進まない)。
+    el.querySelectorAll('.article-card')[1].querySelector('.play-btn').click();
+    await flush();
+    expect(errors).toEqual([]);
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+    expect(pre.src).toBe('');
+
+    // 再生が始まれば、選び直した曲に対する抽選・先読みが新たに
+    // 始まる (候補は未再生の ep-1 / ep-3 で、先頭に寄せる)。
+    spy.mockReturnValue(0);
+    const rearmed = await armPreload(audio);
+    spy.mockRestore();
+    expect(rearmed).toBe(pre);
+    expect(pre.src).toBe('https://example.com/ep1.mp3');
+
+    await endActive(audio);
+    expect(errors).toEqual([]);
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
+    expect(pre.paused).toBe(false);
+  });
+
+  it('ラウンド内では同じ曲が二重に選ばれず、一巡したら止まる', async () => {
+    await mountWithEpisodes([{ ...EP1 }, { ...EP2 }, { ...EP3 }]);
+    const bar = await startCard(0);
+    await toggleShuffleBtn(bar);
+    const audio = latestAudio();
+
+    // 1回目の確定は ep-2 / ep-3 のどちらか (抽選次第)。
+    const pre = await armPreload(audio);
+    const firstIsEp2 = pre.src === 'https://example.com/ep2.mp3';
+    expect(firstIsEp2 || pre.src === 'https://example.com/ep3.mp3').toBe(true);
+
+    // 終了時は確定曲へ役割交代する。
+    await endActive(audio);
+    expect(errors).toEqual([]);
+    expect(el.querySelector('.player-title').textContent).toBe(firstIsEp2 ? 'エピソード2' : 'エピソード3');
+    expect(pre.paused).toBe(false);
+
+    // 交代した要素が再生を始めたら、次の確定は残りの未再生
+    // (もう一方) になり、待機側は旧アクティブが転用される。
+    pre.dispatchEvent(new window.Event('playing'));
+    await flush();
+    expect(audio.src).toBe(firstIsEp2 ? 'https://example.com/ep3.mp3' : 'https://example.com/ep2.mp3');
+
+    await endActive(pre);
+    expect(errors).toEqual([]);
+    expect(el.querySelector('.player-title').textContent).toBe(firstIsEp2 ? 'エピソード3' : 'エピソード2');
+    expect(audio.paused).toBe(false);
+
+    // 一巡したので (リピートなし) 次へは進まず止まる。
+    await endActive(audio);
+    expect(errors).toEqual([]);
+    expect(el.querySelector('.player-title').textContent).toBe(firstIsEp2 ? 'エピソード3' : 'エピソード2');
+  });
+});
+
 describe('読み込み表示', () => {
   it('読み込み中は再生ボタンが blog と同じ「…」になり、再生可能になるとアイコンへ戻る', async () => {
     await mountPlayer();
