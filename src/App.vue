@@ -160,6 +160,12 @@ function dropStickyReadId(id) {
   stickyReadIds.value = next;
 }
 
+// 視聴ログの scroll を送ったフィードの ID。フィードの訪問ごとに
+// 1回だけ送るため、最後に送ったフィードを持ち、フィード選択が
+// 変わるたびにリセットする (setFeed / setCategory / goUnreadAll /
+// applyRoute の選択変更時)。
+let scrollLoggedFeedId = '';
+
 // 画面切替 ('timeline' | 'feeds')。フィード管理はオーナーのみ。
 const view = ref('timeline');
 const mgmtFeeds = ref([]);
@@ -277,10 +283,21 @@ function toggleSummary(id) {
   } else {
     next.add(id);
     expandedSummaryIds.value = next;
-    // 展開したら、その記事は読んだ扱いにする (「既読にする」と同じ
-    // applyRead の経路。閉じる操作では既読を取り消さない)。
     const article = state.value.articles.find((a) => a.id === id);
-    if (article && !article.isRead) applyRead(article, true);
+    if (article) {
+      // 視聴ログ: 要約を展開した操作を記録する (閉じる操作では送らない)。
+      queueEvent({
+        type: 'expand',
+        feed_id: article.feedId,
+        feed_title: article.feedTitle || feedTitleOf(article.feedId),
+        article_id: article.id,
+        article_title: article.title || '',
+      });
+      flushEventLog();
+      // 展開したら、その記事は読んだ扱いにする (「既読にする」と同じ
+      // applyRead の経路。閉じる操作では既読を取り消さない)。
+      if (!article.isRead) applyRead(article, true);
+    }
   }
 }
 
@@ -326,6 +343,7 @@ const queueTimelineCategoryClearCheck = createQueuedCheck(async () => {
   // setCategory と同じく、カテゴリが外れるときはフィード選択も外す。
   // 選択範囲が変わるので、未読表示中に残していた既読カードも畳む。
   clearStickyReadIds();
+  scrollLoggedFeedId = '';
   state.value = { ...state.value, category: '', feedId: '' };
   displayLimit.value = DISPLAY_LIMIT;
 });
@@ -409,6 +427,7 @@ function applyRoute(route) {
     || state.value.filter !== nextFilter
   ) {
     clearStickyReadIds();
+    scrollLoggedFeedId = '';
   }
   state.value = {
     ...state.value,
@@ -689,6 +708,7 @@ function setFeed(feedId) {
   const next = state.value.feedId === feedId ? '' : feedId;
   if (next === state.value.feedId) return;
   clearStickyReadIds();
+  scrollLoggedFeedId = '';
   state.value = { ...state.value, feedId: next };
   displayLimit.value = DISPLAY_LIMIT;
   // 別のフィードの一覧へ移るので、先頭から見せる。
@@ -713,6 +733,7 @@ function setCategory(category) {
   const next = state.value.category === category ? '' : category;
   if (next === state.value.category) return;
   clearStickyReadIds();
+  scrollLoggedFeedId = '';
   // カテゴリを変えたらフィード選択は解除する (対象外フィードが残らないように)。
   state.value = { ...state.value, category: next, feedId: '' };
   displayLimit.value = DISPLAY_LIMIT;
@@ -740,6 +761,7 @@ async function goUnreadAll() {
   // 既読カードは畳む。管理画面から戻るだけで選択が同じなら保持する。
   if (state.value.feedId !== '' || state.value.category !== '' || state.value.filter !== 'unread') {
     clearStickyReadIds();
+    scrollLoggedFeedId = '';
   }
   state.value = { ...state.value, feedId: '', category: '', filter: 'unread' };
   displayLimit.value = DISPLAY_LIMIT;
@@ -890,9 +912,9 @@ async function onMarkAllRead() {
 /* ---- 視聴ログ (サーバーへ送る計測) ---- */
 
 // イベントはメモリ上のキューに貯め、操作の区切り (フィード切替・
-// 記事オープン・再生停止・pagehide) でまとめて送る。再生中の通信は
-// 増やさない。読み取り専用 (共有リンク) では送らない (サーバー側
-// でも forbidden)。
+// 記事オープン・スクロール・要約展開・再生停止・pagehide) で
+// まとめて送る。再生中の通信は増やさない。読み取り専用 (共有リンク)
+// では送らない (サーバー側でも forbidden)。
 const eventQueue = createEventQueue({
   send: (events) => logEvents(session.value.token, events),
   enabled: () => !!session.value && isOwner.value,
@@ -912,6 +934,30 @@ function feedTitleOf(feedId) {
   const feed = state.value.feeds.find((f) => f.id === feedId);
   return feed ? feed.title || '' : '';
 }
+
+// 視聴ログ: フィードを開いてタイムラインをスクロールしたら、その
+// 訪問につき1回だけ scroll を送る (クリックより弱い関心の記録)。
+// 選択変更に伴う先頭へのスクロール (scrollToTop) は scrollY が 0 へ
+// 戻る動きなので数えず、実際に下へ読み進めた (scrollY > 0) ときだけ
+// 送る。帰属は feed_view と同じ (特定フィード選択中のみ)。
+function onTimelineScroll() {
+  if (view.value !== 'timeline') return;
+  const feedId = state.value.feedId;
+  if (!feedId || scrollLoggedFeedId === feedId) return;
+  if (window.scrollY <= 0) return;
+  scrollLoggedFeedId = feedId;
+  queueEvent({
+    type: 'scroll',
+    feed_id: feedId,
+    feed_title: feedTitleOf(feedId),
+    article_id: '',
+    article_title: '',
+  });
+  flushEventLog();
+}
+
+window.addEventListener('scroll', onTimelineScroll, { passive: true });
+onUnmounted(() => window.removeEventListener('scroll', onTimelineScroll));
 
 // 再生時間の積算 (play/pause の区間で実再生時間を測る)。
 const listenTracker = createListenTracker();

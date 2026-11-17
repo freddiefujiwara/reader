@@ -1,8 +1,10 @@
-// 視聴ログ (feed_view / article_open / play) の送信と、管理画面の
-// 「今週の視聴」表示のコンポーネントテスト。
+// 視聴ログ (feed_view / article_open / play / scroll) の送信と、
+// 管理画面の「今週の視聴」表示のコンポーネントテスト。
 // 固定したい振る舞い:
 // - feed_view はフィード選択の変更時だけ送り、初期表示・背景更新・
 //   ジャンル変更・選択解除では送らない。
+// - scroll はフィード選択中にスクロールしたとき、その訪問につき
+//   1回だけ送る。すべて表示では送らない。
 // - article_open は記事タイトルを開いたときに送る。聴き終えた
 //   ときの既読化では送らない (play とは別に数える)。
 // - play は再生が止まった区切りで、実再生時間 (一時停止を除く)
@@ -268,6 +270,66 @@ describe('article_open の送信', () => {
   });
 });
 
+describe('scroll の送信', () => {
+  const scrollEvents = () => sentEvents().filter((e) => e.type === 'scroll');
+
+  function dispatchScroll(y) {
+    Object.defineProperty(window, 'scrollY', { value: y, configurable: true });
+    window.dispatchEvent(new window.Event('scroll'));
+  }
+
+  it('フィード選択中は訪問ごとに1回だけ送り、フィードを変えると新しい分が送られる', async () => {
+    await seedAndMount();
+    // すべて表示では、スクロールしても送らない。
+    dispatchScroll(120);
+    await settleApp();
+    expect(logEvents).not.toHaveBeenCalled();
+
+    // フィードを選ぶ (feed_view が1件送られる)。
+    feedChips().find((b) => b.textContent.includes('X freddie')).click();
+    await flushUntil(() => logEvents.mock.calls.length === 1);
+
+    // スクロールすると、そのフィードの scroll が1件送られる。
+    dispatchScroll(120);
+    await flushUntil(() => scrollEvents().length === 1);
+    expect(scrollEvents()[0]).toEqual(
+      expect.objectContaining({
+        type: 'scroll',
+        feed_id: FEED_B.id,
+        feed_title: 'X freddie',
+        article_id: '',
+        article_title: '',
+      })
+    );
+
+    // 同じ訪問で何度スクロールしても増えない。
+    dispatchScroll(240);
+    dispatchScroll(360);
+    await settleApp();
+    expect(scrollEvents()).toHaveLength(1);
+
+    // フィードを変えてスクロールすると、そのフィード分が送られる。
+    feedChips().find((b) => b.textContent.includes('Rebuild')).click();
+    await flushUntil(() => sentEvents().filter((e) => e.type === 'feed_view').length === 2);
+    dispatchScroll(120);
+    await flushUntil(() => scrollEvents().length === 2);
+    expect(scrollEvents()[1]).toEqual(
+      expect.objectContaining({ type: 'scroll', feed_id: FEED_A.id, feed_title: 'Rebuild' })
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it('先頭へ戻る動き (scrollY が 0) では送らない', async () => {
+    await seedAndMount();
+    feedChips().find((b) => b.textContent.includes('X freddie')).click();
+    await flushUntil(() => logEvents.mock.calls.length === 1);
+    dispatchScroll(0);
+    await settleApp();
+    expect(scrollEvents()).toHaveLength(0);
+    expect(errors).toEqual([]);
+  });
+});
+
 describe('play の送信', () => {
   async function startCard(title) {
     cardByTitle(title).querySelector('.play-btn').click();
@@ -340,6 +402,17 @@ describe('読み取り専用では送らない', () => {
   it('フィード切替でも logEvents は呼ばれない', async () => {
     await seedAndMount('readonly');
     feedChips().find((b) => b.textContent.includes('X freddie')).click();
+    await settleApp();
+    expect(logEvents).not.toHaveBeenCalled();
+    expect(errors).toEqual([]);
+  });
+
+  it('スクロールしても scroll は送られない', async () => {
+    await seedAndMount('readonly');
+    feedChips().find((b) => b.textContent.includes('X freddie')).click();
+    await settleApp();
+    Object.defineProperty(window, 'scrollY', { value: 120, configurable: true });
+    window.dispatchEvent(new window.Event('scroll'));
     await settleApp();
     expect(logEvents).not.toHaveBeenCalled();
     expect(errors).toEqual([]);
