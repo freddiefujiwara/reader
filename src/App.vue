@@ -1330,6 +1330,14 @@ let preloadId = null;
 let preloadFailed = false;
 // URL の再解決を既に試した先読み対象 (対象ごとに1回だけ試す)。
 let preloadRetriedId = null;
+// ランダム再生で、先読みの武装時に抽選して確定させた次曲
+// ({ id, forId, resetPlayed }。forId は抽選時点で再生中の曲、
+// resetPlayed はその抽選がラウンドのやり直しを伴うか)。終了
+// 遷移と「次へ」はこの確定を優先し、先読みの対象と遷移先を
+// 一致させる (役割交代で進めるようにするため)。状況が変わって
+// 無効になったら破棄する (committedPlan)。先読みの破棄
+// (resetPreloadState) と一緒に消える。
+let committedNext = null;
 
 // 先読みの追跡状態を初期状態へ戻す (先読みの破棄と、役割交代で
 // 待機側が先読みでなくなるときに使う)。
@@ -1337,14 +1345,18 @@ function resetPreloadState() {
   preloadId = null;
   preloadFailed = false;
   preloadRetriedId = null;
+  committedNext = null;
 }
 
 // 次に再生することが事前に確定している記事 (無ければ null)。
-// 次曲の決定は本体の自動送り (nextEpisodePlan) と同じにするが、
-// ランダムは次が遷移時の抽選で決まるため対象外とし、単曲
-// リピートは次も同じ曲なので対象外とする。
+// 次曲の決定は本体の自動送り (nextEpisodePlan) と同じにする。
+// 単曲リピートは次も同じ曲なので対象外とする。ランダムでは、
+// 武装の時点で1件抽選して確定させ (shufflePreloadTarget)、
+// 終了遷移はその確定曲へ進む。確定が状況の変化で無効になった
+// ら破棄し、遷移時の抽選 (従来動作) へ戻る。
 function preloadTarget() {
-  if (!currentEpisode.value || shuffleOn.value || repeatMode.value === 'one') return null;
+  if (!currentEpisode.value || repeatMode.value === 'one') return null;
+  if (shuffleOn.value) return shufflePreloadTarget();
   const plan = nextEpisodePlan({
     queue: queueIds(),
     currentId: currentEpisode.value.id,
@@ -1356,6 +1368,53 @@ function preloadTarget() {
   const next = playQueue.value.find((a) => a.id === plan.id);
   if (!next || next.id === currentEpisode.value.id || !next.audioUrl) return null;
   return next;
+}
+
+// ランダム時の先読み対象。確定済みの抽選が生きていればそれを
+// 使い、無ければこの時点で1件抽選して確定させる。抽選の規則
+// (ラウンド内の未再生から選ぶ・一巡したら全体繰り返しのとき
+// だけラウンドをやり直す) は遷移時の nextEpisodePlan と同じで、
+// 確定には resetPlayed (ラウンドのやり直しを伴うか) も一緒に
+// 持つ (遷移側の loadPlannedNext がそのまま解釈できる形)。
+function shufflePreloadTarget() {
+  const committed = committedPlan();
+  if (committed) return playQueue.value.find((a) => a.id === committed.id) || null;
+  const plan = nextEpisodePlan({
+    queue: queueIds(),
+    currentId: currentEpisode.value.id,
+    repeat: repeatMode.value,
+    shuffle: true,
+    playedIds: playedInRound,
+  });
+  if (plan.type !== 'advance') return null;
+  const next = playQueue.value.find((a) => a.id === plan.id);
+  if (!next || next.id === currentEpisode.value.id || !next.audioUrl) return null;
+  committedNext = {
+    id: next.id,
+    forId: currentEpisode.value.id,
+    resetPlayed: plan.resetPlayed === true,
+  };
+  return next;
+}
+
+// 確定させた次曲 (committedNext) が現在の状況でもそのまま
+// 使えるかを確かめ、使えるなら遷移計画として返す。使えない
+// 確定は破棄して null を返す (呼び出し側は従来動作へ戻る)。
+// 無効になるのは、対象が現在の曲に対するものでなくなった・
+// キューから外れた・ラウンドの記録と矛盾する (やり直しを
+// 伴わない抽選なのに既に再生済みになった) 場合。
+function committedPlan() {
+  const c = committedNext;
+  if (!c) return null;
+  const cur = currentEpisode.value;
+  const next = cur && c.forId === cur.id
+    ? playQueue.value.find((a) => a.id === c.id)
+    : null;
+  if (!next || next.id === cur.id || (!c.resetPlayed && playedInRound.has(c.id))) {
+    committedNext = null;
+    return null;
+  }
+  return { type: 'advance', id: c.id, resetPlayed: c.resetPlayed };
 }
 
 // 待機側の先読みを破棄する (待機要素を空に戻す)。
@@ -1673,6 +1732,10 @@ function loadPlannedNext(plan, { diagAdvance = false } = {}) {
 function toggleShuffle() {
   shuffleOn.value = !shuffleOn.value;
   savePlayMode({ shuffle: shuffleOn.value, repeat: repeatMode.value });
+  // ランダムの先読みの確定は、モードが変わったら破棄する
+  // (オフにしたらリスト順の次曲が正になり、オンにしたら
+  // 数え直したラウンドで抽選し直す)。
+  committedNext = null;
   // blog と同じく、切り替えたら再生中の曲からラウンドを数え直す。
   playedInRound = new Set(currentEpisode.value ? [currentEpisode.value.id] : []);
 }
@@ -1755,6 +1818,16 @@ function playButtonLabel(a) {
 // 遷移後はそのまま再生する。
 function skipByTrack(delta) {
   if (!currentEpisode.value) return;
+  // ランダムで先読みの確定が生きていれば、「次へ」はその確定曲
+  // へ進む (先読み済みの待機側をそのまま使える)。「前へ」は
+  // 従来どおり履歴をたどる。
+  if (delta > 0 && shuffleOn.value) {
+    const committed = committedPlan();
+    if (committed && loadPlannedNext(committed)) {
+      consecutivePlayFailures = 0;
+      return;
+    }
+  }
   const plan = skipPlan({
     queue: queueIds(),
     currentId: currentEpisode.value.id,
@@ -2049,7 +2122,11 @@ function handleEpisodeEnded() {
     clearPlayPos(ep.id);
     return;
   }
-  const plan = nextEpisodePlan({
+  // ランダムで先読みの確定 (committedNext) が生きていれば、
+  // 抽選し直さずその確定曲へ進む (先読み済みの待機側と遷移先を
+  // 一致させ、役割交代で進めるため)。確定が無ければ従来どおり
+  // 遷移時に抽選する。
+  const plan = (shuffleOn.value ? committedPlan() : null) || nextEpisodePlan({
     queue: queueIds(),
     currentId: ep.id,
     repeat: repeatMode.value,
