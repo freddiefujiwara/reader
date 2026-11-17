@@ -71,7 +71,7 @@ vi.mock('../src/config.js', () => ({
 }));
 
 import App from '../src/App.vue';
-import { listArticles } from '../src/lib/api.js';
+import { listArticles, logEvents } from '../src/lib/api.js';
 import { loadLocalArticles, saveLocalFeeds, putLocalArticles, deleteLocalArticles } from '../src/lib/localDb.js';
 
 // jsdom の HTMLMediaElement は再生を実装しないため、App が使う
@@ -193,6 +193,46 @@ describe('プレイヤーの自動送り (連続再生)', () => {
     // 末尾なので進まず、同じエピソードのまま止まる。
     expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
     expect(latestAudio().src).toBe('https://example.com/ep2.mp3');
+  });
+});
+
+describe('プレイヤーの自動送り (終了時の処理順序)', () => {
+  // バックグラウンドでは曲間の無音の隙間にページが凍結されうるため、
+  // 終了経路では次曲の play() を、後処理 (視聴ログ送信など) より
+  // 先に発行しなければならない。その順序を固定する。
+  it('次曲の play() が視聴ログ送信より先に呼ばれる', async () => {
+    let nowVal = 0;
+    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => nowVal);
+    const order = [];
+    const origPlay = FakeAudio.prototype.play;
+    FakeAudio.prototype.play = function () {
+      order.push(`play:${this.src}`);
+      return origPlay.call(this);
+    };
+    logEvents.mockImplementation(async () => {
+      order.push('logEvents');
+      return { ok: true, saved: 0 };
+    });
+    try {
+      await mountPlayer();
+      await startCard(0);
+      // 1曲目を10秒聴いたことにする (play イベントの確定対象にする)。
+      nowVal = 10_000;
+      order.length = 0;
+      await fireEnded();
+      expect(errors).toEqual([]);
+      const playIdx = order.indexOf('play:https://example.com/ep2.mp3');
+      const logIdx = order.indexOf('logEvents');
+      expect(playIdx, '次曲の play() が呼ばれる').toBeGreaterThanOrEqual(0);
+      expect(logIdx, '視聴ログが送られる').toBeGreaterThanOrEqual(0);
+      expect(playIdx).toBeLessThan(logIdx);
+      // 後処理 (既読化) も従来どおり行われる。
+      expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(true);
+    } finally {
+      FakeAudio.prototype.play = origPlay;
+      logEvents.mockImplementation(async () => ({ ok: true, saved: 0 }));
+      nowSpy.mockRestore();
+    }
   });
 });
 

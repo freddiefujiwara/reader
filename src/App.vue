@@ -994,12 +994,23 @@ onUnmounted(() => window.removeEventListener('scroll', onTimelineScroll));
 // 再生時間の積算 (play/pause の区間で実再生時間を測る)。
 const listenTracker = createListenTracker();
 
+// 再生時間の確定だけを行う (送信はしない)。切り替えの前に積算を
+// 区切る必要がある箇所 (loadEpisode・単曲リピート) では、こちらで
+// 確定だけ済ませ、送信は再生開始の後に回す。
+function finalizePlayListen() {
+  return listenTracker.finalize();
+}
+
+// 確定した play イベントをキューへ入れて送る。
+function sendPlayListen(event) {
+  if (event) queueEvent(event);
+  flushEventLog();
+}
+
 // 再生が止まった区切りで、積算した再生時間を play イベントとして
 // キューへ入れ、まとめて送る。
 function flushPlayListen() {
-  const event = listenTracker.finalize();
-  if (event) queueEvent(event);
-  flushEventLog();
+  sendPlayListen(finalizePlayListen());
 }
 
 /* ---- ポッドキャスト再生 (端末ローカルのみ) ---- */
@@ -1388,15 +1399,10 @@ function loadEpisode(article, { resume = true } = {}) {
   // 開始時に状態側の最新を id で引き直し、見つからなければ渡された
   // ものをそのまま使う。
   const ep = state.value.articles.find((a) => a.id === article.id) || article;
-  // 視聴ログ: 前のエピソードの再生時間を確定してから、計測対象を
-  // 新しいエピソードへ差し替える。
-  flushPlayListen();
-  listenTracker.setContext({
-    id: ep.id,
-    feedId: ep.feedId,
-    feedTitle: ep.feedTitle || feedTitleOf(ep.feedId),
-    title: ep.title || '',
-  });
+  // 視聴ログ: 前のエピソードの再生時間は、切り替えの前に確定だけ
+  // しておく (新しい曲の再生区間を確定に巻き込まないため)。確定
+  // したイベントの送信と、計測対象の差し替えは再生開始の後に行う。
+  const pendingListen = finalizePlayListen();
   currentEpisode.value = ep;
   currentSrcStale = !!ep.audioStale;
   currentSrcUrl = ep.audioUrl || '';
@@ -1422,6 +1428,17 @@ function loadEpisode(article, { resume = true } = {}) {
   audio.playbackRate = speed.value;
   updateMediaSession(ep);
   tryPlayAudio();
+  // 視聴ログ: 確定済みイベントの送信と、計測対象の新しいエピソード
+  // への差し替えは、再生開始を出した後に行う。終了経路では、曲間
+  // の無音の隙間にページが凍結されうるため、イベント送信 (fetch)
+  // の開始を play() の前に挟まない。
+  sendPlayListen(pendingListen);
+  listenTracker.setContext({
+    id: ep.id,
+    feedId: ep.feedId,
+    feedTitle: ep.feedTitle || feedTitleOf(ep.feedId),
+    title: ep.title || '',
+  });
 }
 
 // ユーザーがカードから選んだとき: その時点の表示リスト (ジャンル・
@@ -1749,6 +1766,15 @@ function handlePlaybackFailure() {
   isPlaying.value = false;
 }
 
+// 聴き終えたエピソードの既読化だけを行う (単曲リピートでも、
+// 既読化は冪等なので毎回通してよい)。視聴ログの article_open は
+// 「記事を開いた操作」だけを数えるため、onOpenArticle は経由
+// しない (play イベントは別に数える)。
+function markEpisodeRead(ep) {
+  const view = state.value.articles.find((a) => a.id === ep.id) || ep;
+  if (isOwner.value && !view.isRead) applyRead(view, true);
+}
+
 function handleEpisodeEnded() {
   if (endFlowDone) return;
   endFlowDone = true;
@@ -1757,23 +1783,26 @@ function handleEpisodeEnded() {
   isLoading.value = false;
   const ep = currentEpisode.value;
   if (!ep) return;
-  // 聴き終えたら既読にする (単曲リピートでも、既読化は冪等なので
-  // 毎回通してよい)。視聴ログの article_open は「記事を開いた操作」
-  // だけを数えるため、ここでは onOpenArticle を経由せず既読化だけ
-  // を行う (play イベントは別に数える)。
-  const view = state.value.articles.find((a) => a.id === ep.id) || ep;
-  if (isOwner.value && !view.isRead) applyRead(view, true);
-  clearPlayPos(ep.id);
   currentTime.value = 0;
+  // 次曲の再生開始を何よりも先に出す。バックグラウンドでは曲間の
+  // 無音の隙間にページが凍結されうるため、後処理 (既読化・再生
+  // 位置のクリア・視聴ログ送信) を先に済ませようとすると、その
+  // 途中で止まって次曲が始まらないことがある (実機で、終了フロー
+  // 自体は実行され視聴ログも終端時刻で確定していたのに、次曲が
+  // 始まらなかった例を確認)。後処理は再生開始の後に回す。
   if (repeatMode.value === 'one') {
-    // 視聴ログ: 1周分の再生時間を確定する (計測対象は同じ曲のまま
-    // 次の周を数え直す)。
-    flushPlayListen();
+    // 視聴ログ: 1周分の再生時間は再開の前に確定だけしておき
+    // (計測対象は同じ曲のまま次の周を数え直す)、送信は再開の後に
+    // 回す。
+    const pendingListen = finalizePlayListen();
     // 単曲リピート: src は差し替えず先頭から再生し直す。再開位置
     // (pendingSeek は metadata 読み込み時だけ効く) とは競合しない。
     audio.currentTime = 0;
     endFlowDone = false;
     tryPlayAudio();
+    sendPlayListen(pendingListen);
+    markEpisodeRead(ep);
+    clearPlayPos(ep.id);
     return;
   }
   const plan = nextEpisodePlan({
@@ -1791,6 +1820,8 @@ function handleEpisodeEnded() {
     playWanted = false;
     flushPlayListen();
   }
+  markEpisodeRead(ep);
+  clearPlayPos(ep.id);
 }
 audio.addEventListener('ended', handleEpisodeEnded);
 
