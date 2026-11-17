@@ -29,6 +29,7 @@ import {
   isWithinStartGuard,
   RESUME_START_GUARD_SEC,
   reachedKnownDurationEnd,
+  foregroundRecoveryAction,
   KNOWN_DURATION_END_TOLERANCE_SEC,
   END_CHECK_INTERVAL_MS,
   preloadLeadSec,
@@ -534,6 +535,32 @@ describe('reachedKnownDurationEnd', () => {
     expect(reachedKnownDurationEnd({
       displayPos: 103.8, trueSec: 104, elementDuration: 208, hasMeasuredModel: true,
     })).toBe(true);
+  });
+});
+
+describe('foregroundRecoveryAction (フォアグラウンド復帰時の再生回復)', () => {
+  const base = {
+    hasEpisode: true, playWanted: true, ended: false,
+    endFlowDone: false, paused: false, reachedEnd: false,
+  };
+  it('エピソードが無い・再生の意思が無いときは何もしない', () => {
+    expect(foregroundRecoveryAction({ ...base, hasEpisode: false, ended: true })).toBe('none');
+    // 本人が一時停止した状態では、復帰しても勝手に再開しない。
+    expect(foregroundRecoveryAction({ ...base, playWanted: false, paused: true })).toBe('none');
+    expect(foregroundRecoveryAction()).toBe('none');
+  });
+  it('終端に達していて終了フローがまだなら次へ進める', () => {
+    expect(foregroundRecoveryAction({ ...base, ended: true, paused: true })).toBe('advance');
+    expect(foregroundRecoveryAction({ ...base, reachedEnd: true })).toBe('advance');
+  });
+  it('終了フロー済みの終端 (末尾で停止) は触らない', () => {
+    expect(foregroundRecoveryAction({ ...base, ended: true, endFlowDone: true, paused: true })).toBe('none');
+  });
+  it('途中で止まっているだけなら再生し直す', () => {
+    expect(foregroundRecoveryAction({ ...base, paused: true })).toBe('resume');
+  });
+  it('再生できていれば何もしない', () => {
+    expect(foregroundRecoveryAction({ ...base })).toBe('none');
   });
 });
 

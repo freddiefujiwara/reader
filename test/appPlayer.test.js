@@ -1077,6 +1077,72 @@ describe('切り替わり時の開始位置 (次の曲の頭が飛ぶ不具合)'
   });
 });
 
+describe('フォアグラウンド復帰時の再生回復', () => {
+  // バックグラウンドから戻ってきたことを、visibilitychange の
+  // 発火で模す (既存の位置保存テストと同じ流儀)。
+  async function fireVisible() {
+    document.dispatchEvent(new window.Event('visibilitychange'));
+    await flush();
+  }
+
+  it('要素だけが終わっていて ended が来ていない状態で復帰すると、次へ進む', async () => {
+    await mountPlayer();
+    await startCard(0);
+    const audio = latestAudio();
+    // バックグラウンドで曲が終わったが、'ended' イベントも
+    // 終了判定のタイマーも suspend されて届かなかった状態。
+    audio.ended = true;
+    audio.paused = true;
+    await fireVisible();
+    expect(errors).toEqual([]);
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+    expect(audio.src).toBe('https://example.com/ep2.mp3');
+    expect(audio.paused).toBe(false);
+  });
+
+  it('自動送りの play() が NotAllowedError で拒否されても曲を飛ばさず、復帰で再生が始まる', async () => {
+    await mountPlayer();
+    await startCard(0);
+    const audio = latestAudio();
+    // 次曲への送りで呼ばれる play() が、バックグラウンドでの
+    // ブロックを模して NotAllowedError で拒否されるようにする
+    // (新しいリソースを読み始めた要素として ended は下ろす)。
+    const originalPlay = audio.play.bind(audio);
+    audio.play = () => {
+      audio.ended = false;
+      audio.paused = true;
+      const err = new Error('blocked');
+      err.name = 'NotAllowedError';
+      return Promise.reject(err);
+    };
+    await fireEnded();
+    // 失敗扱いで送られたりせず、次曲に留まっている。
+    expect(errors).toEqual([]);
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+    expect(audio.paused).toBe(true);
+    // フォアグラウンドへ戻ると、留まっていた次曲の再生が始まる。
+    audio.play = originalPlay;
+    await fireVisible();
+    expect(errors).toEqual([]);
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+    expect(audio.paused).toBe(false);
+  });
+
+  it('本人が一時停止していたら、復帰しても勝手に再生しない', async () => {
+    await mountPlayer();
+    await startCard(0);
+    const audio = latestAudio();
+    // 再生中のカードのボタンをもう一度押す = 本人の一時停止。
+    el.querySelectorAll('.article-card')[0].querySelector('.play-btn').click();
+    await flush();
+    expect(audio.paused).toBe(true);
+    await fireVisible();
+    expect(errors).toEqual([]);
+    expect(audio.paused).toBe(true);
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
+  });
+});
+
 describe('タイトル押下と再生の継続', () => {
   it('再生中にタイトルを押しても、ページを開き直さず再生が続く', async () => {
     await mountPlayer();

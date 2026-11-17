@@ -379,6 +379,36 @@ export function reachedKnownDurationEnd({ displayPos, trueSec, elementDuration, 
 // よう、1秒より細かく刻む。
 export const END_CHECK_INTERVAL_MS = 500;
 
+/* ---- フォアグラウンド復帰時の再生回復 ----
+   バックグラウンドでは JS のタイマーが止まり、ページ自体が
+   suspend / freeze されることがある。その間に曲が終わると、
+   'ended' が来ない曲 (iOS の fMP4) や、タイマーの tick でしか
+   到達を判定できない曲では、次曲への進行が復帰まで起きない
+   (実機で「バックグラウンドでは次へ進まず、アプリを開くと
+   始まる」症状を確認)。また、自動送りの play() が復帰まで
+   保留・拒否されることもある。そこで、フォアグラウンドへ
+   戻った時点で「再生する意思があるのに止まっている」状態を
+   検出したら、その場で進行・再開する。判定だけをここで行い、
+   実行は App.vue 側が担う。
+   入力:
+     hasEpisode  … 再生中のエピソードがある
+     playWanted  … アプリ側に再生の意思がある (本人が一時停止
+                   した場合は false になり、勝手に再開しない)
+     ended       … 要素が現在の曲の終端に達している
+     endFlowDone … 終了フロー (自動送り等) が既に走った
+     paused      … 要素が止まっている
+     reachedEnd  … 既知の長さへの到達判定が真
+   戻り値: 'advance' (次曲へ進める) | 'resume' (再生し直す) |
+           'none' (何もしない)。 */
+export function foregroundRecoveryAction({ hasEpisode, playWanted, ended, endFlowDone, paused, reachedEnd } = {}) {
+  if (!hasEpisode || !playWanted) return 'none';
+  if ((ended || reachedEnd) && !endFlowDone) return 'advance';
+  // 終了フロー済みの終端は、末尾で止まった正規の状態なので触らない。
+  if (ended) return 'none';
+  if (paused) return 'resume';
+  return 'none';
+}
+
 /* ---- 次の曲の先読み ---- */
 // 先読みを始めるタイミングは、次に再生する曲の実尺の割合で決める
 // (App.vue 側)。次の曲が長いほど読み込みにも時間がかかるため、
