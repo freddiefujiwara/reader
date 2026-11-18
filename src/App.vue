@@ -17,6 +17,7 @@ import {
   setStar,
 } from './lib/api.js';
 import { buildShareUrl, formatShareExpiry } from './lib/shareLink.js';
+import { buildXShareUrl, buildFacebookShareUrl, buildThreadsShareUrl } from './lib/shareArticle.js';
 import {
   buildSaveFeedPayload,
   createFeedForm,
@@ -190,6 +191,13 @@ const shareSaving = ref(false);
 const shareError = ref('');
 const shareConfirm = ref(''); // '' | 'issue' | 'revoke'
 const shareCopied = ref(false);
+// 記事カードの「リンクをコピー」のフィードバック先 (記事ID)。
+// 一定時間で自動的に戻す。
+const copiedArticleId = ref('');
+let copiedArticleTimer = null;
+onUnmounted(() => {
+  if (copiedArticleTimer) clearTimeout(copiedArticleTimer);
+});
 // 今週の視聴 (管理画面の共有リンクの下)。週単位の集計なので、
 // 取得は管理画面を開いたときの1回だけにする。
 const statsData = ref(null); // null=未取得 / { currentWeek, current }
@@ -2471,6 +2479,23 @@ async function copyShareUrl() {
   }
 }
 
+// 記事カードのリンクコピー。元リンクをクリップボードへ入れ、
+// 成功した記事のボタンだけ短時間チェック表示にする。コピーできない
+// 環境ではフィードバックを出さない (copyShareUrl と同じ流儀)。
+async function copyArticleLink(article) {
+  if (!article.link) return;
+  try {
+    await navigator.clipboard.writeText(article.link);
+  } catch {
+    return;
+  }
+  copiedArticleId.value = article.id;
+  if (copiedArticleTimer) clearTimeout(copiedArticleTimer);
+  copiedArticleTimer = setTimeout(() => {
+    copiedArticleId.value = '';
+  }, 1600);
+}
+
 // 管理画面のジャンル絞り込みの切り替え。タイムラインの setCategory と
 // 同じトグル方式: 選択中のジャンルを再タップしたら解除し、全件表示に
 // 戻す (「すべて」チップは置かない)。
@@ -3073,6 +3098,43 @@ onMounted(async () => {
                 :aria-pressed="a.starred ? 'true' : 'false'"
                 @click="applyStar(a, !a.starred)"
               >{{ a.starred ? '⭐' : '☆' }}</button>
+              <a
+                class="share-btn"
+                :href="buildXShareUrl(a.title, a.link)"
+                target="_blank"
+                rel="noopener"
+                aria-label="Xで共有"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.234 10.162 22.977 0h-2.072l-7.591 8.824L7.251 0H.258l9.168 13.343L.258 24H2.33l8.016-9.318L16.749 24h6.993zm-2.837 3.299-.929-1.329L3.076 1.56h3.182l5.965 8.532.929 1.329 7.754 11.09h-3.182z" /></svg>
+              </a>
+              <a
+                class="share-btn"
+                :href="buildFacebookShareUrl(a.link)"
+                target="_blank"
+                rel="noopener"
+                aria-label="Facebookで共有"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.101 23.691v-7.98H6.627v-3.667h2.474v-1.58c0-4.085 1.848-5.978 5.858-5.978.401 0 .955.042 1.468.103a8.68 8.68 0 0 1 1.141.195v3.325a8.623 8.623 0 0 0-.653-.036 26.805 26.805 0 0 0-.733-.009c-.707 0-1.259.096-1.675.309a1.686 1.686 0 0 0-.679.622c-.258.42-.374.995-.374 1.752v1.297h3.919l-.386 2.103-.287 1.564h-3.246v8.245C19.396 23.238 24 18.179 24 12.044c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.628 3.874 10.35 9.101 11.647Z" /></svg>
+              </a>
+              <a
+                class="share-btn"
+                :href="buildThreadsShareUrl(a.title, a.link)"
+                target="_blank"
+                rel="noopener"
+                aria-label="Threadsで共有"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.263 11.097c-.03-3.486-1.92-5.586-5.111-5.586-2.13 0-3.922.963-4.863 2.499l2.062 1.438c.535-.843 1.272-1.543 2.628-1.543 1.528 0 2.318.85 2.544 2.431a15 15 0 0 0-2.236-.173c-4.125 0-6.068 1.867-6.068 4.336s1.943 3.99 4.804 3.99c3.139 0 5.013-2.115 5.781-4.735.798.361 1.348 1.204 1.348 2.47 0 3.387-3.907 5.232-7.22 5.232-4.885 0-8.077-3.207-8.077-8.424 0-6.392 4.223-10.487 9.9-10.487 3.808 0 5.69 1.671 6.97 3.914l2.108-1.475C21.44 2.078 18.331 0 13.663 0 6.227 0 1.168 5.277 1.168 12.934c0 7 4.953 11.066 10.856 11.066 4.878 0 9.809-2.846 9.809-7.716 0-2.545-1.46-4.231-3.569-5.187m-6.33 4.855c-1.077 0-2.026-.512-2.026-1.453 0-1.483 1.822-1.934 3.606-1.934.678 0 1.34.045 1.927.173-.422 1.927-1.671 3.215-3.508 3.214Z" /></svg>
+              </a>
+              <button
+                type="button"
+                class="share-btn"
+                :class="{ 'is-copied': copiedArticleId === a.id }"
+                :aria-label="copiedArticleId === a.id ? 'コピーしました' : 'リンクをコピー'"
+                @click="copyArticleLink(a)"
+              >
+                <svg v-if="copiedArticleId === a.id" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" /></svg>
+                <svg v-else viewBox="0 0 24 24" aria-hidden="true"><path d="M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z" /></svg>
+              </button>
               <span v-if="!a.isRead" class="unread-dot" aria-label="未読"></span>
               <button
                 v-if="canPlay(a)"
