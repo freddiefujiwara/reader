@@ -425,6 +425,15 @@ button.ghost.active {
   padding-bottom: 2px;
 }
 
+/* PC幅ではチップ行を折り返して全件見せる (横スクロールはマウス操作と相性が悪い)。
+   スマホ幅 (既存ブレークポイント 720px 以下) は従来どおり1行の横スクロール。 */
+@media (min-width: 721px) {
+  .filter-bar .feed-chips {
+    flex-wrap: wrap;
+    overflow-x: visible;
+  }
+}
+
 .feed-chips {
   display: flex;
   gap: 8px;
