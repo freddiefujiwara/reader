@@ -365,20 +365,16 @@ export function interpretStoredPlayPos(stored, ctx) {
 // 判定されうるが、丸め誤差を吸収するために必要。
 export const KNOWN_DURATION_END_TOLERANCE_SEC = 0.6;
 
-// toleranceSec は到達とみなす幅 (真の長さより手前をどこまで
-// 許すか)。PR #105 で YouTube 曲だけ 2.5 秒に広げる前倒しを
-// 入れたが、曲の末尾を切り捨てる形になる (単曲リピートでは
-// 2.5 秒早く巻き戻る) ため、本人の判断で取りやめた
-// (2026-11-17)。現在は曲の種別によらず既定の 0.6 秒に統一
-// しており、この引数は判定の幅を差し替える口として残して
-// いる。不正な値は既定に倒す。
-export function reachedKnownDurationEnd({ displayPos, trueSec, elementDuration, hasMeasuredModel, toleranceSec = KNOWN_DURATION_END_TOLERANCE_SEC } = {}) {
+// 到達とみなす幅は上の定数に固定する。PR #105 で YouTube 曲
+// だけ 2.5 秒に広げる前倒しを入れたが、曲の末尾を切り捨てる
+// 形になる (単曲リピートでは 2.5 秒早く巻き戻る) ため、
+// 本人の判断で取りやめた (2026-11-17)。その後しばらく、幅を
+// 差し替える toleranceSec 引数として口を残していたが、呼び
+// 出しは常に既定値のみで実績が無いため、定数へ一本化した。
+export function reachedKnownDurationEnd({ displayPos, trueSec, elementDuration, hasMeasuredModel } = {}) {
   if (!Number.isFinite(trueSec) || trueSec <= 0) return false;
   if (!Number.isFinite(displayPos)) return false;
-  const tolerance = Number.isFinite(toleranceSec) && toleranceSec >= 0
-    ? toleranceSec
-    : KNOWN_DURATION_END_TOLERANCE_SEC;
-  if (displayPos < trueSec - tolerance) return false;
+  if (displayPos < trueSec - KNOWN_DURATION_END_TOLERANCE_SEC) return false;
   if (!durationMismatch(trueSec, elementDuration)) return true;
   return hasMeasuredModel === true;
 }
