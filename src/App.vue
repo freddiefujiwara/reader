@@ -1087,7 +1087,9 @@ function flushPlayListen() {
 // 従来経路の新規読み込みで次へ進んだ。対象は次の曲) / stall
 // (ストール検知が発動した。seconds は止まった位置) / recover
 // (フォアグラウンド復帰時の回復が、止まっていた再生を再開・
-// 前進させた。対象は止まっていた曲) の5つ。いずれもキューヘの
+// 前進させた。対象は止まっていた曲) / deck_overlap (待機側の
+// 要素が再生状態になっているのを検出して止めた。対象は待機側に
+// 載っていた曲、seconds は待機側の止めた位置) の6つ。いずれもキューヘの
 // push のみで、送信の開始は既存の区切りに相乗りする (再生開始を
 // 遅らせないため、この関数から flush はしない)。
 function queueDiagEvent(type, ep, seconds) {
@@ -1352,7 +1354,10 @@ function checkPlaybackStall() {
 
 // タイマーの tick では、終端の到達判定とストール検知の両方を
 // 見に行く (どちらも timeupdate が止まった状況でこそ要る)。
+// あわせて、待機側が鳴っていないかも見る (二重再生の監視。
+// silenceStandbyDeck)。
 function playerTimerTick() {
+  silenceStandbyDeck();
   checkKnownDurationEnd();
   checkPlaybackStall();
 }
@@ -1492,6 +1497,43 @@ function discardPreload() {
   unloadDeck(standby);
 }
 
+/* ---- 待機側の無音保証 (二重再生の監視) ----
+   待機側は先読み専用で、再生されることは設計上ない。play() の
+   呼び出しはアクティブ側 (audio) へしか行かず、役割交代では
+   旧要素を必ず止める作りだが、実機で待機側が鳴って二重再生に
+   なる例が確認された (2026-11-18、Nin-Nin-Ninja の再生中に
+   先読みされていた次曲が重なった。アクティブ側の再生・遷移は
+   ログ上すべて正常で、診断イベントも無かった)。アプリの経路
+   では説明が付かず、ブラウザ側で保留されていた再生要求が、
+   役割交代後の待機側への読み込みで効いた等の競合が疑われる。
+   原因の如何によらず「同時に鳴るのは常に1要素だけ」を保証
+   するため、待機側が再生状態にあるのを見つけたら、その場で
+   止めて deck_overlap として残す。呼び出しは、再生中の
+   タイマー tick・フォアグラウンド復帰・本人の停止操作・
+   先読みの張り替えの各地点から (止めたことは、本人の停止が
+   両要素に届く保証にもなる)。報告は、同じ武装 (対象と URL)
+   につき1回までに抑える。戻り値は「鳴っていたので止めた」か。 */
+let standbyGhostReportedKey = '';
+
+function silenceStandbyDeck() {
+  const standby = existingStandby();
+  if (!standby) return false;
+  if (standby.paused || standby.ended) {
+    standbyGhostReportedKey = '';
+    return false;
+  }
+  standby.pause();
+  const key = `${preloadId || ''}:${standby.src || ''}`;
+  if (standbyGhostReportedKey !== key) {
+    standbyGhostReportedKey = key;
+    const ghost = preloadId !== null
+      ? state.value.articles.find((a) => a.id === preloadId)
+      : currentEpisode.value;
+    queueDiagEvent('deck_overlap', ghost, Math.floor(standby.currentTime || 0));
+  }
+  return true;
+}
+
 // 'playing' と timeupdate から呼ばれる。対象が変わっていたら
 // 待機側へ張り替え、対象が無くなったら破棄する。先読みの開始
 // タイミングは呼び出し側 (再生が始まった時点) が決める。
@@ -1503,6 +1545,9 @@ function updatePreload() {
   }
   if (preloadId === target.id) return;
   const standby = standbyDeck();
+  // 張り替える前に、待機側が鳴っていたら止める (二重再生の
+  // 監視。診断の文脈は張り替え前の対象のままにする)。
+  silenceStandbyDeck();
   preloadId = target.id;
   preloadFailed = false;
   preloadRetriedId = null;
@@ -1652,8 +1697,11 @@ function updateMediaSession(article) {
     navigator.mediaSession.setActionHandler('pause', () => {
       // ロック画面等からの明示的な一時停止は、本人の意思として
       // 扱う (フォアグラウンド復帰時に勝手に再開しない)。
+      // 待機側が鳴っていたら一緒に止める (本人の停止が両要素に
+      // 届く保証。二重再生の監視)。
       playWanted = false;
       audio.pause();
+      silenceStandbyDeck();
     });
     navigator.mediaSession.setActionHandler('seekbackward', () => skipBy(-15));
     navigator.mediaSession.setActionHandler('seekforward', () => skipBy(30));
@@ -1738,10 +1786,17 @@ function loadEpisode(article, { resume = true, diagAdvance = false } = {}) {
     audio.playbackRate = speed.value;
   }
   updateMediaSession(ep);
+  if (oldDeck) {
+    // 旧要素は待機側になる。再生開始 (play()) を出す前に一度
+    // 止めておく (play() と pause() はどちらも非同期に効くため、
+    // 先に止めておかないと旧要素が鳴り続ける窓ができる)。
+    // 同期的な pause() は、再生開始の前に非同期処理を挟まない
+    // 原則 (PR #109) には当たらない。再生開始の後でもう一度
+    // 止めて空に戻す (従来どおり)。
+    oldDeck.pause();
+  }
   tryPlayAudio();
   if (oldDeck) {
-    // 旧要素は待機側になる。再生開始 (play()) を出した後で止めて
-    // 空に戻す (後処理を再生開始より先にしない原則は維持する)。
     // 旧要素から遅れて来るイベントは、リスナー側のガード
     // (アクティブでない要素は無視) で状態へ響かない。
     oldDeck.pause();
@@ -1825,6 +1880,9 @@ function togglePlay() {
   } else {
     playWanted = false;
     audio.pause();
+    // 待機側が鳴っていたら一緒に止める (本人の停止が両要素に
+    // 届く保証。二重再生の監視)。
+    silenceStandbyDeck();
   }
 }
 
@@ -1951,10 +2009,15 @@ function onSeekInput(event) {
 
 function stopPlayer() {
   playWanted = false;
+  // 待機側が鳴っていたら一緒に止める (本人の停止が両要素に
+  // 届く保証。二重再生の監視)。先読みの文脈 (preloadId) が
+  // 残っているうちに行い、診断は下の flush で一緒に送る。
+  silenceStandbyDeck();
   savePlayPos();
   // 視聴ログ: プレイヤーを閉じるのが再生の終わりなので、積算した
   // 再生時間をここで確定して送る。
   flushPlayListen();
+  flushEventLog();
   listenTracker.clear();
   stopEndCheckTimer();
   discardPreload();
@@ -2220,6 +2283,11 @@ function handleEpisodeEnded() {
 // player.js の foregroundRecoveryAction、本人が一時停止した
 // 場合は playWanted が下りているので何もしない。
 function recoverPlaybackOnForeground() {
+  // 待機側が鳴っていたら、回復の判定より先に止める (二重再生の
+  // 監視)。本人が止めた状態で復帰したときも、待機側だけは
+  // ここで確実に黙らせる (回復の判定は playWanted で閉じて
+  // いるが、待機側の再生はその対象外だった)。
+  const ghostSilenced = silenceStandbyDeck();
   const stuck = currentEpisode.value;
   const action = foregroundRecoveryAction({
     hasEpisode: !!currentEpisode.value,
@@ -2231,7 +2299,11 @@ function recoverPlaybackOnForeground() {
   });
   if (action === 'advance') handleEpisodeEnded();
   else if (action === 'resume') tryPlayAudio();
-  else return;
+  else {
+    // 回復が何もしなくても、待機側を止めた診断だけは送る。
+    if (ghostSilenced) flushEventLog();
+    return;
+  }
   // 診断: 回復が実際に再開・前進させたことを、止まっていた曲の
   // 文脈で残す。復帰時はフォアグラウンドなのでその場で送り、
   // バックグラウンドの間にキューへ残っていた診断分も一緒に届ける。
