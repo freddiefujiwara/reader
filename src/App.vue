@@ -333,6 +333,73 @@ watch(displayArticles, () => scheduleMeasureSummaries());
 window.addEventListener('resize', scheduleMeasureSummaries);
 onUnmounted(() => window.removeEventListener('resize', scheduleMeasureSummaries));
 
+// フィードチップ行の開閉 (PC幅のみ)。PC幅ではチップを折り返して
+// 全件見せるが、「すべて」では全フィードが縦に並んでファーストビューを
+// 占有するため、既定は CSS で2行までに抑え、はみ出すときだけ
+// 「すべて表示」で広げる。はみ出しの判定は要約と同じく、描画後の
+// scrollHeight / clientHeight の比較で行う (抑えたときにだけ差が出る。
+// スマホ幅では抑えないので差は出ず、トグルも出ない)。
+// 開閉状態は保存しない (画面を開いている間だけの状態)。
+const feedChipsExpanded = ref(false);
+const feedChipsOverflow = ref(false);
+let feedChipsEl = null;
+
+function registerFeedChipsEl(el) {
+  feedChipsEl = el || null;
+  if (el) scheduleMeasureFeedChips();
+}
+
+function measureFeedChips() {
+  const el = feedChipsEl;
+  if (!el) {
+    feedChipsOverflow.value = false;
+    return;
+  }
+  // 展開中は測れない (切れていない)。閉じたときに測り直すため、
+  // それまでの省略判定は引き継ぐ。
+  if (feedChipsExpanded.value) return;
+  // まだレイアウトされていない (描画前・非表示) 要素は測れない。
+  // 空振りの測定で判定を落とさないよう、前回を引き継ぐ。
+  if (el.scrollHeight === 0 && el.clientHeight === 0) return;
+  feedChipsOverflow.value = el.scrollHeight > el.clientHeight + 1;
+}
+
+// 測定の予約 (要約と同じ二段構え: 次ティック＋次のフレームで測り直す)。
+let feedChipsMeasureFramePending = false;
+function scheduleMeasureFeedChips() {
+  nextTick(measureFeedChips);
+  if (feedChipsMeasureFramePending) return;
+  feedChipsMeasureFramePending = true;
+  const run = () => {
+    feedChipsMeasureFramePending = false;
+    measureFeedChips();
+  };
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+  else nextTick(run);
+}
+
+function toggleFeedChips() {
+  feedChipsExpanded.value = !feedChipsExpanded.value;
+  // 閉じ直したら測り直す (対象が減って収まるようになった場合は
+  // トグル自体を消す)。
+  if (!feedChipsExpanded.value) scheduleMeasureFeedChips();
+}
+
+// チップの顔ぶれ (ID集合) が変わったら、閉じた状態に戻して測り直す。
+// 未読バッジの有無や並び順だけの変化では閉じず、測定だけ行う
+// (背景更新で一覧が差し替わっても、開いた状態は維持する)。
+let lastChipFeedIds = '';
+watch(chipFeeds, (feeds) => {
+  const ids = feeds.map((f) => f.id).sort().join('\n');
+  if (ids !== lastChipFeedIds) {
+    lastChipFeedIds = ids;
+    feedChipsExpanded.value = false;
+  }
+  scheduleMeasureFeedChips();
+});
+window.addEventListener('resize', scheduleMeasureFeedChips);
+onUnmounted(() => window.removeEventListener('resize', scheduleMeasureFeedChips));
+
 // 選択中のカテゴリ (ジャンル) を持つフィードが1つも無くなったら、
 // 選択を自動で解除して全件表示に戻す。最後の1件を別ジャンルへ
 // 編集・削除するとカテゴリのチップ自体が消え、手では解除できなく
@@ -2773,9 +2840,12 @@ document.addEventListener('visibilitychange', () => {
 });
 
 onMounted(async () => {
-  // Web フォントの読み込みで要約の行数が変わるため、確定後に測り直す。
+  // Web フォントの読み込みで要約の行数やチップの折り返しが変わるため、確定後に測り直す。
   if (document.fonts && document.fonts.ready) {
-    document.fonts.ready.then(() => scheduleMeasureSummaries());
+    document.fonts.ready.then(() => {
+      scheduleMeasureSummaries();
+      scheduleMeasureFeedChips();
+    });
   }
   if (!API_URL) {
     bootError.value = 'データAPIのURLが未設定です（ビルド時の設定待ち）。';
@@ -2852,7 +2922,13 @@ onMounted(async () => {
             @click="setCategory(c)"
           >{{ c }}</button>
         </div>
-        <div class="feed-chips" role="tablist" aria-label="フィードで絞り込み">
+        <div
+          class="feed-chips"
+          :class="{ 'is-collapsed': !feedChipsExpanded }"
+          :ref="registerFeedChipsEl"
+          role="tablist"
+          aria-label="フィードで絞り込み"
+        >
           <button
             v-for="f in chipFeeds"
             :key="f.id"
@@ -2862,6 +2938,13 @@ onMounted(async () => {
             @click="setFeed(f.id)"
           >{{ feedDisplayName(f) }}<span v-if="f.unreadCount > 0" class="chip-count">{{ f.unreadCount }}</span></button>
         </div>
+        <button
+          v-if="feedChipsOverflow"
+          type="button"
+          class="chips-toggle"
+          :aria-expanded="feedChipsExpanded ? 'true' : 'false'"
+          @click="toggleFeedChips"
+        >{{ feedChipsExpanded ? '閉じる' : 'すべて表示' }}</button>
 
         </div>
 
