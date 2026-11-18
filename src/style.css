@@ -432,6 +432,43 @@ button.ghost.active {
     flex-wrap: wrap;
     overflow-x: visible;
   }
+
+  /* フィード行は既定 (is-collapsed) で2行までに抑える。「すべて」では
+     全フィードが縦に並んでファーストビューを占有するためで、はみ出しは
+     JS が測って「すべて表示」トグルを出す。高さはチップの実高
+     (フォント 0.9rem × 行間 1.85 + 上下 padding 10px + 枠 2px ≒ 38.6px)
+     2行 + 行間 (gap 8px) + 上下 padding (2px + 6px) ≒ 93.2px から 94px。
+     カテゴリ行は件数が少なく、クラスも付けないため対象外。 */
+  .filter-bar .feed-chips.is-collapsed {
+    max-height: 94px;
+    overflow: hidden;
+  }
+}
+
+/* フィード行の開閉トグル。はみ出すときだけ JS が描画する。
+   スマホ幅では行を抑えないため、ボタン自体も出さない。 */
+.chips-toggle {
+  display: none;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--muted);
+  padding: 2px 0 4px;
+  cursor: pointer;
+}
+
+.chips-toggle:hover {
+  color: var(--link);
+}
+
+@media (min-width: 721px) {
+  .chips-toggle {
+    display: block;
+    width: fit-content;
+    margin-left: auto;
+  }
 }
 
 .feed-chips {
