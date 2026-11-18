@@ -77,6 +77,39 @@ describe('共有リンクのボタンの配置', () => {
   });
 });
 
+// min-width: 721px のメディアクエリ群の中身をまとめて取り出す
+// (ルールは入れ子だが、ブロックの閉じ括弧は行頭に出る前提)。
+function desktopCss() {
+  return [...css.matchAll(/@media \(min-width: 721px\) \{([\s\S]*?)\n\}/g)]
+    .map((m) => m[1])
+    .join('\n');
+}
+
+describe('フィードチップ行の折りたたみ (PC幅)', () => {
+  it('折りたたみ (.feed-chips.is-collapsed) は2行分の高さで抑え、はみ出しを隠す', () => {
+    const body = ruleBody('.filter-bar .feed-chips.is-collapsed');
+    expect(body, '折りたたみのルールがある').not.toBe('');
+    expect(body).toContain('max-height: 94px');
+    expect(body).toContain('overflow: hidden');
+  });
+
+  it('折りたたみのルールは PC幅のメディアクエリの中だけにある (スマホ幅は抑えない)', () => {
+    expect(desktopCss()).toContain('.feed-chips.is-collapsed');
+    const beforeDesktop = css.slice(0, css.indexOf('@media (min-width: 721px)'));
+    expect(beforeDesktop).not.toContain('is-collapsed');
+  });
+
+  it('開閉トグル (.chips-toggle) は既定で出さず、PC幅でのみブロック表示する', () => {
+    const body = ruleBody('.chips-toggle');
+    expect(body, 'トグルのルールがある').not.toBe('');
+    expect(body).toContain('display: none');
+    const desktop = desktopCss();
+    const m = desktop.match(/\.chips-toggle\s*\{([^}]*)\}/);
+    expect(m, 'PC幅でトグルを出すルールがある').toBeTruthy();
+    expect(m[1]).toContain('display: block');
+  });
+});
+
 describe('スターボタンの固定', () => {
   it('スター (.star-btn) は固定幅で、☆/⭐ の切替で幅が変わらない', () => {
     const body = ruleBody('.star-btn');
