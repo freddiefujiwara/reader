@@ -775,6 +775,38 @@ button.ghost.active {
   touch-action: manipulation;
 }
 
+/* 記事の SNS 共有 (X / Facebook / Threads) とリンクコピー。
+   アクション行の左側、スターの右に並べる小さなアイコンボタン。
+   色は read-toggle と同じ控えめな muted、ホバーで link 色。 */
+.share-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  padding: 6px 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  flex: none;
+  touch-action: manipulation;
+}
+
+.share-btn:hover {
+  color: var(--link);
+}
+
+.share-btn svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+
+/* リンクコピー成功直後のチェック表示。 */
+.share-btn.is-copied {
+  color: var(--primary);
+}
+
 /* ---- ポッドキャストプレイヤー ----
    部品の見た目は blog のプレイヤー (article .music-player の
    mp-button / mp-play / mp-seek / mp-time) に揃える。色はこの
