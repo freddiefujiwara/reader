@@ -3,7 +3,7 @@
 // formatTime) に揃え、1時間以上のエピソードだけ H:MM:SS にする。
 import { isStagingBuild } from '../staging-banner.js';
 
-export const SPEEDS = [1, 1.25, 1.5, 2];
+const SPEEDS = [1, 1.25, 1.5, 2];
 
 // 秒 → "M:SS" (1時間以上は "H:MM:SS")。NaN や負数は "0:00"。
 export function formatTime(sec) {
@@ -54,7 +54,7 @@ export function progressRatio(current, duration) {
 // して終了」にはなっていない (nextEpisodePlan がリピートなしでも
 // 次へ進めるため)。
 export const REPEAT_LABELS = { none: 'リピート：なし', all: 'リピート：全曲', one: 'リピート：1曲' };
-export const REPEAT_CYCLE = { none: 'all', all: 'one', one: 'none' };
+const REPEAT_CYCLE = { none: 'all', all: 'one', one: 'none' };
 
 export function nextRepeat(current) {
   return REPEAT_CYCLE[current] || 'none';
@@ -421,7 +421,7 @@ export function playModeKey(env) {
   return isStagingBuild(env) ? 'reader:player-mode:v1:staging' : 'reader:player-mode:v1';
 }
 
-export const DEFAULT_PLAY_MODE = { shuffle: false, repeat: 'none' };
+const DEFAULT_PLAY_MODE = { shuffle: false, repeat: 'none' };
 
 function sanePlayMode(value) {
   return {
