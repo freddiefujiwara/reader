@@ -1656,6 +1656,127 @@ describe('再生診断ログ', () => {
   });
 });
 
+describe('待機側の無音保証 (二重再生対策)', () => {
+  // 実機で、先読みしていた待機側が鳴って二重再生になる例が
+  // 確認された (2026-11-18)。待機側は設計上再生されないため、
+  // 再生状態になっているのを見つけたら止めて deck_overlap と
+  // して残す (silenceStandbyDeck)。固定したいのは、各地点
+  // (タイマーの tick・フォアグラウンド復帰・本人の停止操作) で
+  // 待機側だけが止まり、本体の再生と役割交代は壊れないこと。
+  const sentEvents = () => logEvents.mock.calls.flatMap((c) => c[1]);
+  const overlapEvents = () => sentEvents().filter((e) => e.type === 'deck_overlap');
+
+  // 再生を開始して次曲の先読みまで進め、{ 本体, 待機側 } を返す。
+  async function startWithPreload() {
+    await mountPlayer();
+    await startCard(0);
+    const audio = latestAudio();
+    audio.dispatchEvent(new window.Event('playing'));
+    await flush();
+    const pre = audioInstances[audioInstances.length - 1];
+    expect(pre, '待機側が作られる').not.toBe(audio);
+    expect(pre.src).toBe('https://example.com/ep2.mp3');
+    return { audio, pre };
+  }
+
+  it('フォアグラウンド復帰で待機側が止まり、deck_overlap が待機側の曲の文脈で送られる', async () => {
+    const { audio, pre } = await startWithPreload();
+    // 待機側が鳴ってしまった状態を再現する (リスナー側の
+    // ガードで本体の状態は変わらない)。
+    pre.currentTime = 42;
+    pre.play();
+    expect(pre.paused).toBe(false);
+
+    document.dispatchEvent(new window.Event('visibilitychange'));
+    await flush();
+    expect(errors).toEqual([]);
+    // 待機側だけが止まり、本体の再生は続く。
+    expect(pre.paused).toBe(true);
+    expect(audio.paused).toBe(false);
+    expect(overlapEvents()).toEqual([
+      expect.objectContaining({
+        type: 'deck_overlap',
+        feed_id: FEED_ID,
+        article_id: 'ep-2',
+        article_title: 'エピソード2',
+        seconds: 42,
+      }),
+    ]);
+  });
+
+  it('再生中のタイマーの tick でも待機側が止まる', async () => {
+    const { audio, pre } = await startWithPreload();
+    pre.play();
+    expect(pre.paused).toBe(false);
+    // 終端チェックのタイマー (500ms) の tick を実時間で待つ。
+    await new Promise((r) => setTimeout(r, 1200));
+    await flush();
+    expect(errors).toEqual([]);
+    expect(pre.paused).toBe(true);
+    // 診断はキューに積まれ、次の区切り (曲の終了時の送信) で
+    // 一緒に送られる。終了はアクティブ側へ送る (fireEnded は
+    // 最新の要素 = 待機側を対象にしてしまうため使わない)。
+    audio.ended = true;
+    audio.paused = true;
+    audio.dispatchEvent(new window.Event('ended'));
+    await flush();
+    expect(overlapEvents()).toEqual([
+      expect.objectContaining({ type: 'deck_overlap', article_id: 'ep-2' }),
+    ]);
+  });
+
+  it('本人が一時停止したら待機側も止まる', async () => {
+    const { audio, pre } = await startWithPreload();
+    pre.play();
+    // 再生中エピソードのカードのボタン = 一時停止。
+    el.querySelectorAll('.article-card')[0].querySelector('.play-btn').click();
+    await flush();
+    expect(errors).toEqual([]);
+    expect(audio.paused).toBe(true);
+    expect(pre.paused).toBe(true);
+  });
+
+  it('プレイヤーを閉じたら待機側も止まる', async () => {
+    const { pre } = await startWithPreload();
+    pre.play();
+    el.querySelector('.player-close').click();
+    await flush();
+    expect(errors).toEqual([]);
+    expect(pre.paused).toBe(true);
+    expect(el.querySelector('.player-bar')).toBeNull();
+  });
+
+  it('待機側を止めた後でも、曲の終了では役割交代で次へ進める', async () => {
+    const { audio, pre } = await startWithPreload();
+    pre.play();
+    document.dispatchEvent(new window.Event('visibilitychange'));
+    await flush();
+    expect(pre.paused).toBe(true);
+
+    audio.ended = true;
+    audio.paused = true;
+    audio.dispatchEvent(new window.Event('ended'));
+    await flush();
+    expect(errors).toEqual([]);
+    // 先読み済みの待機側がそのまま昇格して再生される。
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+    expect(pre.paused).toBe(false);
+    expect(pre.src).toBe('https://example.com/ep2.mp3');
+  });
+
+  it('待機側が通常どおり止まっていれば、復帰でも tick でも何も起きない', async () => {
+    const { audio, pre } = await startWithPreload();
+    document.dispatchEvent(new window.Event('visibilitychange'));
+    await flush();
+    await new Promise((r) => setTimeout(r, 1200));
+    await flush();
+    expect(errors).toEqual([]);
+    expect(audio.paused).toBe(false);
+    expect(pre.paused).toBe(true);
+    expect(overlapEvents()).toEqual([]);
+  });
+});
+
 describe('タイトル押下と再生の継続', () => {
   it('再生中にタイトルを押しても、ページを開き直さず再生が続く', async () => {
     await mountPlayer();
