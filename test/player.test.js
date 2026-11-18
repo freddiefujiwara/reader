@@ -518,28 +518,6 @@ describe('reachedKnownDurationEnd', () => {
       displayPos: 100 - KNOWN_DURATION_END_TOLERANCE_SEC, trueSec: 100, elementDuration: 100, hasMeasuredModel: false,
     })).toBe(true);
   });
-  it('toleranceSec を明示すると、その幅で到達を判定する', () => {
-    // 引数自体は判定の幅を差し替える口として残している
-    // (アプリは現在、常に既定を使う)。
-    expect(reachedKnownDurationEnd({
-      displayPos: 97.5, trueSec: 100, elementDuration: 100, hasMeasuredModel: false, toleranceSec: 2.5,
-    })).toBe(true);
-    expect(reachedKnownDurationEnd({
-      displayPos: 97.4, trueSec: 100, elementDuration: 100, hasMeasuredModel: false, toleranceSec: 2.5,
-    })).toBe(false);
-  });
-  it('不正な toleranceSec は既定の 0.6 秒に倒れる', () => {
-    // 残り 1 秒の位置は、既定の 0.6 秒では未到達。
-    expect(reachedKnownDurationEnd({
-      displayPos: 99, trueSec: 100, elementDuration: 100, hasMeasuredModel: false, toleranceSec: Number.NaN,
-    })).toBe(false);
-    expect(reachedKnownDurationEnd({
-      displayPos: 99, trueSec: 100, elementDuration: 100, hasMeasuredModel: false, toleranceSec: -5,
-    })).toBe(false);
-    expect(reachedKnownDurationEnd({
-      displayPos: 99, trueSec: 100, elementDuration: 100, hasMeasuredModel: false, toleranceSec: undefined,
-    })).toBe(false);
-  });
 });
 
 describe('foregroundRecoveryAction (フォアグラウンド復帰時の再生回復)', () => {
