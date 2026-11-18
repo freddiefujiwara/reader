@@ -1420,6 +1420,17 @@ function resetPreloadState() {
   committedNext = null;
 }
 
+// 遷移計画 (nextEpisodePlan の結果) から、先読み対象の記事を
+// 引く。計画が「次へ」でない・キューに無い・現在の曲そのもの・
+// 音声URLが無い場合は対象なし (null)。リスト順とランダムの
+// どちらの先読み対象の決定でも、検証はここに揃える。
+function plannedPreloadArticle(plan) {
+  if (!plan || plan.type !== 'advance') return null;
+  const next = playQueue.value.find((a) => a.id === plan.id);
+  if (!next || next.id === currentEpisode.value.id || !next.audioUrl) return null;
+  return next;
+}
+
 // 次に再生することが事前に確定している記事 (無ければ null)。
 // 次曲の決定は本体の自動送り (nextEpisodePlan) と同じにする。
 // 単曲リピートは次も同じ曲なので対象外とする。ランダムでは、
@@ -1436,10 +1447,7 @@ function preloadTarget() {
     shuffle: false,
     playedIds: playedInRound,
   });
-  if (plan.type !== 'advance') return null;
-  const next = playQueue.value.find((a) => a.id === plan.id);
-  if (!next || next.id === currentEpisode.value.id || !next.audioUrl) return null;
-  return next;
+  return plannedPreloadArticle(plan);
 }
 
 // ランダム時の先読み対象。確定済みの抽選が生きていればそれを
@@ -1458,9 +1466,8 @@ function shufflePreloadTarget() {
     shuffle: true,
     playedIds: playedInRound,
   });
-  if (plan.type !== 'advance') return null;
-  const next = playQueue.value.find((a) => a.id === plan.id);
-  if (!next || next.id === currentEpisode.value.id || !next.audioUrl) return null;
+  const next = plannedPreloadArticle(plan);
+  if (!next) return null;
   committedNext = {
     id: next.id,
     forId: currentEpisode.value.id,
@@ -1695,13 +1702,9 @@ function updateMediaSession(article) {
     });
     navigator.mediaSession.setActionHandler('play', () => tryPlayAudio());
     navigator.mediaSession.setActionHandler('pause', () => {
-      // ロック画面等からの明示的な一時停止は、本人の意思として
-      // 扱う (フォアグラウンド復帰時に勝手に再開しない)。
-      // 待機側が鳴っていたら一緒に止める (本人の停止が両要素に
-      // 届く保証。二重再生の監視)。
-      playWanted = false;
-      audio.pause();
-      silenceStandbyDeck();
+      // ロック画面等からの明示的な一時停止も、本人の意思による
+      // 一時停止として扱う。
+      pausePlayback();
     });
     navigator.mediaSession.setActionHandler('seekbackward', () => skipBy(-15));
     navigator.mediaSession.setActionHandler('seekforward', () => skipBy(30));
@@ -1867,6 +1870,17 @@ function cycleRepeat() {
   savePlayMode({ shuffle: shuffleOn.value, repeat: repeatMode.value });
 }
 
+// 本人の意思による一時停止 (プレイヤーのボタンと Media Session
+// の pause で共通)。再生の意思を下ろし (フォアグラウンド復帰時に
+// 勝手に再開しないため)、アクティブ側を止め、待機側が鳴って
+// いたら一緒に止める (本人の停止が両要素に届く保証。二重再生
+// の監視)。
+function pausePlayback() {
+  playWanted = false;
+  audio.pause();
+  silenceStandbyDeck();
+}
+
 function togglePlay() {
   if (!currentEpisode.value) return;
   if (audio.paused) {
@@ -1878,11 +1892,7 @@ function togglePlay() {
     endFlowDone = false;
     tryPlayAudio();
   } else {
-    playWanted = false;
-    audio.pause();
-    // 待機側が鳴っていたら一緒に止める (本人の停止が両要素に
-    // 届く保証。二重再生の監視)。
-    silenceStandbyDeck();
+    pausePlayback();
   }
 }
 
