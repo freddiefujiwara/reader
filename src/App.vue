@@ -291,23 +291,29 @@ function measureSummaries() {
   clampedSummaryIds.value = next;
 }
 
-// 測定の予約。状態変更の直後 (nextTick) に測るだけでは、ブラウザが
-// line-clamp のレイアウトを確定させる前の値を読んで「省略なし」と
-// 誤判定し、ボタンが消えたままになることがある (起動直後や既読化の
-// 直後に発生)。次ティックで測ったうえで、レイアウトが落ち着く次の
-// アニメーションフレームでもう一度測り直して誤判定を正す。
-let measureFramePending = false;
-function scheduleMeasureSummaries() {
-  nextTick(measureSummaries);
-  if (measureFramePending) return;
-  measureFramePending = true;
-  const run = () => {
-    measureFramePending = false;
-    measureSummaries();
+// 測定の予約の共通形。状態変更の直後 (nextTick) に測るだけでは、
+// ブラウザがレイアウトを確定させる前の値を読んで誤判定することが
+// ある (起動直後や既読化の直後に、要約の「省略なし」と誤判定して
+// ボタンが消えたままになる等)。次ティックで測ったうえで、
+// レイアウトが落ち着く次のアニメーションフレームでもう一度
+// 測り直して誤判定を正す。予約が重なっても、フレーム側の測定は
+// 1回にまとめる。
+function createDeferredMeasure(measure) {
+  let framePending = false;
+  return function scheduleMeasure() {
+    nextTick(measure);
+    if (framePending) return;
+    framePending = true;
+    const run = () => {
+      framePending = false;
+      measure();
+    };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+    else nextTick(run);
   };
-  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
-  else nextTick(run);
 }
+
+const scheduleMeasureSummaries = createDeferredMeasure(measureSummaries);
 
 function toggleSummary(id) {
   const next = new Set(expandedSummaryIds.value);
@@ -322,14 +328,13 @@ function toggleSummary(id) {
     const article = state.value.articles.find((a) => a.id === id);
     if (article) {
       // 視聴ログ: 要約を展開した操作を記録する (閉じる操作では送らない)。
-      queueEvent({
+      queueEventAndFlush({
         type: 'expand',
         feed_id: article.feedId,
         feed_title: article.feedTitle || feedTitleOf(article.feedId),
         article_id: article.id,
         article_title: article.title || '',
       });
-      flushEventLog();
       // 展開したら、その記事は読んだ扱いにする (「既読にする」と同じ
       // applyRead の経路。閉じる操作では既読を取り消さない)。
       if (!article.isRead) applyRead(article, true);
@@ -372,19 +377,8 @@ function measureFeedChips() {
   feedChipsOverflow.value = el.scrollHeight > el.clientHeight + 1;
 }
 
-// 測定の予約 (要約と同じ二段構え: 次ティック＋次のフレームで測り直す)。
-let feedChipsMeasureFramePending = false;
-function scheduleMeasureFeedChips() {
-  nextTick(measureFeedChips);
-  if (feedChipsMeasureFramePending) return;
-  feedChipsMeasureFramePending = true;
-  const run = () => {
-    feedChipsMeasureFramePending = false;
-    measureFeedChips();
-  };
-  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
-  else nextTick(run);
-}
+// 測定の予約 (要約と同じ createDeferredMeasure の二段構え)。
+const scheduleMeasureFeedChips = createDeferredMeasure(measureFeedChips);
 
 function toggleFeedChips() {
   feedChipsExpanded.value = !feedChipsExpanded.value;
@@ -808,28 +802,35 @@ async function onManualRefresh() {
   await refreshInBackground();
 }
 
+// 絞り込み (フィード・カテゴリ・既読フィルタ) の変更で共通する
+// 後始末: 未読表示中に残していた既読カードを畳み、表示件数を
+// 初期値へ戻し、別の一覧へ移るので先頭から見せる。scroll の
+// 視聴ログの帰属 (scrollLoggedFeedId) はフィード・カテゴリの
+// 変更ではリセットするが、既読フィルタの変更では変えない。
+function changeSelection(patch, { resetScrollLog = true } = {}) {
+  clearStickyReadIds();
+  if (resetScrollLog) scrollLoggedFeedId = '';
+  state.value = { ...state.value, ...patch };
+  displayLimit.value = DISPLAY_LIMIT;
+  scrollToTop();
+}
+
 function setFeed(feedId) {
   // 選択中のフィードを再タップしたら解除し、全件表示に戻す
   // (「すべて」チップは廃止し、トグル選択にした)。
   const next = state.value.feedId === feedId ? '' : feedId;
   if (next === state.value.feedId) return;
-  clearStickyReadIds();
-  scrollLoggedFeedId = '';
-  state.value = { ...state.value, feedId: next };
-  displayLimit.value = DISPLAY_LIMIT;
-  // 別のフィードの一覧へ移るので、先頭から見せる。
-  scrollToTop();
+  changeSelection({ feedId: next });
   // 視聴ログ: フィードを開いた操作だけを記録する (選択の解除や
   // ジャンルだけの変更、初期表示・背景更新では送らない)。
   if (next) {
-    queueEvent({
+    queueEventAndFlush({
       type: 'feed_view',
       feed_id: next,
       feed_title: feedTitleOf(next),
       article_id: '',
       article_title: '',
     });
-    flushEventLog();
   }
 }
 
@@ -838,20 +839,13 @@ function setCategory(category) {
   // (「すべて」チップは廃止し、トグル選択にした)。
   const next = state.value.category === category ? '' : category;
   if (next === state.value.category) return;
-  clearStickyReadIds();
-  scrollLoggedFeedId = '';
   // カテゴリを変えたらフィード選択は解除する (対象外フィードが残らないように)。
-  state.value = { ...state.value, category: next, feedId: '' };
-  displayLimit.value = DISPLAY_LIMIT;
-  scrollToTop();
+  changeSelection({ category: next, feedId: '' });
 }
 
 function setFilter(filter) {
   if (state.value.filter === filter) return;
-  clearStickyReadIds();
-  state.value = { ...state.value, filter };
-  displayLimit.value = DISPLAY_LIMIT;
-  scrollToTop();
+  changeSelection({ filter }, { resetScrollLog: false });
 }
 
 // ヘッダーの未読ピル: 全フィードの未読一覧へ移動する。
@@ -908,14 +902,13 @@ async function applyRead(article, isRead) {
 function onOpenArticle(article) {
   // 視聴ログ: 記事を開いた操作を記録する (既読かどうかによらない。
   // 聴き終えたときの既読化はこの経路を通らないので数えない)。
-  queueEvent({
+  queueEventAndFlush({
     type: 'article_open',
     feed_id: article.feedId,
     feed_title: article.feedTitle || feedTitleOf(article.feedId),
     article_id: article.id,
     article_title: article.title || '',
   });
-  flushEventLog();
   if (isOwner.value && !article.isRead) {
     // 元記事を開く操作は止めない。既読化はローカルに書くだけ。
     applyRead(article, true);
@@ -1036,6 +1029,12 @@ function flushEventLog() {
   eventQueue.flush();
 }
 
+// キューへ入れて、その場で送る (操作の区切りで送る箇所の共通形)。
+function queueEventAndFlush(event) {
+  queueEvent(event);
+  flushEventLog();
+}
+
 function feedTitleOf(feedId) {
   const feed = state.value.feeds.find((f) => f.id === feedId);
   return feed ? feed.title || '' : '';
@@ -1052,14 +1051,13 @@ function onTimelineScroll() {
   if (!feedId || scrollLoggedFeedId === feedId) return;
   if (window.scrollY <= 0) return;
   scrollLoggedFeedId = feedId;
-  queueEvent({
+  queueEventAndFlush({
     type: 'scroll',
     feed_id: feedId,
     feed_title: feedTitleOf(feedId),
     article_id: '',
     article_title: '',
   });
-  flushEventLog();
 }
 
 window.addEventListener('scroll', onTimelineScroll, { passive: true });
@@ -2467,16 +2465,22 @@ const currentWeekListening = computed(() => {
     .slice(0, 5);
 });
 
+// クリップボードへコピーし、成否を返す。コピーできない環境では
+// false になり、呼び出し側はフィードバックを出さない。
+async function copyTextToClipboard(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function copyShareUrl() {
   if (!shareUrl.value) return;
-  try {
-    await navigator.clipboard.writeText(shareUrl.value);
-    shareCopied.value = true;
-  } catch {
-    // コピーできない環境では、入力欄の URL を手でコピーしてもらう
-    // (入力欄はタップで全選択される)。
-    shareCopied.value = false;
-  }
+  // コピーできない環境では、入力欄の URL を手でコピーしてもらう
+  // (入力欄はタップで全選択される)。
+  shareCopied.value = await copyTextToClipboard(shareUrl.value);
 }
 
 // 記事カードのリンクコピー。元リンクをクリップボードへ入れ、
@@ -2484,11 +2488,7 @@ async function copyShareUrl() {
 // 環境ではフィードバックを出さない (copyShareUrl と同じ流儀)。
 async function copyArticleLink(article) {
   if (!article.link) return;
-  try {
-    await navigator.clipboard.writeText(article.link);
-  } catch {
-    return;
-  }
+  if (!(await copyTextToClipboard(article.link))) return;
   copiedArticleId.value = article.id;
   if (copiedArticleTimer) clearTimeout(copiedArticleTimer);
   copiedArticleTimer = setTimeout(() => {
@@ -2678,30 +2678,34 @@ function cancelDeleteFeed() {
   confirmDeleteId.value = '';
 }
 
+// 削除が確定したフィードを管理一覧から落とす (削除の成功時と、
+// 既に消えていた場合で共通)。保存と同じ目印 (adminFeedsDirty) も
+// 立てる: 削除前に始まった背景更新が実行中にタイムラインへ戻ると、
+// その更新が削除前の一覧で完了して削除したフィードと記事が
+// ローカルに残るため、戻る際の追随更新で揃え直す。
+function removeFeedFromAdminList(feed) {
+  adminFeedsDirty = true;
+  mgmtFeeds.value = mgmtFeeds.value.filter((f) => f.id !== feed.id);
+  confirmDeleteId.value = '';
+}
+
 async function onDeleteFeed(feed) {
   if (mgmtSavingId.value) return;
   mgmtSavingId.value = feed.id;
   try {
     await deleteFeed(session.value.token, feed.id);
-    // 保存と同じ目印を立てる。削除前に始まった背景更新が実行中に
-    // タイムラインへ戻ると、その更新が削除前の一覧で完了して削除した
-    // フィードと記事がローカルに残るため、戻る際の追随更新で揃え直す。
-    adminFeedsDirty = true;
-    mgmtFeeds.value = mgmtFeeds.value.filter((f) => f.id !== feed.id);
+    removeFeedFromAdminList(feed);
     if (formMode.value === 'edit' && formBase.value?.id === feed.id) {
       closeForm();
       restoreFormScroll();
     }
-    confirmDeleteId.value = '';
     mgmtError.value = '';
   } catch (e) {
     if (expireIfUnauthorized(e)) {
       // セッション失効は共通処理へ倒した。
     } else if (e.message === 'not_found') {
       // 既に消えていた場合は一覧からも落として整合させる。
-      adminFeedsDirty = true;
-      mgmtFeeds.value = mgmtFeeds.value.filter((f) => f.id !== feed.id);
-      confirmDeleteId.value = '';
+      removeFeedFromAdminList(feed);
       mgmtError.value = 'そのフィードは既に削除されています。';
     } else {
       mgmtError.value = `削除できませんでした（${e.message}）。`;

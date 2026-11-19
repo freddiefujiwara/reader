@@ -208,12 +208,12 @@ function stagedStateOf(record) {
 }
 
 // 記事レコードを旧フィードIDから新フィードID (idMap: 旧ID -> 新ID) へ
-// 付け替える計画を立てる。記事IDが「旧ID＋リンク」から再現できる
-// レコード (guid がリンクと同一だったもの) は ID を計算し直して
-// そのまま付け替え (puts)、再現できないもの (YouTube のように
-// guid ≠ リンク) は状態だけを staged に退避し、再取得時の取り込みで
+// 付け替える計画を立てる共通形。新しい記事 ID をその場で計算できる
+// レコード (newArticleId が ID を返すもの) は、状態 (既読・再生位置・
+// 音声情報) を保ったまま ID を計算し直してそのまま付け替え (puts)、
+// 計算できないものは状態だけを staged に退避し、再取得時の取り込みで
 // (フィード, リンク) が一致した記事へ戻す。旧レコードはどちらも消す。
-export async function planFeedRekey(records, idMap) {
+async function planArticleRekey(records, idMap, newArticleId) {
   const puts = [];
   const deletes = [];
   const staged = [];
@@ -221,14 +221,25 @@ export async function planFeedRekey(records, idMap) {
     const newId = idMap ? idMap[record.feed_id] : '';
     if (!newId || newId === record.feed_id) continue;
     deletes.push(record.id);
-    const fromLink = await articleId(record.feed_id, record.link);
-    if (fromLink === record.id) {
-      puts.push({ ...record, id: await articleId(newId, record.link), feed_id: newId });
+    const id = await newArticleId(record, newId);
+    if (id) {
+      puts.push({ ...record, id, feed_id: newId });
     } else {
       staged.push({ feedId: newId, link: record.link, state: stagedStateOf(record) });
     }
   }
   return { puts, deletes, staged };
+}
+
+// フィードIDのハッシュ化に伴う付け替え。記事IDが「旧ID＋リンク」から
+// 再現できるレコード (guid がリンクと同一だったもの) はそのまま
+// 付け替え、再現できないもの (YouTube のように guid ≠ リンク) は
+// 状態だけを staged へ退避する。
+export async function planFeedRekey(records, idMap) {
+  return planArticleRekey(records, idMap, async (record, newId) => {
+    const fromLink = await articleId(record.feed_id, record.link);
+    return fromLink === record.id ? articleId(newId, record.link) : null;
+  });
 }
 
 // staged な付け替え状態を meta のマップへ合体させる (同じキーは上書き)。
@@ -635,25 +646,13 @@ export function planYouTubeChannelPairs(cachedFeeds, serverFeeds) {
 
 // YouTube 記事レコードを旧フィードIDから新フィードIDへ付け替える計画。
 // 記事 ID は (新フィードID + 動画ID) で計算し直せるため、リンクから
-// 動画 ID が取れるレコードは状態 (既読・再生位置・音声情報) を保った
-// まま、その場で付け替える (puts)。動画 ID が取れないレコードは
-// planFeedRekey と同様に状態だけを staged へ退避し、旧レコードは消す。
+// 動画 ID が取れるレコードはそのまま付け替え、取れないレコードは
+// planFeedRekey と同様に状態だけを staged へ退避する。
 export async function planYouTubeArticleRekey(records, idMap) {
-  const puts = [];
-  const deletes = [];
-  const staged = [];
-  for (const record of records || []) {
-    const newId = idMap ? idMap[record.feed_id] : '';
-    if (!newId || newId === record.feed_id) continue;
-    deletes.push(record.id);
+  return planArticleRekey(records, idMap, async (record, newId) => {
     const videoId = youtubeVideoIdFromLink(record.link);
-    if (videoId) {
-      puts.push({ ...record, id: await articleId(newId, videoId), feed_id: newId });
-    } else {
-      staged.push({ feedId: newId, link: record.link, state: stagedStateOf(record) });
-    }
-  }
-  return { puts, deletes, staged };
+    return videoId ? articleId(newId, videoId) : null;
+  });
 }
 
 // YouTube の保存 URL 形式変更に伴う移行。サーバー側のシート移行が
