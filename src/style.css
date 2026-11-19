@@ -747,9 +747,13 @@ button.ghost.active {
   font-size: 0.88rem;
   font-weight: 700;
   color: var(--muted);
-  padding: 6px 4px;
+  padding: 6px 0;
   cursor: pointer;
   margin-left: auto;
+  /* 「未読に戻す」が二段に折り返さないよう固定する。幅が足りない
+     ときはこのボタンではなく共有ボタン側が詰まる (狭幅の指定)。 */
+  white-space: nowrap;
+  flex: none;
 }
 
 .read-toggle:hover {
@@ -879,6 +883,29 @@ button.ghost.active {
 .audio-duration {
   color: var(--muted-2);
   font-size: 0.85rem;
+}
+
+/* 狭幅ではアクション行が1行に収まるよう、カードの横余白と行内の
+   間隔・ボタンを詰める。共有ボタンだけは縮小可にして、未読ドットや
+   長い長さ表示が重なっても行がはみ出さない逃がし弁にする。 */
+@media (max-width: 720px) {
+  .article-card {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
+  .article-foot {
+    gap: 5px;
+  }
+
+  .star-btn {
+    width: 30px;
+  }
+
+  .share-btn {
+    width: 27px;
+    flex: 0 1 auto;
+  }
 }
 
 /* プレイヤーバー: .bottom-bar の上に重ねる固定バー。

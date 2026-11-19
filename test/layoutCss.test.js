@@ -110,6 +110,48 @@ describe('フィードチップ行の折りたたみ (PC幅)', () => {
   });
 });
 
+// max-width: 720px のメディアクエリ群の中身をまとめて取り出す。
+function narrowCss() {
+  return [...css.matchAll(/@media \(max-width: 720px\) \{([\s\S]*?)\n\}/g)]
+    .map((m) => m[1])
+    .join('\n');
+}
+
+function narrowRuleBody(selector) {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const m = narrowCss().match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`));
+  return m ? m[1] : '';
+}
+
+describe('アクション行の既読ボタン (狭幅で二段にしない)', () => {
+  it('既読ボタン (.read-toggle) は折り返さず、縮みもしない', () => {
+    const body = ruleBody('.read-toggle');
+    expect(body, '既読ボタンのルールがある').not.toBe('');
+    expect(body).toContain('white-space: nowrap');
+    expect(body).toContain('flex: none');
+  });
+
+  it('狭幅ではカードの横余白を詰めて、行の使える幅を広げる', () => {
+    const body = narrowRuleBody('.article-card');
+    expect(body, '狭幅のカードのルールがある').not.toBe('');
+    expect(body).toContain('padding-left: 14px');
+    expect(body).toContain('padding-right: 14px');
+  });
+
+  it('狭幅では行の間隔 (.article-foot の gap) を詰める', () => {
+    const body = narrowRuleBody('.article-foot');
+    expect(body, '狭幅のアクション行のルールがある').not.toBe('');
+    expect(body).toContain('gap: 5px');
+  });
+
+  it('狭幅では共有ボタンが逃がし弁として縮める (既読ボタンは守る)', () => {
+    const body = narrowRuleBody('.share-btn');
+    expect(body, '狭幅の共有ボタンのルールがある').not.toBe('');
+    expect(body).toContain('width: 27px');
+    expect(body).toContain('flex: 0 1 auto');
+  });
+});
+
 describe('スターボタンの固定', () => {
   it('スター (.star-btn) は固定幅で、☆/⭐ の切替で幅が変わらない', () => {
     const body = ruleBody('.star-btn');
