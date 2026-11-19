@@ -102,6 +102,23 @@ export function isPlayableArticle(article, youtubeFeedIds) {
   return true;
 }
 
+// mergePendingReadMarks / mergePendingStarMarks の共通形。
+// matches (view, want) が真ならスナップショット側と一致したとみなし、
+// そうでなければ apply (view, want) で重ねた記事を返す。
+function mergePendingMarks(views, marks, matches, apply) {
+  const pending = marks instanceof Map ? marks : new Map();
+  if (!pending.size) return { articles: views || [], keep: new Map() };
+  const keep = new Map();
+  const articles = (views || []).map((a) => {
+    if (!pending.has(a.id)) return a;
+    const want = pending.get(a.id);
+    if (matches(a, want)) return a;
+    keep.set(a.id, want);
+    return apply(a, want);
+  });
+  return { articles, keep };
+}
+
 // 読み直した記事一覧 (views) へ、まだ DB のスナップショットに
 // 反映されていると確認できていない既読変更 (marks: Map<記事ID, isRead>)
 // を重ねる。背景更新の読み直しは「読み取り開始時点」の中身で状態を
@@ -112,17 +129,12 @@ export function isPlayableArticle(article, youtubeFeedIds) {
 // 一致しなかった変更だけが keep に残り、次の読み直しでも重ね直される。
 // views は全記事の一覧であること (部分一覧では使わない)。
 export function mergePendingReadMarks(views, marks) {
-  const pending = marks instanceof Map ? marks : new Map();
-  if (!pending.size) return { articles: views || [], keep: new Map() };
-  const keep = new Map();
-  const articles = (views || []).map((a) => {
-    if (!pending.has(a.id)) return a;
-    const want = pending.get(a.id);
-    if (a.isRead === want) return a;
-    keep.set(a.id, want);
-    return { ...a, isRead: want };
-  });
-  return { articles, keep };
+  return mergePendingMarks(
+    views,
+    marks,
+    (a, want) => a.isRead === want,
+    (a, want) => ({ ...a, isRead: want })
+  );
 }
 
 // 読み直した記事一覧 (views) へ、まだ DB のスナップショットに
@@ -131,17 +143,12 @@ export function mergePendingReadMarks(views, marks) {
 // のスター版で、考え方はそちらと同じ。一覧から消えた記事への変更と、
 // スナップショット側と一致した変更は marks から落とす。
 export function mergePendingStarMarks(views, marks) {
-  const pending = marks instanceof Map ? marks : new Map();
-  if (!pending.size) return { articles: views || [], keep: new Map() };
-  const keep = new Map();
-  const articles = (views || []).map((a) => {
-    if (!pending.has(a.id)) return a;
-    const want = pending.get(a.id);
-    if (a.starred === want.starred && (a.starState || '') === (want.starState || '')) return a;
-    keep.set(a.id, want);
-    return { ...a, starred: want.starred, starState: want.starState || '' };
-  });
-  return { articles, keep };
+  return mergePendingMarks(
+    views,
+    marks,
+    (a, want) => a.starred === want.starred && (a.starState || '') === (want.starState || ''),
+    (a, want) => ({ ...a, starred: want.starred, starState: want.starState || '' })
+  );
 }
 
 // ローカルの記事から数えた未読数をフィードへ付け直す。

@@ -410,16 +410,21 @@ describe('既読化と「もっと見る」ボタン', () => {
     const card = cardByTitle('長い要約の記事');
     expect(card.querySelector('.summary-toggle'), '前提: ボタンがある').toBeTruthy();
 
-    // 次の測定 (2回分の読み取り) だけ「省略なし」と読める状態にする。
-    // レイアウトが確定する前に測ると、省略されている要約でも高さが
-    // 潰れて読めることがあり、その空振りで判定が落ちる状況の再現。
+    // 測定が「省略なし」と読める状態にする。レイアウトが確定する前に
+    // 測ると、省略されている要約でも高さが潰れて読めることがあり、
+    // その空振りで判定が落ちる状況の再現。読み取り回数で切り替える
+    // と、クリック後にキューされる測定パスの回数が一定でないため
+    // 誤測定が消費されるタイミングがタイミング依存になる。そこで
+    // 「誤ったレイアウトが続く間は常に潰れた高さを返し、明示的に
+    // 解除するまで戻らない」形にして対照を決定的にする。
     const p = card.querySelector('.article-summary');
-    let badReads = 2;
+    let badLayout = true;
+    let badReadCount = 0;
     Object.defineProperty(p, 'scrollHeight', {
       configurable: true,
       get() {
-        if (badReads > 0) {
-          badReads -= 1;
+        if (badLayout) {
+          badReadCount += 1;
           return 66;
         }
         return 220;
@@ -430,13 +435,19 @@ describe('既読化と「もっと見る」ボタン', () => {
     card.querySelector('.read-toggle').click();
 
     // まず誤った測定でボタンが落ちること (再現) を確認し、その後
-    // フレーム後の測り直しで戻ることを確認する。先に「戻った」だけを
-    // 待つと、落ちる前の DOM で成功してしまうため二段で待つ。
+    // 測り直しで戻ることを確認する。先に「戻った」だけを待つと、
+    // 落ちる前の DOM で成功してしまうため二段で待つ。誤った状態が
+    // 続く間は、ティック側・フレーム側どちらの測定も誤った値を
+    // 読むため、ボタンは落ちたままになる (決定的)。
     const gone = await flushUntil(
       () => !cardByTitle('長い要約の記事')?.querySelector('.summary-toggle')
     );
     expect(gone, '誤った測定でボタンが一度消える').toBe(true);
-    expect(badReads, '誤った測定が実際に挟まった').toBe(0);
+    expect(badReadCount, '誤った測定が実際に挟まった').toBeGreaterThan(0);
+
+    // レイアウトが確定した状態に戻し、resize で測り直させる。
+    badLayout = false;
+    window.dispatchEvent(new window.Event('resize'));
     const back = await flushUntil(
       () => !!cardByTitle('長い要約の記事')?.querySelector('.summary-toggle')
     );
