@@ -15,6 +15,11 @@ function sameDay(a, b) {
 }
 
 export function formatPublishedAt(iso, now = new Date()) {
+  // 日時は ISO 文字列 (または Date) が前提。それ以外の型 (数値の epoch や
+  // 真偽値など) は、解釈できても「もっともらしい嘘の日付」になるため
+  // 空文字にする。文字列化できないオブジェクトは new Date が投げるので、
+  // ここで型を見て弾く。
+  if (typeof iso !== 'string' && !(iso instanceof Date)) return '';
   if (!iso) return '';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';

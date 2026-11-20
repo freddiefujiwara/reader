@@ -37,7 +37,11 @@ export function localDbName(env) {
 async function resolveEntryIds(entries, feedId) {
   const resolved = [];
   const seen = new Set();
-  for (const entry of entries || []) {
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    // オブジェクトでないエントリは取り込まない。文字列エントリは
+    // String.prototype.link (関数) を link として拾ってしまい、
+    // 幽霊記事を作るため、ここで型を見る。
+    if (!entry || typeof entry !== 'object') continue;
     const key = entry.guid || entry.link;
     if (!key || !entry.link) continue;
     const id = await articleId(feedId, key);
@@ -162,27 +166,37 @@ export async function planUpserts(existingById, entries, feed, fetchedAtIso) {
 export function planLocalPrune(articles, nowIso, { retentionDays = RETENTION_DAYS, maxArticles = MAX_ARTICLES } = {}) {
   const now = nowIso ? Date.parse(nowIso) : Date.now();
   const retentionMs = retentionDays * 24 * 60 * 60 * 1000;
-  const sorted = (articles || []).slice().sort((a, b) => articleTime(b) - articleTime(a));
+  // レコードでない要素は計画の対象にしない (ID が無く、消しようがない)。
+  const list = (Array.isArray(articles) ? articles : []).filter((a) => a && typeof a === 'object');
+  const sorted = list.slice().sort((a, b) => articleTime(b) - articleTime(a));
   const keepRank = {};
   sorted.forEach((a, idx) => { keepRank[a.id] = idx < maxArticles; });
   const ids = [];
-  (articles || []).forEach((a) => {
+  list.forEach((a) => {
     if (!a.is_read) return;
-    const t = Date.parse(a.fetched_at || a.published_at || '') || 0;
+    const t = parseTimeMs(a.fetched_at || a.published_at);
     const tooOld = t > 0 && now - t > retentionMs;
     if (tooOld || !keepRank[a.id]) ids.push(a.id);
   });
   return ids;
 }
 
+// 日時の読み方。文字列だけを解釈し、それ以外は 0 として読む。
+// Date.parse の素通しは、文字列化できない値で投げるため。
+function parseTimeMs(v) {
+  return typeof v === 'string' ? Date.parse(v) || 0 : 0;
+}
+
 function articleTime(a) {
-  return Date.parse(a.published_at || a.fetched_at || '') || 0;
+  return parseTimeMs(a.published_at || a.fetched_at);
 }
 
 // フィード一覧から消えたフィードの記事 (残しておくと行き場のない記事になる)。
 export function planOrphanArticles(articles, feedIds) {
   const live = new Set(feedIds || []);
-  return (articles || []).filter((a) => !live.has(a.feed_id)).map((a) => a.id);
+  return (Array.isArray(articles) ? articles : [])
+    .filter((a) => a && typeof a === 'object' && !live.has(a.feed_id))
+    .map((a) => a.id);
 }
 
 /* ---- フィードIDのハッシュ化に伴う移行 ---- */
@@ -217,7 +231,8 @@ async function planArticleRekey(records, idMap, newArticleId) {
   const puts = [];
   const deletes = [];
   const staged = [];
-  for (const record of records || []) {
+  for (const record of Array.isArray(records) ? records : []) {
+    if (!record || typeof record !== 'object') continue;
     const newId = idMap ? idMap[record.feed_id] : '';
     if (!newId || newId === record.feed_id) continue;
     deletes.push(record.id);
@@ -245,7 +260,8 @@ export async function planFeedRekey(records, idMap) {
 // staged な付け替え状態を meta のマップへ合体させる (同じキーは上書き)。
 export function mergeTransferredState(map, staged) {
   const out = { ...(map || {}) };
-  (staged || []).forEach((s) => {
+  (Array.isArray(staged) ? staged : []).forEach((s) => {
+    if (!s || typeof s !== 'object' || typeof s.feedId !== 'string' || typeof s.link !== 'string') return;
     out[transferKey(s.feedId, s.link)] = s.state;
   });
   return out;
@@ -257,7 +273,8 @@ export function mergeTransferredState(map, staged) {
 export function applyTransferredState(records, transfer, feedId, existingById) {
   if (!transfer) return { records, consumedKeys: [] };
   const consumedKeys = [];
-  const out = (records || []).map((record) => {
+  const out = (Array.isArray(records) ? records : []).map((record) => {
+    if (!record || typeof record !== 'object' || typeof record.link !== 'string') return record;
     if (existingById && existingById[record.id]) return record;
     const key = transferKey(feedId, record.link);
     const state = transfer[key];
