@@ -456,6 +456,53 @@ describe('既読化と「もっと見る」ボタン', () => {
   });
 });
 
+describe('全文 (content) を持つ記事の展開', () => {
+  const FULL_CONTENT = '本文の文章です。'.repeat(30);
+
+  async function mountWithContent() {
+    await mountApp([
+      { ...rec('full-1', '全文つきの記事', '2026-11-15T00:00:00.000Z', SHORT_SUMMARY), content: FULL_CONTENT },
+      rec('short-1', '短い要約の記事', '2026-11-13T00:00:00.000Z', SHORT_SUMMARY),
+    ]);
+    // 全文つき記事の要約は3行に収まっている (省略されていない) 状態にする。
+    const p = cardByTitle('全文つきの記事').querySelector('.article-summary');
+    Object.defineProperty(p, 'scrollHeight', { configurable: true, value: 40 });
+    Object.defineProperty(p, 'clientHeight', { configurable: true, value: 66 });
+    window.dispatchEvent(new window.Event('resize'));
+    await flush();
+  }
+
+  it('要約が省略されていなくても、全文が要約より長ければ「もっと見る」が出る', async () => {
+    await mountWithContent();
+    const card = cardByTitle('全文つきの記事');
+    const toggle = card.querySelector('.summary-toggle');
+    expect(toggle, '全文があるのでボタンが出る').toBeTruthy();
+    expect(toggle.textContent).toBe('もっと見る');
+    // 折りたたみ中は要約だけが出ている。
+    expect(card.querySelector('.article-summary').textContent).toBe(SHORT_SUMMARY);
+    // 全文の無い短い記事には出ない (従来どおり)。
+    expect(cardByTitle('短い要約の記事').querySelector('.summary-toggle')).toBeNull();
+  });
+
+  it('展開すると要約ではなく全文が表示され、閉じると要約に戻る', async () => {
+    await mountWithContent();
+    const card = cardByTitle('全文つきの記事');
+
+    card.querySelector('.summary-toggle').click();
+    await flush();
+    const summary = card.querySelector('.article-summary');
+    expect(summary.classList.contains('expanded'), '展開で expanded が付く').toBe(true);
+    expect(summary.textContent, '展開中は全文が出る').toBe(FULL_CONTENT);
+    expect(card.querySelector('.summary-toggle').textContent).toBe('閉じる');
+
+    card.querySelector('.summary-toggle').click();
+    await flush();
+    expect(card.querySelector('.article-summary').textContent, '閉じると要約に戻る').toBe(SHORT_SUMMARY);
+    expect(card.querySelector('.summary-toggle').textContent).toBe('もっと見る');
+    expect(errors).toEqual([]);
+  });
+});
+
 describe('要約の展開と expand イベント', () => {
   const expandEvents = () =>
     logEvents.mock.calls.flatMap((c) => c[1]).filter((e) => e.type === 'expand');

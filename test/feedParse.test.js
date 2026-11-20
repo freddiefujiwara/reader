@@ -193,6 +193,82 @@ describe('parseFeedXml (変形・壊れた入力への耐性)', () => {
   });
 });
 
+describe('parseFeedXml (全文: content:encoded / content)', () => {
+  it('RSS: description が要約、content:encoded が全文になる (タグを除き段落は改行で残る)', () => {
+    const xml = `<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/"><channel><item>
+      <title>全文つき</title><link>https://example.com/full</link>
+      <description>短い抜粋です。</description>
+      <content:encoded><![CDATA[<p>本文の1段落目です。</p><p>本文の2段落目です。抜粋より長い続きがここにあります。</p>]]></content:encoded>
+    </item></channel></rss>`;
+    const [entry] = parseFeedXml(xml, { id: 'x' });
+    expect(entry.summary).toBe('短い抜粋です。');
+    expect(entry.content).toBe('本文の1段落目です。\n本文の2段落目です。抜粋より長い続きがここにあります。');
+  });
+  it('RSS: content:encoded だけの item は要約へ寄せ、全文は重ねて持たない', () => {
+    const xml = `<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/"><channel><item>
+      <title>本文のみ</title><link>https://example.com/enc-only</link>
+      <content:encoded>&lt;p&gt;エンコードされた本文&lt;/p&gt;</content:encoded>
+    </item></channel></rss>`;
+    const [entry] = parseFeedXml(xml, { id: 'x' });
+    expect(entry.summary).toBe('エンコードされた本文');
+    expect(entry.content).toBe('');
+  });
+  it('RSS: 全文が要約より短ければ全文は持たない', () => {
+    const xml = `<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/"><channel><item>
+      <title>要約が長い</title><link>https://example.com/longer-summary</link>
+      <description>${'あ'.repeat(300)}</description>
+      <content:encoded>短い本文</content:encoded>
+    </item></channel></rss>`;
+    const [entry] = parseFeedXml(xml, { id: 'x' });
+    expect(entry.summary).toBe('あ'.repeat(300));
+    expect(entry.content).toBe('');
+  });
+  it('RSS: 全文も要約と同じ5000文字で切り詰める', () => {
+    const xml = `<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/"><channel><item>
+      <title>長い全文</title><link>https://example.com/very-long</link>
+      <description>抜粋</description>
+      <content:encoded>${'い'.repeat(6000)}</content:encoded>
+    </item></channel></rss>`;
+    const [entry] = parseFeedXml(xml, { id: 'x' });
+    expect(entry.content).toBe('い'.repeat(5000));
+  });
+  it('RSS: 全文の無い item は content が空文字になる', () => {
+    const [entry] = parseFeedXml(RSS2, { id: 'sample' });
+    expect(entry.content).toBe('');
+  });
+  it('Atom: summary が要約、content が全文になる', () => {
+    const xml = `<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>tag:example.com,2026:full</id>
+    <title>Atom全文つき</title>
+    <link rel="alternate" href="https://example.com/atom-full" />
+    <published>2026-11-14T00:00:00Z</published>
+    <summary>Atomの短い概要</summary>
+    <content type="html">&lt;p&gt;Atomの本文です。概要より長い本文がここに入ります。&lt;/p&gt;</content>
+  </entry>
+</feed>`;
+    const [entry] = parseFeedXml(xml, { id: 'atom-full' });
+    expect(entry.summary).toBe('Atomの短い概要');
+    expect(entry.content).toBe('Atomの本文です。概要より長い本文がここに入ります。');
+  });
+  it('Atom: content だけの entry は要約へ寄せ、全文は重ねて持たない', () => {
+    const xml = `<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>tag:example.com,2026:content-only</id>
+    <title>Atom本文のみ</title>
+    <link rel="alternate" href="https://example.com/atom-content-only" />
+    <published>2026-11-14T00:00:00Z</published>
+    <content type="html">&lt;p&gt;内容だけの本文&lt;/p&gt;</content>
+  </entry>
+</feed>`;
+    const [entry] = parseFeedXml(xml, { id: 'atom-co' });
+    expect(entry.summary).toBe('内容だけの本文');
+    expect(entry.content).toBe('');
+  });
+});
+
 describe('parseFeedXml (Atom のフォールバック)', () => {
   const xml = `<?xml version="1.0" encoding="utf-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">

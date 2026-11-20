@@ -261,6 +261,9 @@ const hasMore = computed(() => visible.value.length > displayLimit.value);
 // 要約の「もっと見る」展開。折りたたみは CSS の line-clamp (3行) で、
 // 実際に省略されているカードにだけボタンを出すため、描画後に各要約
 // 要素の scrollHeight / clientHeight を比べて省略の有無を測る。
+// フィードが全文 (content) を持つ記事は、展開時に要約ではなく全文を
+// 出す。要約が3行に収まっていても全文が長ければ展開で増える分が
+// あるため、その場合は測定結果によらずボタンを出す。
 // 展開状態は記事ごとのローカル状態で、保存はしない。
 const expandedSummaryIds = ref(new Set());
 const clampedSummaryIds = ref(new Set());
@@ -314,6 +317,17 @@ function createDeferredMeasure(measure) {
 }
 
 const scheduleMeasureSummaries = createDeferredMeasure(measureSummaries);
+
+// 要約欄に出すテキスト。折りたたみ中は要約、展開中は全文 (あれば)。
+function summaryDisplayText(a) {
+  if (expandedSummaryIds.value.has(a.id) && a.content) return a.content;
+  return a.summary || '';
+}
+
+// 全文が要約より長い (＝展開すると表示が増える) 記事かどうか。
+function hasLongContent(a) {
+  return !!(a.content && a.content.length > (a.summary || '').length);
+}
 
 function toggleSummary(id) {
   const next = new Set(expandedSummaryIds.value);
@@ -3080,13 +3094,13 @@ onMounted(async () => {
               <a :href="a.link" target="_blank" rel="noopener" @click="onOpenArticle(a)">{{ a.title }}</a>
             </h2>
             <p
-              v-if="a.summary"
+              v-if="a.summary || a.content"
               :ref="(el) => registerSummaryEl(a.id, el)"
               class="article-summary"
               :class="{ expanded: expandedSummaryIds.has(a.id) }"
-            >{{ a.summary }}</p>
+            >{{ summaryDisplayText(a) }}</p>
             <button
-              v-if="a.summary && (expandedSummaryIds.has(a.id) || clampedSummaryIds.has(a.id))"
+              v-if="(a.summary || a.content) && (expandedSummaryIds.has(a.id) || clampedSummaryIds.has(a.id) || hasLongContent(a))"
               type="button"
               class="summary-toggle"
               :aria-expanded="expandedSummaryIds.has(a.id) ? 'true' : 'false'"
