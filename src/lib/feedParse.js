@@ -2,10 +2,13 @@
 // reader-gas の parseFeed とその補助関数をクライアント側へ移植したもの。
 // サーバー側と同じ規則でエントリを取り出すため、記事ID (feed_id と
 // guid/リンクから作る) がサーバー保存分と一致する。
-// エントリ: { guid, title, link, publishedAt, summary, author,
+// エントリ: { guid, title, link, publishedAt, summary, content, author,
 //              audioUrl, durationSec }
 // audioUrl / durationSec はポッドキャスト用 (enclosure と
 // itunes:duration) で、音声が無いエントリでは '' / null になる。
+// content はフィードが全文を持つ場合 (RSS の content:encoded、Atom の
+// content) の本文テキストで、カードの展開表示専用。要約より長くない
+// 場合は '' (要約と同じ本文が要約側へ寄っている場合を含む)。
 
 // 要約の保存上限。カードの「もっと見る」展開で全文を読めるよう、
 // 旧上限 (500) から 5000 へ緩めた。切り詰めはここだけで、表示側は
@@ -242,15 +245,20 @@ export function parseFeedXml(xmlText, feed) {
   void feed;
   const root = parseXml(xmlText);
   const items = [];
-  const pushItem = (guid, title, link, publishedAt, summarySource, author, audioUrl, durationSec) => {
+  const pushItem = (guid, title, link, publishedAt, summarySource, author, audioUrl, durationSec, contentSource) => {
     const key = guid || link;
     if (!key || !link) return;
+    const summary = summarize(summarySource || '');
+    // 全文は要約より長いときだけ別に持つ。要約側が全文そのもの
+    // (description が無く content へ寄せた場合) なら重ねて持たない。
+    const fullText = contentSource ? summarize(contentSource) : '';
     items.push({
       guid: String(key),
       title: String(title || '').trim() || '(no title)',
       link: String(link).trim(),
       publishedAt: toIsoDate(publishedAt),
-      summary: summarize(summarySource || ''),
+      summary,
+      content: fullText.length > summary.length ? fullText : '',
       author: String(author || '').trim(),
       audioUrl: String(audioUrl || '').trim(),
       durationSec: typeof durationSec === 'number' ? durationSec : null,
@@ -267,7 +275,8 @@ export function parseFeedXml(xmlText, feed) {
         childText(item, 'description') || childText(item, 'encoded'),
         childText(item, 'author') || childText(item, 'creator'),
         rssEnclosureAudioUrl(item),
-        parseItunesDuration(childText(item, 'duration'))
+        parseItunesDuration(childText(item, 'duration')),
+        childText(item, 'encoded')
       );
     });
   });
@@ -283,7 +292,8 @@ export function parseFeedXml(xmlText, feed) {
         childText(item, 'description'),
         childText(item, 'creator'),
         rssEnclosureAudioUrl(item),
-        parseItunesDuration(childText(item, 'duration'))
+        parseItunesDuration(childText(item, 'duration')),
+        childText(item, 'encoded')
       );
     });
   }
@@ -304,7 +314,8 @@ export function parseFeedXml(xmlText, feed) {
       childText(entry, 'summary') || childText(entry, 'content'),
       authorNode ? childText(authorNode, 'name') : '',
       atomEnclosureAudioUrl(entry),
-      parseItunesDuration(childText(entry, 'duration'))
+      parseItunesDuration(childText(entry, 'duration')),
+      childText(entry, 'content')
     );
   });
   return items;

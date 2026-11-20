@@ -40,6 +40,7 @@ describe('planUpserts', () => {
       published_at: '2026-11-13T00:00:00.000Z',
       fetched_at: FETCHED,
       summary: 'summary',
+      content: '',
       author: 'author',
       audio_url: '',
       audio_url_at: '',
@@ -69,6 +70,29 @@ describe('planUpserts', () => {
     expect(records[0].title).toBe('new title');
     // 新しい公開日が空なら既存を保つ。
     expect(records[0].published_at).toBe('2026-11-01T00:00:00.000Z');
+  });
+  it('全文 (content) は新規・既存どちらのレコードにも入り、既存の状態は保たれる', async () => {
+    const withContent = entry('g1', { content: '全文のテキスト' });
+    const [created] = await planUpserts({}, [withContent], FEED, FETCHED);
+    expect(created.content).toBe('全文のテキスト');
+
+    const id = await articleId('nhk', 'g1');
+    const existing = {
+      [id]: {
+        id, feed_id: 'nhk', title: 'old', link: 'https://example.com/g1',
+        published_at: '2026-11-01T00:00:00.000Z', fetched_at: '2026-11-05T00:00:00.000Z',
+        summary: 'old summary', author: '', is_read: true, read_at: '2026-11-06T00:00:00.000Z',
+        play_pos: 30,
+      },
+    };
+    const [updated] = await planUpserts(existing, [withContent], FEED, FETCHED);
+    expect(updated.content).toBe('全文のテキスト');
+    expect(updated.is_read).toBe(true);
+    expect(updated.play_pos).toBe(30);
+  });
+  it('全文の無いエントリでは content は空文字になる', async () => {
+    const [record] = await planUpserts({}, [entry('g1')], FEED, FETCHED);
+    expect(record.content).toBe('');
   });
   it('同じ guid の重複は1件にまとめ、リンク無しは取り込まない', async () => {
     const records = await planUpserts({}, [entry('g1'), entry('g1'), { guid: 'g2', title: 't', link: '', publishedAt: '', summary: '', author: '' }], FEED, FETCHED);
@@ -277,6 +301,15 @@ describe('planOrphanArticles / articleRecordToView', () => {
     expect(view.durationSec).toBe(600);
     expect(view.playPos).toBe(42);
   });
+  it('レコードの全文は表示用にも渡り、無いレコードでは空文字になる', () => {
+    const base = {
+      id: 'c', feed_id: 'nhk', title: 't', link: 'https://example.com',
+      published_at: '', fetched_at: '', summary: 's', author: '',
+      is_read: false, read_at: '',
+    };
+    expect(articleRecordToView({ ...base, content: '全文' }, 'NHK').content).toBe('全文');
+    expect(articleRecordToView(base, 'NHK').content).toBe('');
+  });
   it('レコードを表示用へ変換する', () => {
     const view = articleRecordToView({
       id: 'x', feed_id: 'nhk', title: 't', link: 'https://example.com',
@@ -286,7 +319,7 @@ describe('planOrphanArticles / articleRecordToView', () => {
     expect(view).toEqual({
       id: 'x', feedId: 'nhk', feedTitle: 'NHK', title: 't', link: 'https://example.com',
       publishedAt: '2026-11-14T00:00:00.000Z', fetchedAt: '2026-11-14T01:00:00.000Z',
-      summary: 's', author: 'a', audioUrl: '', audioUrlAt: '', audioStale: false,
+      summary: 's', content: '', author: 'a', audioUrl: '', audioUrlAt: '', audioStale: false,
       durationSec: null, playPos: 0, isRead: true, starred: false, starState: '',
     });
   });

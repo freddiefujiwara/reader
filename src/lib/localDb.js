@@ -124,6 +124,7 @@ function buildUpsertRecords(existingById, resolved, feed, fetchedAtIso) {
         link: entry.link,
         published_at: entry.publishedAt || prev.published_at || '',
         summary: entry.summary || '',
+        content: entry.content || '',
         author: entry.author || '',
         ...resolveAudioFields(prev, entry, fetchedAtIso),
       };
@@ -136,6 +137,7 @@ function buildUpsertRecords(existingById, resolved, feed, fetchedAtIso) {
       published_at: entry.publishedAt || '',
       fetched_at: fetchedAtIso,
       summary: entry.summary || '',
+      content: entry.content || '',
       author: entry.author || '',
       audio_url: entry.audioUrl || '',
       audio_url_at: entry.audioUrl ? fetchedAtIso : '',
@@ -331,6 +333,7 @@ export function articleRecordToView(record, feedTitle, nowMs = Date.now()) {
     publishedAt: record.published_at || '',
     fetchedAt: record.fetched_at || '',
     summary: record.summary || '',
+    content: record.content || '',
     author: record.author || '',
     audioUrl,
     audioUrlAt: audioUrl ? (record.audio_url_at || '') : '',
