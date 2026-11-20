@@ -16,10 +16,14 @@ export async function feedIdFromUrl(url) {
 // シート移行が済むまでは旧 ID が返ることがあるため、ローカルでは
 // 常にこちらを同一性として扱う。fetchUrl はサーバーが付けたものを
 // そのまま使う (向こうの ID が埋まっていても取得には使える)。
+// URL が文字列でないエントリは同一性も取得先も決められないため落とす
+// (落とさないと "undefined" のハッシュを ID に持つ幽霊フィードになり、
+// 壊れたエントリ同士で ID が衝突する)。
 export async function normalizeFeedIds(feeds) {
   const out = [];
-  for (const feed of feeds || []) {
-    out.push({ ...feed, id: await feedIdFromUrl(feed?.url) });
+  for (const feed of Array.isArray(feeds) ? feeds : []) {
+    if (!feed || typeof feed !== 'object' || typeof feed.url !== 'string' || !feed.url) continue;
+    out.push({ ...feed, id: await feedIdFromUrl(feed.url) });
   }
   return out;
 }

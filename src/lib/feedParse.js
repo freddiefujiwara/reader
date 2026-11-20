@@ -12,11 +12,18 @@
 // CSS の line-clamp (3行) が担う。
 const SUMMARY_MAX_CHARS = 5000;
 
+// 数値文字参照を文字へ。範囲外 (U+10FFFF 超) の値は String.fromCodePoint
+// が RangeError になるため、ブラウザと同じく置換文字 (U+FFFD) にする。
+// 壊れた参照1つでフィード全体の取り込みが落ちないようにするため。
+function codePointOrReplacement(cp) {
+  return cp <= 0x10ffff ? String.fromCodePoint(cp) : '�';
+}
+
 export function decodeXmlEntities(text) {
   if (!text) return '';
   return String(text)
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
-    .replace(/&#(\d+);/g, (_, num) => String.fromCodePoint(parseInt(num, 10)))
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => codePointOrReplacement(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, num) => codePointOrReplacement(parseInt(num, 10)))
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')

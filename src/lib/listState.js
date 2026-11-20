@@ -6,26 +6,40 @@ export function createListState() {
   return { articles: [], feeds: [], feedId: '', category: '', filter: 'all' };
 }
 
+// 壊れた行のフィールドの読み方。文字列だけを値とし、それ以外
+// (数値・真偽値・文字列化できないオブジェクト) は空として読む。
+// String() の素通しは、toString が関数でないオブジェクトで投げるため。
+function asText(v) {
+  return typeof v === 'string' ? v : '';
+}
+
+// カテゴリの読み方。文字列 (と数値の文字列表現) だけを意味のある値とし、
+// それ以外は空カテゴリとして読む (feedCategories など比較系の共通形)。
+function categoryOf(feed) {
+  const c = feed?.category;
+  return (typeof c === 'string' ? c : typeof c === 'number' ? String(c) : '').trim();
+}
+
 // フィードの表示名。タイトル未取得 (YouTube の補完待ちなど) の間は
 // URL のホスト名で代替し、それも無ければ ID を出す。
 export function feedDisplayName(feed) {
-  const title = String(feed?.title || '').trim();
+  const title = asText(feed?.title).trim();
   if (title) return title;
   try {
-    const host = new URL(String(feed?.url || '')).hostname;
+    const host = new URL(asText(feed?.url)).hostname;
     if (host) return host;
   } catch {
     // URL として解釈できなければ ID で代替する。
   }
-  return String(feed?.id || '');
+  return asText(feed?.id);
 }
 
 // フィード一覧からカテゴリ名を出現順に取り出す (カテゴリ行の表示用)。
 // 空カテゴリは含めない。
 export function feedCategories(feeds) {
   const seen = [];
-  (feeds || []).forEach((f) => {
-    const c = String(f.category || '').trim();
+  (Array.isArray(feeds) ? feeds : []).forEach((f) => {
+    const c = categoryOf(f);
     if (c && !seen.includes(c)) seen.push(c);
   });
   return seen;
@@ -44,7 +58,7 @@ export function shouldClearCategorySelection(feeds, category) {
   if (!c) return false;
   const list = Array.isArray(feeds) ? feeds : [];
   if (list.length === 0) return false;
-  return !list.some((f) => String(f?.category || '').trim() === c);
+  return !list.some((f) => categoryOf(f) === c);
 }
 
 // 表示条件 (フィード＋カテゴリ＋ビュー) に合う記事だけを返す。
@@ -54,11 +68,11 @@ export function shouldClearCategorySelection(feeds, category) {
 // 一覧に残す (絞り込みを再適用するまでのセッション内だけの扱い)。
 // フィード・カテゴリの絞り込みは従来どおり先に効く。
 export function visibleArticles(state, stickyReadIds) {
-  let out = state.articles.slice();
+  let out = (Array.isArray(state.articles) ? state.articles : []).slice();
   if (state.category) {
     const inCategory = {};
     (state.feeds || []).forEach((f) => {
-      if (String(f.category || '').trim() === state.category) inCategory[f.id] = true;
+      if (f && categoryOf(f) === state.category) inCategory[f.id] = true;
     });
     out = out.filter((a) => inCategory[a.feedId]);
   }
@@ -74,15 +88,15 @@ export function visibleArticles(state, stickyReadIds) {
 // 壊さない)。管理画面でのジャンル保存を、タイムライン側の共有状態へ
 // 即座に反映するために使う。
 export function patchFeedCategory(feeds, feedId, category) {
-  return (feeds || []).map((f) => (f.id === feedId ? { ...f, category } : f));
+  return (Array.isArray(feeds) ? feeds : []).map((f) => (f && f.id === feedId ? { ...f, category } : f));
 }
 
 // 1件の記事の一部フィールドを差し替えた新しい articles を返す
 // (元の配列は壊さない)。差し替えるのは既読 (isRead) とスター
 // (starred / starState) だけ。
 export function patchArticle(articles, articleId, patch) {
-  return articles.map((a) => {
-    if (a.id !== articleId) return a;
+  return (Array.isArray(articles) ? articles : []).map((a) => {
+    if (!a || a.id !== articleId) return a;
     const next = { ...a };
     if (patch.isRead !== undefined) next.isRead = patch.isRead;
     if (patch.starred !== undefined) next.starred = patch.starred;
@@ -110,7 +124,7 @@ function mergePendingMarks(views, marks, matches, apply) {
   if (!pending.size) return { articles: views || [], keep: new Map() };
   const keep = new Map();
   const articles = (views || []).map((a) => {
-    if (!pending.has(a.id)) return a;
+    if (!a || !pending.has(a.id)) return a;
     const want = pending.get(a.id);
     if (matches(a, want)) return a;
     keep.set(a.id, want);
@@ -155,22 +169,39 @@ export function mergePendingStarMarks(views, marks) {
 // サーバー応答の unreadCount は使わず、端末に居る記事だけが数えられる。
 export function withUnreadCounts(feeds, articles) {
   const counts = {};
-  (articles || []).forEach((a) => {
-    if (!a.isRead) counts[a.feedId] = (counts[a.feedId] || 0) + 1;
+  (Array.isArray(articles) ? articles : []).forEach((a) => {
+    if (a && typeof a === 'object' && !a.isRead) counts[a.feedId] = (counts[a.feedId] || 0) + 1;
   });
-  return (feeds || []).map((f) => ({ ...f, unreadCount: counts[f.id] || 0 }));
+  return (Array.isArray(feeds) ? feeds : [])
+    .filter((f) => f && typeof f === 'object')
+    .map((f) => ({ ...f, unreadCount: counts[f.id] || 0 }));
+}
+
+// 日時の読み方。文字列だけを解釈し、それ以外は 0 (最も古い) として読む。
+// Date.parse の素通しは、文字列化できない値で投げるため。
+function timeMs(v) {
+  return typeof v === 'string' ? Date.parse(v) || 0 : 0;
+}
+
+function idKey(a) {
+  const id = a && typeof a === 'object' ? a.id : '';
+  return typeof id === 'string' ? id : '';
 }
 
 // 新しい順 (publishedAt、無ければ fetchedAt) に並べ替えた配列を返す。
+// 壊れたエントリ (null や型の違う日時) が1件混ざっても、比較関数が
+// 投げて一覧全体が落ちないよう、境界で読み替える。
 export function sortArticlesDesc(articles) {
-  return (articles || []).slice().sort((a, b) => {
-    const ta = Date.parse(a.publishedAt || a.fetchedAt || '') || 0;
-    const tb = Date.parse(b.publishedAt || b.fetchedAt || '') || 0;
+  return (Array.isArray(articles) ? articles : []).slice().sort((a, b) => {
+    const ta = timeMs(a?.publishedAt || a?.fetchedAt);
+    const tb = timeMs(b?.publishedAt || b?.fetchedAt);
     if (tb !== ta) return tb - ta;
-    const fa = Date.parse(a.fetchedAt || '') || 0;
-    const fb = Date.parse(b.fetchedAt || '') || 0;
+    const fa = timeMs(a?.fetchedAt);
+    const fb = timeMs(b?.fetchedAt);
     if (fb !== fa) return fb - fa;
-    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    const ia = idKey(a);
+    const ib = idKey(b);
+    return ia < ib ? -1 : ia > ib ? 1 : 0;
   });
 }
 
@@ -178,22 +209,24 @@ export function sortArticlesDesc(articles) {
 // 入るフィードIDの集合。
 export function markAllReadScope(state, feedId = '', category = '') {
   const inScope = (f) => {
+    if (!f || typeof f !== 'object') return false;
     if (feedId) return f.id === feedId;
-    if (category) return String(f.category || '').trim() === category;
+    if (category) return categoryOf(f) === category;
     return true;
   };
   const scopedFeedIds = {};
-  (state.feeds || []).forEach((f) => { if (inScope(f)) scopedFeedIds[f.id] = true; });
+  (Array.isArray(state.feeds) ? state.feeds : []).forEach((f) => { if (inScope(f)) scopedFeedIds[f.id] = true; });
   return scopedFeedIds;
 }
 
 export function markAllReadInList(state, feedId = '', category = '') {
   const scopedFeedIds = markAllReadScope(state, feedId, category);
   const all = !feedId && !category;
-  const articles = state.articles.map((a) =>
-    all || scopedFeedIds[a.feedId] ? { ...a, isRead: true } : a
+  const articles = (Array.isArray(state.articles) ? state.articles : []).map((a) =>
+    !a || typeof a !== 'object' ? a : all || scopedFeedIds[a.feedId] ? { ...a, isRead: true } : a
   );
-  const feeds = state.feeds.map((f) => {
+  const feeds = (Array.isArray(state.feeds) ? state.feeds : []).map((f) => {
+    if (!f || typeof f !== 'object') return f;
     if (!all && !scopedFeedIds[f.id]) return f;
     return { ...f, unreadCount: 0 };
   });
@@ -206,8 +239,8 @@ export function markAllReadInList(state, feedId = '', category = '') {
 export function markAllReadTargets(state, feedId = '', category = '') {
   const scopedFeedIds = markAllReadScope(state, feedId, category);
   const all = !feedId && !category;
-  return (state.articles || []).filter(
-    (a) => !a.isRead && (all || scopedFeedIds[a.feedId])
+  return (Array.isArray(state.articles) ? state.articles : []).filter(
+    (a) => a && typeof a === 'object' && !a.isRead && (all || scopedFeedIds[a.feedId])
   );
 }
 
@@ -217,10 +250,10 @@ export function markAllReadTargets(state, feedId = '', category = '') {
 export function visibleFeedChips(state) {
   let feeds = Array.isArray(state?.feeds) ? state.feeds : [];
   if (state?.category) {
-    feeds = feeds.filter((f) => String(f.category || '').trim() === state.category);
+    feeds = feeds.filter((f) => categoryOf(f) === state.category);
   }
   if (state?.filter === 'unread') {
-    return feeds.filter((f) => (f.unreadCount || 0) > 0 || f.id === state.feedId);
+    return feeds.filter((f) => f && typeof f === 'object' && ((f.unreadCount || 0) > 0 || f.id === state.feedId));
   }
   return feeds;
 }

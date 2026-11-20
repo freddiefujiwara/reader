@@ -7,7 +7,10 @@ import { pad2 } from './format.js';
 // token から共有リンクの URL を作る。origin は末尾の '/' なし、
 // base はアプリのベースパス (前後に '/' があってもよい)。
 export function buildShareUrl(token, { origin = '', base = '/' } = {}) {
-  if (!token) return '';
+  // token は発行応答の文字列が前提。文字列でない値 (壊れた応答の数値や
+  // オブジェクト) でリンクを作ると、開けない URL ができてしまうため
+  // 空文字にする (文字列化できないオブジェクトは補間で投げる)。
+  if (typeof token !== 'string' || !token) return '';
   const o = String(origin || '').replace(/\/+$/, '');
   let b = String(base || '/');
   if (!b.startsWith('/')) b = `/${b}`;
@@ -18,6 +21,9 @@ export function buildShareUrl(token, { origin = '', base = '/' } = {}) {
 // 有効期限の表示 (例: 2026/12/16 5:47)。端末のローカル時刻で出す。
 // 解釈できない値は空文字にする (format.js と同じ流儀)。
 export function formatShareExpiry(iso) {
+  // 期限は ISO 文字列 (または Date) が前提。それ以外の型は空文字にする
+  // (formatPublishedAt と同じ理由)。
+  if (typeof iso !== 'string' && !(iso instanceof Date)) return '';
   if (!iso) return '';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
