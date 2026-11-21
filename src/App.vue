@@ -88,6 +88,7 @@ import {
   buildQueue,
   clampSeek,
   classifyRate,
+  createRouteReloadGuard,
   createStallTracker,
   createStartWatchdog,
   durationMismatch,
@@ -1117,7 +1118,10 @@ function flushPlayListen() {
 // チェックが play() を再発行した) / start_fallback (開始
 // チェックが、直前まで鳴っていた要素へ読み直して再生する
 // フォールバックを行った) / start_failed (再発行・フォール
-// バックでも始まらなかった) の12。いずれもキューへの
+// バックでも始まらなかった) / route_offline・route_online
+// (回線イベントを受けた。対象はその時点で再生中の曲) /
+// route_reload (回線切り替わりで、再生中の曲を現在位置から
+// 読み直した。seconds は読み直し位置) の15。いずれもキューへの
 // push のみで、送信の開始は既存の区切りに相乗りする (再生開始を
 // 遅らせないため、この関数から flush はしない)。
 function queueDiagEvent(type, ep, seconds) {
@@ -1251,6 +1255,21 @@ const startWatchdog = createStartWatchdog();
 // ウォッチドッグを武装したときの読み込み世代 (episodeLoadSeq)。
 // 別の読み込みへ移った後、古い武装のチェックが動かないように。
 let startWatchdogSeq = -1;
+
+/* ---- 回線切り替わり時の読み直し ----
+   再生中に回線が切り替わると、要素は「再生中」のまま位置だけ
+   進んで音が出なくなることがある (2026-11-22 朝: 曲の交代の
+   2秒後に Wi-Fi → モバイル回線へ切り替わり、その曲は全長を
+   無音のまま進みきった。開始チェック・ストール検知・
+   フォアグラウンド回復のいずれも、要素が正常に再生している
+   ように見えるため発火しなかった)。要素の出力レベルはページ
+   から測れないので無音自体は検知できず、引き金の回線
+   イベント ('offline' / 'online') を受けて、再生中の曲を
+   現在位置から読み直す (実行は attemptRouteReload /
+   reloadCurrentEpisode)。読み直してよいかの判定 (連続
+   イベントの集約とクールダウン) は player.js の
+   createRouteReloadGuard が持つ。 */
+const routeReloadGuard = createRouteReloadGuard();
 // 直近に実際に再生が始まった ('playing' が来た) 要素。開始に
 // 失敗したとき、同じ曲を読み直して再生するフォールバック先。
 let lastPlayedDeck = null;
@@ -1411,6 +1430,9 @@ function playerTimerTick() {
   checkKnownDurationEnd();
   checkPlaybackStall();
   checkStartWatchdog();
+  // 回線切り替わりの印が立っていて回線が戻っていれば、再生中
+  // の曲を読み直す ('online' を取りこぼした場合の拾い直し)。
+  attemptRouteReload();
 }
 
 function startEndCheckTimer() {
@@ -1495,6 +1517,59 @@ function startFallbackToPreviousDeck() {
   if (Number.isFinite(audio.duration)) applyDeckMetadata(audio);
   tryPlayAudio();
   return true;
+}
+
+/* ---- 回線切り替わり時の読み直しの実行 ----
+   回線イベントの印が立ち、再生中 (本人の一時停止・停止では
+   なく、開始済みで、要素が再生中を保っている) で、回線が
+   戻っているときだけ読み直す。'online' イベントとタイマーの
+   tick の両方から呼ばれる ('offline' の時点で印だけ立て、
+   戻ったことを確認してから実行する。'online' を取りこぼして
+   も tick が拾う)。 */
+function attemptRouteReload() {
+  const ep = currentEpisode.value;
+  if (!ep || !ep.audioUrl || !playWanted) return;
+  if (!episodePlayStarted || audio.paused || audio.ended || seeking.value) return;
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+  // 終端間際 (残り5秒以内) は、まもなく自然な曲の遷移が起きる
+  // ため読み直さない (再開位置の保存ガードと同じ基準。ここで
+  // 読み直すと、復元位置が 0 に倒れて曲が頭に戻る)。
+  const pos = Math.floor(toDisplayPosition(audio.currentTime || 0, mappingCtx.value));
+  if (isWithinEndGuard(pos, displayDuration.value)) return;
+  if (!routeReloadGuard.take(performance.now())) return;
+  reloadCurrentEpisode(ep, pos);
+}
+
+// 再生中の曲を、もう一方の要素へ現在位置から読み直す。音の
+// 経路が固まった要素に見切りをつけるため、開始チェックの
+// フォールバック (startFallbackToPreviousDeck) と同じ作法で
+// 要素ごと取り替える (先読みは破棄し、次の 'playing' で
+// 張り直す)。位置は pendingSeek 経由で、メタデータ読み込み時
+// に復元する (loadEpisode の再開位置と同じ経路)。読み直しも
+// 開始の一種なので、開始ウォッチドッグを武装し直し、始まら
+// なければ再発行・フォールバックの手当てを受ける。
+function reloadCurrentEpisode(ep, pos) {
+  const target = standbyDeck();
+  const failed = audio;
+  // 先にアクティブを差し替えてから失敗側を止める (loadEpisode
+  // の役割交代と同じ順序)。
+  audio = target;
+  failed.pause();
+  unloadDeck(failed);
+  resetPreloadState();
+  pendingSeek = pos;
+  isLoading.value = true;
+  episodePlayStarted = false;
+  stallTracker.reset(performance.now());
+  audio.src = ep.audioUrl;
+  audio.playbackRate = speed.value;
+  if (Number.isFinite(audio.duration)) applyDeckMetadata(audio);
+  tryPlayAudio();
+  startWatchdog.arm(performance.now());
+  startWatchdogSeq = episodeLoadSeq;
+  // 診断: 回線切り替わりで読み直したことを、読み直し位置
+  // (表示位置の秒) つきで残す。
+  queueDiagEvent('route_reload', ep, pos);
 }
 
 /* ---- 次の曲の先読み (二重バッファ) ----
@@ -1946,6 +2021,8 @@ function loadEpisode(article, { resume = true, diagAdvance = false } = {}) {
   // マイクロタスクで届くため、この同期的な武装が先に済む。
   startWatchdog.arm(performance.now());
   startWatchdogSeq = episodeLoadSeq;
+  // 回線切り替わりの印は前の曲へのものなので持ち越さない。
+  routeReloadGuard.clear();
   if (oldDeck) {
     // 旧要素から遅れて来るイベントは、リスナー側のガード
     // (アクティブでない要素は無視) で状態へ響かない。
@@ -2027,6 +2104,8 @@ function pausePlayback() {
   // 本人の意思で止めたので、開始チェックはここで畳む
   // (checkStartWatchdog の playWanted ガードと二重の備え)。
   startWatchdog.disarm();
+  // 回線切り替わりの印も畳む (再開直後に遅れて読み直さない)。
+  routeReloadGuard.clear();
   audio.pause();
   silenceStandbyDeck();
 }
@@ -2170,6 +2249,7 @@ function onSeekInput(event) {
 function stopPlayer() {
   playWanted = false;
   startWatchdog.disarm();
+  routeReloadGuard.clear();
   // 待機側が鳴っていたら一緒に止める (本人の停止が両要素に
   // 届く保証。二重再生の監視)。先読みの文脈 (preloadId) が
   // 残っているうちに行い、診断は下の flush で一緒に送る。
@@ -3072,6 +3152,29 @@ async function tryShareFromHash() {
     return false;
   }
 }
+
+// 回線の切り替わり (Wi-Fi ⇔ モバイル回線等) の検知。'offline'
+// で印を立て、'online' で戻ったことを確認して読み直しを試す
+// (attemptRouteReload)。回線イベント自体も診断に残し、無音化
+// との相関を後から検証できるようにする (対象はその時点で
+// 再生中の曲。曲が無ければ queueDiagEvent 側で捨てられる)。
+function onRouteOffline() {
+  routeReloadGuard.note(performance.now());
+  queueDiagEvent('route_offline', currentEpisode.value);
+}
+
+function onRouteOnline() {
+  routeReloadGuard.note(performance.now());
+  queueDiagEvent('route_online', currentEpisode.value);
+  attemptRouteReload();
+}
+
+window.addEventListener('offline', onRouteOffline);
+window.addEventListener('online', onRouteOnline);
+onUnmounted(() => {
+  window.removeEventListener('offline', onRouteOffline);
+  window.removeEventListener('online', onRouteOnline);
+});
 
 // ページが破棄・凍結 (bfcache) される前に DB 接続を閉じる。
 // 開いたまま凍結されると、次に開いたページの DB 読み込みが
