@@ -492,6 +492,63 @@ export function createStartWatchdog({
   };
 }
 
+/* ---- 回線切り替わり時の読み直しガード ----
+   再生中に回線が切り替わると (自宅 Wi-Fi → モバイル回線等)、
+   要素は位置だけ進んで音が出なくなることがある (実機で
+   2026-11-22 朝に確認: 交代の2秒後に回線が切り替わり、その
+   曲は全長を無音のまま進みきった)。要素の出力レベルはページ
+   から測れないため無音そのものは検知できず、引き金である
+   回線イベント ('offline' / 'online') を受けて、再生中の
+   エピソードを現在位置から読み直すことで対処する。
+   このガードは「読み直してよいか」の判定だけを持つ純粋な
+   状態機械で、実行は App.vue 側が担う (開始ウォッチドッグと
+   同じ分担)。暴走防止は2段: 回線イベントが短時間に連続して
+   も印は最初の1つにまとめ、読み直した直後はクールダウンの
+   間は次を受けない。印は有効期限つきで、古い印は捨てる
+   (一時停止中に立った印が、再開直後に遅れて効くことを防ぐ)。 */
+
+// 読み直し直後に次を受けない時間 (ミリ秒)。
+export const ROUTE_RELOAD_COOLDOWN_MS = 60_000;
+// 印の有効期限 (ミリ秒)。これを過ぎた印は捨てる。
+export const ROUTE_RELOAD_PENDING_TTL_MS = 30_000;
+
+export function createRouteReloadGuard({
+  cooldownMs = ROUTE_RELOAD_COOLDOWN_MS,
+  pendingTtlMs = ROUTE_RELOAD_PENDING_TTL_MS,
+} = {}) {
+  // 回線イベントの印が立った時刻 (null は印なし) と、直近に
+  // 読み直した時刻。
+  let notedAt = null;
+  let lastReloadAt = null;
+  return {
+    // 回線イベントを受ける。印を立てるだけ (連続イベントは
+    // 最初の印にまとめる)。
+    note(now) {
+      if (!Number.isFinite(now)) return;
+      if (notedAt === null) notedAt = now;
+    },
+    // 印を取り出してよいか。取り出したら印を下ろし、クール
+    // ダウンを始める。印が古すぎれば捨て、クールダウン中は
+    // 取り出さない (印は残るが、有効期限でいずれ捨てられる)。
+    take(now) {
+      if (notedAt === null || !Number.isFinite(now)) return false;
+      if (now - notedAt > pendingTtlMs) {
+        notedAt = null;
+        return false;
+      }
+      if (lastReloadAt !== null && now - lastReloadAt < cooldownMs) return false;
+      notedAt = null;
+      lastReloadAt = now;
+      return true;
+    },
+    // 曲の切り替わり・本人の停止等で、前の文脈の印を持ち越さ
+    // ない (クールダウンは保つ)。
+    clear() {
+      notedAt = null;
+    },
+  };
+}
+
 /* ---- 再生モードの端末保存 (セッションキーと同じ環境分け) ---- */
 
 export function playModeKey(env) {

@@ -16,6 +16,9 @@ import {
   START_RETRY_DELAY_MS,
   START_FALLBACK_DELAY_MS,
   START_GIVEUP_DELAY_MS,
+  createRouteReloadGuard,
+  ROUTE_RELOAD_COOLDOWN_MS,
+  ROUTE_RELOAD_PENDING_TTL_MS,
   stepIndex,
   skipPlan,
   nextRepeat,
@@ -620,6 +623,67 @@ describe('createStartWatchdog (遷移直後の再生開始チェック)', () => 
     w.arm(50_000);
     expect(w.observe(50_000 + START_RETRY_DELAY_MS - 1)).toBe('none');
     expect(w.observe(50_000 + START_RETRY_DELAY_MS)).toBe('retry');
+  });
+});
+
+describe('createRouteReloadGuard (回線切り替わり時の読み直しガード)', () => {
+  it('印が無ければ取り出せない', () => {
+    const g = createRouteReloadGuard();
+    expect(g.take(0)).toBe(false);
+    expect(g.take(100_000)).toBe(false);
+  });
+
+  it('印を立てたら1回だけ取り出せる (連続イベントは最初の印にまとまる)', () => {
+    const g = createRouteReloadGuard();
+    g.note(1_000);
+    g.note(1_500);
+    g.note(2_000);
+    expect(g.take(2_000)).toBe(true);
+    // 取り出した後は、印を立て直すまで取り出せない。
+    expect(g.take(2_000)).toBe(false);
+  });
+
+  it('読み直した直後はクールダウンの間、印を立てても取り出せない', () => {
+    const g = createRouteReloadGuard();
+    g.note(0);
+    expect(g.take(0)).toBe(true);
+    g.note(10_000);
+    expect(g.take(10_000)).toBe(false);
+    expect(g.take(ROUTE_RELOAD_COOLDOWN_MS - 1)).toBe(false);
+    // クールダウンが明けても、その印は有効期限 (30秒) を過ぎて
+    // いるため捨てられる (遅れて効かない)。
+    expect(g.take(ROUTE_RELOAD_COOLDOWN_MS)).toBe(false);
+  });
+
+  it('クールダウン明けに新しい印を立てれば、また取り出せる', () => {
+    const g = createRouteReloadGuard();
+    g.note(0);
+    expect(g.take(0)).toBe(true);
+    g.note(ROUTE_RELOAD_COOLDOWN_MS + 1_000);
+    expect(g.take(ROUTE_RELOAD_COOLDOWN_MS + 1_000)).toBe(true);
+  });
+
+  it('有効期限を過ぎた印は捨てられる', () => {
+    const g = createRouteReloadGuard();
+    g.note(0);
+    expect(g.take(ROUTE_RELOAD_PENDING_TTL_MS + 1)).toBe(false);
+    // 捨てられた後は、印を立て直せば取り出せる。
+    g.note(ROUTE_RELOAD_PENDING_TTL_MS + 2_000);
+    expect(g.take(ROUTE_RELOAD_PENDING_TTL_MS + 2_000)).toBe(true);
+  });
+
+  it('clear は印だけを下ろし、クールダウンは保つ', () => {
+    const g = createRouteReloadGuard();
+    g.note(0);
+    g.clear();
+    expect(g.take(0)).toBe(false);
+    g.note(1_000);
+    expect(g.take(1_000)).toBe(true);
+    // 読み直し済みの状態で clear しても、クールダウンは残る。
+    g.note(2_000);
+    g.clear();
+    g.note(3_000);
+    expect(g.take(3_000)).toBe(false);
   });
 });
 
