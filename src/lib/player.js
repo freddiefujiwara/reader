@@ -415,6 +415,83 @@ export function foregroundRecoveryAction({ hasEpisode, playWanted, ended, endFlo
   return 'none';
 }
 
+/* ---- 遷移直後の再生開始チェック (開始ウォッチドッグ) ----
+   曲の終了遷移 (役割交代・新規読み込み) で play() を出しても、
+   バックグラウンドでは再生が始まらないことがある (play() が
+   NotAllowedError で拒否される、または解決しても要素が動き
+   出さない)。従来は誰も再試行せず、フォアグラウンド復帰時の
+   回復まで止まり続けた。そこで、遷移のたびに開始を見張り、
+   始まっていなければ段階的に手当てする:
+     猶予を過ぎても未開始 → 'retry' (play() を再発行)
+     さらに過ぎても未開始 → 'fallback' (直前まで鳴っていた
+                             側の要素へ読み直して再生)
+     さらに過ぎても未開始 → 'giveup' (打ち止め。従来どおり
+                             フォアグラウンド回復に委ねる)
+   判定は時刻の差だけ (ストール検知と同じ考え方) で、実行は
+   App.vue 側が担う。タイマーが回らないバックグラウンドでも
+   play() の拒否は即座に分かるため、その場合は blocked で
+   猶予を待たずに1段進める。段階は単調に進み、同じ行動を
+   二度返さない。開始が確認できたら disarm する。 */
+
+// 再発行までの猶予 (ミリ秒)。先読み済みの要素は通常この
+// 時間内に 'playing' が来る。新規読み込みの場合は、データが
+// 届くまでの間は呼び出し側が postpone で猶予を延ばす。
+export const START_RETRY_DELAY_MS = 3_000;
+// 再発行してからフォールバックまでの猶予 (ミリ秒)。
+export const START_FALLBACK_DELAY_MS = 5_000;
+// フォールバックしてから打ち止めまでの猶予 (ミリ秒)。
+export const START_GIVEUP_DELAY_MS = 5_000;
+
+export function createStartWatchdog({
+  retryDelayMs = START_RETRY_DELAY_MS,
+  fallbackDelayMs = START_FALLBACK_DELAY_MS,
+  giveupDelayMs = START_GIVEUP_DELAY_MS,
+} = {}) {
+  // 'idle' (見張っていない) → 'armed' → 'retried' →
+  // 'fallbacked' → 'done' (打ち止め済み)。
+  let stage = 'idle';
+  let stageAt = 0;
+  function advance(now) {
+    stageAt = now;
+    if (stage === 'armed') { stage = 'retried'; return 'retry'; }
+    if (stage === 'retried') { stage = 'fallbacked'; return 'fallback'; }
+    stage = 'done';
+    return 'giveup';
+  }
+  return {
+    // 遷移で play() を出した時点で見張り始める。
+    arm(now) {
+      stage = 'armed';
+      stageAt = Number.isFinite(now) ? now : 0;
+    },
+    // 開始が確認できた・本人が止めた等で見張りをやめる。
+    disarm() {
+      stage = 'idle';
+    },
+    // まだ読み込み中で開始できないのが当然の間、段階を進めず
+    // 猶予の起点だけを今へずらす。
+    postpone(now) {
+      if (stage === 'armed' || stage === 'retried' || stage === 'fallbacked') {
+        stageAt = Number.isFinite(now) ? now : stageAt;
+      }
+    },
+    // 観測: 現在の段階の猶予を過ぎていれば次の行動を返す。
+    observe(now) {
+      if (!Number.isFinite(now)) return 'none';
+      if (stage === 'armed' && now - stageAt >= retryDelayMs) return advance(now);
+      if (stage === 'retried' && now - stageAt >= fallbackDelayMs) return advance(now);
+      if (stage === 'fallbacked' && now - stageAt >= giveupDelayMs) return advance(now);
+      return 'none';
+    },
+    // play() の拒否などで未開始が即座に分かったとき、猶予を
+    // 待たずに次の行動を返す。
+    blocked(now) {
+      if (stage === 'idle' || stage === 'done') return 'none';
+      return advance(Number.isFinite(now) ? now : stageAt);
+    },
+  };
+}
+
 /* ---- 再生モードの端末保存 (セッションキーと同じ環境分け) ---- */
 
 export function playModeKey(env) {

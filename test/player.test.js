@@ -12,6 +12,10 @@ import {
   MAX_FAILURE_SKIPS,
   createStallTracker,
   STALL_THRESHOLD_MS,
+  createStartWatchdog,
+  START_RETRY_DELAY_MS,
+  START_FALLBACK_DELAY_MS,
+  START_GIVEUP_DELAY_MS,
   stepIndex,
   skipPlan,
   nextRepeat,
@@ -543,6 +547,79 @@ describe('foregroundRecoveryAction (フォアグラウンド復帰時の再生�
   });
   it('再生できていれば何もしない', () => {
     expect(foregroundRecoveryAction({ ...base })).toBe('none');
+  });
+});
+
+describe('createStartWatchdog (遷移直後の再生開始チェック)', () => {
+  it('武装していない間は何もしない', () => {
+    const w = createStartWatchdog();
+    expect(w.observe(100_000)).toBe('none');
+    expect(w.blocked(100_000)).toBe('none');
+  });
+
+  it('猶予を過ぎるまでは何もせず、過ぎたら段階的に retry → fallback → giveup を返し、各段階は1回だけ', () => {
+    const w = createStartWatchdog();
+    w.arm(0);
+    expect(w.observe(START_RETRY_DELAY_MS - 1)).toBe('none');
+    expect(w.observe(START_RETRY_DELAY_MS)).toBe('retry');
+    // 再発行の直後に観測しても、次の猶予までは何もしない。
+    expect(w.observe(START_RETRY_DELAY_MS)).toBe('none');
+    const t1 = START_RETRY_DELAY_MS + START_FALLBACK_DELAY_MS;
+    expect(w.observe(t1 - 1)).toBe('none');
+    expect(w.observe(t1)).toBe('fallback');
+    const t2 = t1 + START_GIVEUP_DELAY_MS;
+    expect(w.observe(t2 - 1)).toBe('none');
+    expect(w.observe(t2)).toBe('giveup');
+    // 打ち止めの後は、どれだけ経っても何もしない。
+    expect(w.observe(t2 + 100_000)).toBe('none');
+    expect(w.blocked(t2 + 100_000)).toBe('none');
+  });
+
+  it('blocked は猶予を待たずに1段ずつ進める', () => {
+    const w = createStartWatchdog();
+    w.arm(0);
+    expect(w.blocked(0)).toBe('retry');
+    expect(w.blocked(0)).toBe('fallback');
+    expect(w.blocked(0)).toBe('giveup');
+    expect(w.blocked(0)).toBe('none');
+  });
+
+  it('blocked の時刻が、その後の観測の猶予の起点になる', () => {
+    const w = createStartWatchdog();
+    w.arm(0);
+    expect(w.blocked(10_000)).toBe('retry');
+    expect(w.observe(10_000 + START_FALLBACK_DELAY_MS - 1)).toBe('none');
+    expect(w.observe(10_000 + START_FALLBACK_DELAY_MS)).toBe('fallback');
+  });
+
+  it('disarm したら、猶予を過ぎても何もしない (開始が確認できた場合)', () => {
+    const w = createStartWatchdog();
+    w.arm(0);
+    w.disarm();
+    expect(w.observe(100_000)).toBe('none');
+    expect(w.blocked(100_000)).toBe('none');
+  });
+
+  it('postpone は段階を進めず、猶予の起点だけをずらす (読み込み中の様子見)', () => {
+    const w = createStartWatchdog();
+    w.arm(0);
+    w.postpone(60_000);
+    expect(w.observe(60_000 + START_RETRY_DELAY_MS - 1)).toBe('none');
+    expect(w.observe(60_000 + START_RETRY_DELAY_MS)).toBe('retry');
+    // 武装していないときの postpone は無効。
+    const idle = createStartWatchdog();
+    idle.postpone(0);
+    expect(idle.observe(100_000)).toBe('none');
+  });
+
+  it('arm し直すと段階が最初に戻る (次の遷移)', () => {
+    const w = createStartWatchdog();
+    w.arm(0);
+    expect(w.blocked(0)).toBe('retry');
+    expect(w.blocked(0)).toBe('fallback');
+    w.arm(50_000);
+    expect(w.observe(50_000 + START_RETRY_DELAY_MS - 1)).toBe('none');
+    expect(w.observe(50_000 + START_RETRY_DELAY_MS)).toBe('retry');
   });
 });
 

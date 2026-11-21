@@ -89,6 +89,7 @@ import {
   clampSeek,
   classifyRate,
   createStallTracker,
+  createStartWatchdog,
   durationMismatch,
   failedEpisodePlan,
   foregroundRecoveryAction,
@@ -1109,7 +1110,14 @@ function flushPlayListen() {
 // (フォアグラウンド復帰時の回復が、止まっていた再生を再開・
 // 前進させた。対象は止まっていた曲) / deck_overlap (待機側の
 // 要素が再生状態になっているのを検出して止めた。対象は待機側に
-// 載っていた曲、seconds は待機側の止めた位置) の6つ。いずれもキューヘの
+// 載っていた曲、seconds は待機側の止めた位置) /
+// play_rejected_not_allowed / play_rejected_not_supported /
+// play_rejected_other (play() が拒否された。種別で理由
+// (エラーの name) を区別する) / start_retry (遷移直後の開始
+// チェックが play() を再発行した) / start_fallback (開始
+// チェックが、直前まで鳴っていた要素へ読み直して再生する
+// フォールバックを行った) / start_failed (再発行・フォール
+// バックでも始まらなかった) の12。いずれもキューへの
 // push のみで、送信の開始は既存の区切りに相乗りする (再生開始を
 // 遅らせないため、この関数から flush はしない)。
 function queueDiagEvent(type, ep, seconds) {
@@ -1225,6 +1233,27 @@ let failureHandledForSeq = -1;
 // 初回読み込み中はストール検知の対象にしないために使う。
 let episodePlayStarted = false;
 const stallTracker = createStallTracker();
+
+/* ---- 遷移直後の再生開始チェック (開始ウォッチドッグ) ----
+   曲の終了遷移で play() を出しても、バックグラウンドでは
+   再生が始まらないことがある (実機で3回観測: 交代直後に
+   0:00 で停止、次曲の音声取得まで済んでいても始まらない等)。
+   従来は play() の拒否 (NotAllowedError) を「ブロックされた
+   だけ」として静かに捨て、開始したかの確認も無かったため、
+   フォアグラウンド復帰時の回復まで止まり続けた。そこで
+   loadEpisode のたびに player.js の createStartWatchdog を
+   武装し、始まっていなければ play() の再発行 → 直前まで
+   鳴っていた要素へのフォールバック → 打ち止め、の順に
+   手当てする (実行は checkStartWatchdog)。判定は時刻の差と
+   要素のイベント・play() の Promise に連鎖させ、タイマーが
+   回らないバックグラウンドでも拒否の連鎖で進むようにする。 */
+const startWatchdog = createStartWatchdog();
+// ウォッチドッグを武装したときの読み込み世代 (episodeLoadSeq)。
+// 別の読み込みへ移った後、古い武装のチェックが動かないように。
+let startWatchdogSeq = -1;
+// 直近に実際に再生が始まった ('playing' が来た) 要素。開始に
+// 失敗したとき、同じ曲を読み直して再生するフォールバック先。
+let lastPlayedDeck = null;
 
 /* ---- YouTube 音声の長さ二重化の補正 (player.js の純粋関数を使う) ----
    currentTime / duration は Audio 要素のスケールのまま保持し、表示と
@@ -1375,11 +1404,13 @@ function checkPlaybackStall() {
 // タイマーの tick では、終端の到達判定とストール検知の両方を
 // 見に行く (どちらも timeupdate が止まった状況でこそ要る)。
 // あわせて、待機側が鳴っていないかも見る (二重再生の監視。
-// silenceStandbyDeck)。
+// silenceStandbyDeck) と、遷移直後の開始チェック
+// (checkStartWatchdog) も行う。
 function playerTimerTick() {
   silenceStandbyDeck();
   checkKnownDurationEnd();
   checkPlaybackStall();
+  checkStartWatchdog();
 }
 
 function startEndCheckTimer() {
@@ -1392,6 +1423,78 @@ function stopEndCheckTimer() {
     clearInterval(endCheckTimer);
     endCheckTimer = null;
   }
+}
+
+/* ---- 遷移直後の開始チェックの実行 ----
+   ウォッチドッグの判定 (player.js) を受けて、再発行・
+   フォールバック・打ち止めを実行する。呼び出しは tick
+   (playerTimerTick) と要素の 'canplay' と play() の拒否
+   (blocked = true で猶予を待たない) から。ガード: 再生中の
+   エピソードがあり、再生の意思があり、まだ開始しておらず、
+   武装が現在の読み込みのものであること。本人が止めた場合は
+   playWanted が下りているので何もしない。 */
+function checkStartWatchdog(blocked = false) {
+  if (!currentEpisode.value || !playWanted || episodePlayStarted) return;
+  if (startWatchdogSeq !== episodeLoadSeq) return;
+  const now = performance.now();
+  if (!blocked && Number.isFinite(audio.readyState) && audio.readyState < 2) {
+    // まだデータが届いていない (読み込み中) なら、開始でき
+    // ないのは当然なので、段階を進めず猶予を延ばす。拒否が
+    // 分かっている場合 (blocked) は読み込み状態によらず進む。
+    startWatchdog.postpone(now);
+    return;
+  }
+  const action = blocked ? startWatchdog.blocked(now) : startWatchdog.observe(now);
+  if (action === 'retry') {
+    // 診断: 開始チェックが play() を再発行したことを残す。
+    queueDiagEvent('start_retry', currentEpisode.value);
+    tryPlayAudio();
+  } else if (action === 'fallback') {
+    if (startFallbackToPreviousDeck()) {
+      // 診断: フォールバックを行ったことを残す (成否は、その
+      // 後に 'playing' が来るか、続けて start_failed が出るか
+      // で読み分ける)。
+      queueDiagEvent('start_fallback', currentEpisode.value);
+    } else {
+      // フォールバック先が無い (直前まで鳴っていた要素が
+      // 今の要素自身しかない等) 場合は、そのまま打ち止める。
+      queueDiagEvent('start_failed', currentEpisode.value);
+      startWatchdog.disarm();
+    }
+  } else if (action === 'giveup') {
+    // 診断: 再発行・フォールバックでも始まらなかったことを
+    // 残す。以後の回復は従来どおりフォアグラウンド復帰時に
+    // 委ねる (recover が出れば、そこで復旧したことが分かる)。
+    queueDiagEvent('start_failed', currentEpisode.value);
+  }
+}
+
+// 開始しなかった要素に見切りをつけ、直前まで鳴っていた側の
+// 要素へ同じ曲を読み直して再生する。鳴っていた要素は WebKit
+// に再生を許可されやすいという想定のフォールバック。役割を
+// 入れ替えたら true (その要素が現在のアクティブになる)。
+function startFallbackToPreviousDeck() {
+  const ep = currentEpisode.value;
+  const prev = lastPlayedDeck;
+  if (!ep || !ep.audioUrl || !prev || prev === audio) return false;
+  const failed = audio;
+  // 先にアクティブを差し替えてから失敗側を止める (loadEpisode
+  // の役割交代と同じ順序。失敗側から遅れて来るイベントは、
+  // アクティブでない要素としてリスナー側で無視される)。
+  audio = prev;
+  failed.pause();
+  unloadDeck(failed);
+  // 失敗側は待機側になるが、先読みの文脈は役割交代で壊れて
+  // いるため破棄する (次の 'playing' で張り直される)。
+  resetPreloadState();
+  isLoading.value = true;
+  audio.src = ep.audioUrl;
+  audio.playbackRate = speed.value;
+  // 役割交代 (loadEpisode) と同じく、メタデータが既にあれば
+  // その場で初期化し、無ければ 'loadedmetadata' が拾う。
+  if (Number.isFinite(audio.duration)) applyDeckMetadata(audio);
+  tryPlayAudio();
+  return true;
 }
 
 /* ---- 次の曲の先読み (二重バッファ) ----
@@ -1647,6 +1750,15 @@ function isCurrentEpisode(article) {
   return !!currentEpisode.value && currentEpisode.value.id === article.id;
 }
 
+// play() の拒否理由 (エラーの name) を診断イベントの種別へ
+// 対応づける。events 側に自由文の欄が無いため、理由は種別で
+// 区別する (reader-gas の EVENT_TYPES と対)。
+function playRejectionEventType(err) {
+  if (err && err.name === 'NotAllowedError') return 'play_rejected_not_allowed';
+  if (err && err.name === 'NotSupportedError') return 'play_rejected_not_supported';
+  return 'play_rejected_other';
+}
+
 function tryPlayAudio() {
   // 再生の意思を立てる (フォアグラウンド復帰時の回復判定用)。
   playWanted = true;
@@ -1665,14 +1777,24 @@ function tryPlayAudio() {
         // pause() や src の差し替えで中断されただけの拒否は、
         // そのエピソードの失敗ではない。
         if (err && err.name === 'AbortError') return;
-        // 再生がブロックされただけの拒否 (バックグラウンドでの
-        // 自動送り等) も、そのエピソードが壊れているわけでは
-        // ない。失敗として送らず、再生の意思だけ残しておく
-        // (フォアグラウンド復帰時の回復で再生し直す)。
-        if (err && err.name === 'NotAllowedError') return;
         // 既に別のエピソードへ切り替わっていたら、今の曲の
         // 失敗として扱わない。
         if (!currentEpisode.value || currentEpisode.value.id !== epId) return;
+        // 診断: play() がなぜ拒否されたかを理由つきで残す
+        // (次に同じ止まり方が起きたとき、原因を確定するため)。
+        queueDiagEvent(playRejectionEventType(err), currentEpisode.value);
+        // 再生がブロックされただけの拒否 (バックグラウンドでの
+        // 自動送り等) は、そのエピソードが壊れているわけでは
+        // ない。失敗として送らず、その場で開始チェックを1段
+        // 進める (再発行→フォールバックの連鎖は
+        // checkStartWatchdog 側)。ウォッチドッグが武装して
+        // いない文脈 (本人の再開操作等) では何も起きず、従来
+        // どおり再生の意思だけが残る (フォアグラウンド復帰時
+        // の回復で再生し直す)。
+        if (err && err.name === 'NotAllowedError') {
+          checkStartWatchdog(true);
+          return;
+        }
         handlePlaybackFailure();
       });
     }
@@ -1819,6 +1941,11 @@ function loadEpisode(article, { resume = true, diagAdvance = false } = {}) {
     oldDeck.pause();
   }
   tryPlayAudio();
+  // 開始ウォッチドッグをこの読み込みで武装する (開始が確認
+  // できたら 'playing' で解除される)。play() の拒否は
+  // マイクロタスクで届くため、この同期的な武装が先に済む。
+  startWatchdog.arm(performance.now());
+  startWatchdogSeq = episodeLoadSeq;
   if (oldDeck) {
     // 旧要素から遅れて来るイベントは、リスナー側のガード
     // (アクティブでない要素は無視) で状態へ響かない。
@@ -1897,6 +2024,9 @@ function cycleRepeat() {
 // の監視)。
 function pausePlayback() {
   playWanted = false;
+  // 本人の意思で止めたので、開始チェックはここで畳む
+  // (checkStartWatchdog の playWanted ガードと二重の備え)。
+  startWatchdog.disarm();
   audio.pause();
   silenceStandbyDeck();
 }
@@ -2039,6 +2169,7 @@ function onSeekInput(event) {
 
 function stopPlayer() {
   playWanted = false;
+  startWatchdog.disarm();
   // 待機側が鳴っていたら一緒に止める (本人の停止が両要素に
   // 届く保証。二重再生の監視)。先読みの文脈 (preloadId) が
   // 残っているうちに行い、診断は下の flush で一緒に送る。
@@ -2164,6 +2295,11 @@ function attachDeckListeners(el) {
     isLoading.value = false;
     // 実際に再生が始まったので、ここからストール検知の対象になる。
     episodePlayStarted = true;
+    // 開始が確認できたので開始ウォッチドッグを解除し、この
+    // 要素を「直前まで鳴っていた要素」として控える (開始に
+    // 失敗したときのフォールバック先)。
+    startWatchdog.disarm();
+    lastPlayedDeck = el;
     // 再生が始まったら、待機側で次曲の先読みを開始する
     // (二重バッファ。再生中はページが生きている間に読み終える)。
     updatePreload();
@@ -2171,6 +2307,9 @@ function attachDeckListeners(el) {
   el.addEventListener('canplay', () => {
     if (el !== audio) return;
     isLoading.value = false;
+    // データが来たのにまだ開始していない場合の、開始チェックの
+    // 実行機会 (タイマーが回らない状況でもイベントに連鎖させる)。
+    checkStartWatchdog();
   });
   el.addEventListener('error', () => {
     if (el !== audio) {
