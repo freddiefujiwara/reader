@@ -15,6 +15,7 @@ import {
   mergePendingReadMarks,
   mergePendingStarMarks,
   isPlayableArticle,
+  planArticleJump,
   visibleFeedChips,
   feedCategories,
   feedDisplayName,
@@ -490,5 +491,58 @@ describe('mergePendingStarMarks', () => {
   it('一覧から消えた記事への控えは落とす', () => {
     const out = mergePendingStarMarks(views(), new Map([['gone', { starred: true, starState: 'on' }]]));
     expect(out.keep.size).toBe(0);
+  });
+});
+
+describe('planArticleJump', () => {
+  const feeds = [
+    { id: 'f1', title: 'F1', category: '音楽' },
+    { id: 'f2', title: 'F2', category: '教養・ラジオ' },
+  ];
+  const jumpState = () => ({
+    ...createListState(),
+    feeds: feeds.map((f) => ({ ...f })),
+    articles: [A('a1', 'f1'), A('a2', 'f1', true), A('a3', 'f2'), A('a4', 'f1')],
+  });
+
+  it('記事が属するフィードとそのカテゴリを返す', () => {
+    expect(planArticleJump(jumpState(), { id: 'a3', feedId: 'f2' }, 50))
+      .toEqual({ category: '教養・ラジオ', feedId: 'f2', displayLimit: 50 });
+  });
+
+  it('カテゴリの無いフィードはカテゴリ無選択で返す', () => {
+    expect(planArticleJump(baseState(), { id: '3', feedId: 'zenn' }, 50))
+      .toEqual({ category: '', feedId: 'zenn', displayLimit: 50 });
+  });
+
+  it('現在の絞り込みや未読フィルタに左右されず、既読の記事も対象になる', () => {
+    const s = { ...jumpState(), category: '教養・ラジオ', feedId: 'f2', filter: 'unread' };
+    expect(planArticleJump(s, { id: 'a2', feedId: 'f1' }, 50))
+      .toEqual({ category: '音楽', feedId: 'f1', displayLimit: 50 });
+  });
+
+  it('表示上限の外にある記事は、上限をその位置まで広げる', () => {
+    // f1 の表示順は a1, a2, a4 で、a4 は 3 番目。
+    expect(planArticleJump(jumpState(), { id: 'a4', feedId: 'f1' }, 2).displayLimit).toBe(3);
+    // 上限の内側なら、渡された上限のまま。
+    expect(planArticleJump(jumpState(), { id: 'a4', feedId: 'f1' }, 50).displayLimit).toBe(50);
+  });
+
+  it('フィードの並び順が古い順なら、その順序での位置で数える', () => {
+    const s = jumpState();
+    s.feeds[0].sortDirection = 'asc';
+    s.articles = [
+      { id: 'old', feedId: 'f1', isRead: false, publishedAt: '2026-01-01T00:00:00.000Z' },
+      { id: 'new', feedId: 'f1', isRead: false, publishedAt: '2026-02-01T00:00:00.000Z' },
+    ];
+    // 昇順では old が先頭で new は 2 番目。上限 1 では new が出ないため 2 へ広げる。
+    expect(planArticleJump(s, { id: 'new', feedId: 'f1' }, 1).displayLimit).toBe(2);
+    expect(planArticleJump(s, { id: 'old', feedId: 'f1' }, 1).displayLimit).toBe(1);
+  });
+
+  it('記事・フィードが無ければ null', () => {
+    expect(planArticleJump(jumpState(), null, 50)).toBeNull();
+    expect(planArticleJump(jumpState(), { id: 'a1', feedId: 'gone' }, 50)).toBeNull();
+    expect(planArticleJump(jumpState(), { id: 'gone', feedId: 'f1' }, 50)).toBeNull();
   });
 });

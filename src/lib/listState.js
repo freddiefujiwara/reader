@@ -91,6 +91,25 @@ export function visibleArticles(state, stickyReadIds) {
   return out;
 }
 
+// 再生中の記事へ移動するための計画。その記事が属するフィードの
+// 単体表示 (全件表示) を開くときのカテゴリとフィード ID、その表示で
+// 記事が表示上限 (displayLimit) の内側に入るために必要な上限値を返す。
+// 位置は visibleArticles と同じ条件 (フィードの並び順を含む) で数える
+// ため、呼び出し側はこの計画どおりに選択と上限を差し替えるだけで
+// 対象の記事が画面に出る。記事が壊れている・フィードが一覧に無い・
+// 記事が表示対象に入らない場合は null (移動しない)。
+export function planArticleJump(state, article, displayLimit) {
+  if (!article || typeof article !== 'object') return null;
+  const feeds = Array.isArray(state?.feeds) ? state.feeds : [];
+  const feed = feeds.find((f) => f && f.id === article.feedId);
+  if (!feed) return null;
+  const nextState = { ...state, category: categoryOf(feed), feedId: feed.id, filter: 'all' };
+  const index = visibleArticles(nextState).findIndex((a) => a && a.id === article.id);
+  if (index < 0) return null;
+  const base = Number.isFinite(displayLimit) && displayLimit > 0 ? displayLimit : 0;
+  return { category: nextState.category, feedId: feed.id, displayLimit: Math.max(base, index + 1) };
+}
+
 // フィード1件のカテゴリだけを差し替えた新しい配列を返す (元の配列は
 // 壊さない)。管理画面でのジャンル保存を、タイムライン側の共有状態へ
 // 即座に反映するために使う。
