@@ -9,6 +9,7 @@ import { feedIdFromUrl } from './feedHash.js';
 import {
   isYouTubeFeedUrl,
   youtubeChannelIdFromUrl,
+  youtubePlaylistIdFromUrl,
   youtubeVideoIdFromLink,
 } from './feedAdmin.js';
 
@@ -108,14 +109,44 @@ function resolveAudioFields(prev, entry, fetchedAtIso) {
   };
 }
 
+// YouTube 由来のフィード (チャンネル／プレイリスト) かどうか。
+// App.vue の youtubeFeedIds と同じ判定 (保存 URL からチャンネル ID か
+// プレイリスト ID が取れるか) で、サーバー側の RSS 出し分けとも揃える。
+function isYouTubeManagedFeed(feed) {
+  const url = feed && typeof feed.url === 'string' ? feed.url : '';
+  if (!url) return false;
+  return !!(youtubeChannelIdFromUrl(url) || youtubePlaylistIdFromUrl(url));
+}
+
+// 過去分 (アーカイブ) のエントリかどうか。公開日時が、取り込み時点から
+// 保持期間 (既読の掃除と同じ RETENTION_DAYS) より古ければ過去分。
+// 公開日時が読めないエントリは過去分とみなさない (取りこぼし防止に倒す)。
+export function isBackCatalogEntry(entry, fetchedAtIso, retentionDays = RETENTION_DAYS) {
+  const published = parseTimeMs(entry ? entry.publishedAt : '');
+  if (!published) return false;
+  const fetched = parseTimeMs(fetchedAtIso) || Date.now();
+  return fetched - published > retentionDays * 24 * 60 * 60 * 1000;
+}
+
 // ID 解決済みエントリから、IndexedDB へ put する記事レコードを組み立てる。
 // 新規記事は未読。既存記事は既読状態 (is_read / read_at)・再生位置
 // (play_pos) と取り込み日時 (fetched_at: 経過日数の起点) を保ち、
 // メタデータだけ最新化する。existingById が新しいほど、この不変条件
 // (既読を未読へ戻さない・再生位置を減らさない) が実際に守られる。
 // 音声URLは resolveAudioFields の規則で保持・消去する。
+// 過去分ガード: 端末にまだ無い記事で公開が保持期間より古いものは、
+// 新規レコードを作らない。全アーカイブを配信するフィード (ポッド
+// キャスト等) で、後から届いた過去分や、掃除で消えた既読記事が未読
+// として戻ってくるのを防ぐため。既存レコードの更新は従来どおり。
+// YouTube 由来はサーバー側で件数が絞られ (チャンネルは直近20件)、
+// プレイリストの古い曲も対象にしたいためガードしない。
 function buildUpsertRecords(existingById, resolved, feed, fetchedAtIso) {
-  return resolved.map(({ id, entry }) => {
+  const targets = isYouTubeManagedFeed(feed)
+    ? resolved
+    : resolved.filter(
+        ({ id, entry }) => (existingById && existingById[id]) || !isBackCatalogEntry(entry, fetchedAtIso)
+      );
+  return targets.map(({ id, entry }) => {
     const prev = existingById ? existingById[id] : null;
     if (prev) {
       return {
