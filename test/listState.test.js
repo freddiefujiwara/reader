@@ -3,11 +3,7 @@ import {
   createListState,
   visibleArticles,
   patchArticle,
-  patchFeedCategory,
-  patchFeedSortDirection,
-  patchFeedSyncDeletes,
-  patchFeedStarSettings,
-  patchFeedPastGuard,
+  patchFeedAttrs,
   shouldClearCategorySelection,
   withUnreadCounts,
   sortArticlesDesc,
@@ -131,63 +127,59 @@ describe('sortArticlesAsc', () => {
   });
 });
 
-describe('patchFeedSortDirection', () => {
-  it('対象フィードの並び順だけを差し替え、値は asc / desc に寄せる', () => {
+describe('patchFeedAttrs', () => {
+  it('並び順は asc / desc に寄せて差し替える', () => {
     const feeds = [
       { id: 'a', sortDirection: 'desc' },
       { id: 'b', sortDirection: 'asc' },
     ];
-    const next = patchFeedSortDirection(feeds, 'a', 'asc');
+    const next = patchFeedAttrs(feeds, 'a', { sortDirection: 'asc' });
     expect(next[0].sortDirection).toBe('asc');
     expect(next[1].sortDirection).toBe('asc');
     expect(feeds[0].sortDirection).toBe('desc');
-    expect(patchFeedSortDirection(feeds, 'b', 'weird')[1].sortDirection).toBe('desc');
+    expect(patchFeedAttrs(feeds, 'b', { sortDirection: 'weird' })[1].sortDirection).toBe('desc');
   });
-});
-
-describe('patchFeedSyncDeletes', () => {
-  it('対象フィードの削除同期だけを差し替え、値は真偽値に寄せる', () => {
+  it('削除同期は真偽値に寄せて差し替える', () => {
     const feeds = [
       { id: 'a', syncDeletes: false },
       { id: 'b', syncDeletes: true },
     ];
-    const next = patchFeedSyncDeletes(feeds, 'a', true);
+    const next = patchFeedAttrs(feeds, 'a', { syncDeletes: true });
     expect(next[0].syncDeletes).toBe(true);
     expect(next[1].syncDeletes).toBe(true);
     expect(feeds[0].syncDeletes).toBe(false);
-    expect(patchFeedSyncDeletes(feeds, 'b', 'on')[1].syncDeletes).toBe(false);
+    expect(patchFeedAttrs(feeds, 'b', { syncDeletes: 'on' })[1].syncDeletes).toBe(false);
   });
-});
-
-describe('patchFeedStarSettings', () => {
-  it('対象フィードのスター選定だけを差し替え、値は API の形に寄せる', () => {
+  it('スター選定は API の形 (文字列か null、整数か null) に寄せて差し替える', () => {
     const feeds = [
       { id: 'a', starMode: null, starCount: null, starMinSec: null },
       { id: 'b', starMode: 'all', starCount: null, starMinSec: null },
     ];
-    const next = patchFeedStarSettings(feeds, 'a', { starMode: 'recent', starCount: 5, starMinSec: 0 });
+    const next = patchFeedAttrs(feeds, 'a', { starMode: 'recent', starCount: 5, starMinSec: 0 });
     expect(next[0]).toMatchObject({ starMode: 'recent', starCount: 5, starMinSec: 0 });
     expect(next[1].starMode).toBe('all');
     expect(feeds[0].starMode).toBe(null);
     // ペイロードの未指定 (モード ''・数値なし) は null に寄せる。
-    const cleared = patchFeedStarSettings(feeds, 'b', { starMode: '', starCount: undefined, starMinSec: undefined });
+    const cleared = patchFeedAttrs(feeds, 'b', { starMode: '', starCount: undefined, starMinSec: undefined });
     expect(cleared[1]).toMatchObject({ starMode: null, starCount: null, starMinSec: null });
   });
-});
-
-describe('patchFeedPastGuard', () => {
-  it('対象フィードの過去分ガードだけを差し替え、値は API の形に寄せる', () => {
+  it('過去分ガードは API の形に寄せて差し替える', () => {
     const feeds = [
       { id: 'a', pastGuard: null },
       { id: 'b', pastGuard: 'read' },
     ];
-    const next = patchFeedPastGuard(feeds, 'a', 'off');
+    const next = patchFeedAttrs(feeds, 'a', { pastGuard: 'off' });
     expect(next[0].pastGuard).toBe('off');
     expect(next[1].pastGuard).toBe('read');
     expect(feeds[0].pastGuard).toBe(null);
     // ペイロードの未指定 (空文字) は null に寄せる。
-    expect(patchFeedPastGuard(feeds, 'b', '')[1].pastGuard).toBe(null);
-    expect(patchFeedPastGuard(feeds, 'b', null)[1].pastGuard).toBe(null);
+    expect(patchFeedAttrs(feeds, 'b', { pastGuard: '' })[1].pastGuard).toBe(null);
+    expect(patchFeedAttrs(feeds, 'b', { pastGuard: null })[1].pastGuard).toBe(null);
+  });
+  it('fields に含まれるキーだけを差し替え、含まれない属性は保つ', () => {
+    const feeds = [{ id: 'a', category: '個人', sortDirection: 'asc', pastGuard: 'off' }];
+    const next = patchFeedAttrs(feeds, 'a', { category: '川口' });
+    expect(next[0]).toMatchObject({ category: '川口', sortDirection: 'asc', pastGuard: 'off' });
   });
 });
 
@@ -392,14 +384,14 @@ describe('shouldClearCategorySelection', () => {
   });
 });
 
-describe('patchFeedCategory', () => {
+describe('patchFeedAttrs (カテゴリ)', () => {
   const FEEDS_WITH_CAT = [
     { id: 'a', title: 'A', category: 'ニュース' },
     { id: 'b', title: 'B', category: '技術' },
   ];
 
   it('対象フィードのカテゴリだけを差し替え、元の配列は壊さない', () => {
-    const out = patchFeedCategory(FEEDS_WITH_CAT, 'a', '川口');
+    const out = patchFeedAttrs(FEEDS_WITH_CAT, 'a', { category: '川口' });
     expect(out.map((f) => [f.id, f.category])).toEqual([
       ['a', '川口'],
       ['b', '技術'],
@@ -409,7 +401,7 @@ describe('patchFeedCategory', () => {
   });
 
   it('対象が無ければ中身は同じ (カテゴリは付けない)', () => {
-    const out = patchFeedCategory(FEEDS_WITH_CAT, 'missing', '川口');
+    const out = patchFeedAttrs(FEEDS_WITH_CAT, 'missing', { category: '川口' });
     expect(out.map((f) => [f.id, f.category])).toEqual([
       ['a', 'ニュース'],
       ['b', '技術'],
@@ -417,7 +409,7 @@ describe('patchFeedCategory', () => {
   });
 
   it('空カテゴリへの変更 (ジャンル解除) もそのまま反映する', () => {
-    const out = patchFeedCategory(FEEDS_WITH_CAT, 'b', '');
+    const out = patchFeedAttrs(FEEDS_WITH_CAT, 'b', { category: '' });
     expect(out[1].category).toBe('');
     expect(feedCategories(out)).toEqual(['ニュース']);
   });

@@ -13,7 +13,7 @@ import {
   shouldClearCategorySelection,
   visibleArticles,
   patchArticle,
-  patchFeedCategory,
+  patchFeedAttrs,
   withUnreadCounts,
   sortArticlesDesc,
   mergePendingReadMarks,
@@ -170,8 +170,8 @@ describe('listState: null エントリ・非配列への耐性', () => {
     expect(out[0]).toBeNull();
     expect(out[1].isRead).toBe(true);
   });
-  it('patchFeedCategory: null エントリはそのまま通す', () => {
-    const out = patchFeedCategory([null, { id: 'f', category: 'x' }], 'f', 'y');
+  it('patchFeedAttrs: null エントリはそのまま通す', () => {
+    const out = patchFeedAttrs([null, { id: 'f', category: 'x' }], 'f', { category: 'y' });
     expect(out[0]).toBeNull();
     expect(out[1].category).toBe('y');
   });
