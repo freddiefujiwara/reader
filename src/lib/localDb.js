@@ -8,6 +8,7 @@ import { articleId } from './articleId.js';
 import { feedIdFromUrl } from './feedHash.js';
 import {
   isYouTubeFeedUrl,
+  normalizePastGuard,
   youtubeChannelIdFromUrl,
   youtubePlaylistIdFromUrl,
   youtubeVideoIdFromLink,
@@ -118,6 +119,18 @@ function isYouTubeManagedFeed(feed) {
   return !!(youtubeChannelIdFromUrl(url) || youtubePlaylistIdFromUrl(url));
 }
 
+// 過去分ガードの実効モード (純関数)。フィード設定 (pastGuard) が
+// あればそれを使い、未指定なら種別既定に倒す: 通常フィードは
+// 'skip' (取り込まない)、YouTube 由来は 'read' (既読として取り込む)。
+// YouTube を 'read' にするのは、サーバー側で件数が絞られ (チャンネルは
+// 直近20件)、プレイリストの古い曲も記事として残したい一方で、
+// 既読にして掃除された古い動画が未読として戻ってくるのを防ぐため。
+export function effectivePastGuard(feed) {
+  const mode = normalizePastGuard(feed && feed.pastGuard);
+  if (mode) return mode;
+  return isYouTubeManagedFeed(feed) ? 'read' : 'skip';
+}
+
 // 過去分 (アーカイブ) のエントリかどうか。公開日時が、取り込み時点から
 // 保持期間 (既読の掃除と同じ RETENTION_DAYS) より古ければ過去分。
 // 公開日時が読めないエントリは過去分とみなさない (取りこぼし防止に倒す)。
@@ -134,18 +147,20 @@ export function isBackCatalogEntry(entry, fetchedAtIso, retentionDays = RETENTIO
 // メタデータだけ最新化する。existingById が新しいほど、この不変条件
 // (既読を未読へ戻さない・再生位置を減らさない) が実際に守られる。
 // 音声URLは resolveAudioFields の規則で保持・消去する。
-// 過去分ガード: 端末にまだ無い記事で公開が保持期間より古いものは、
-// 新規レコードを作らない。全アーカイブを配信するフィード (ポッド
-// キャスト等) で、後から届いた過去分や、掃除で消えた既読記事が未読
-// として戻ってくるのを防ぐため。既存レコードの更新は従来どおり。
-// YouTube 由来はサーバー側で件数が絞られ (チャンネルは直近20件)、
-// プレイリストの古い曲も対象にしたいためガードしない。
+// 過去分ガード (実効モードは effectivePastGuard): 端末にまだ無い
+// 記事で公開が保持期間より古いものの扱いを決める。'skip' は新規
+// レコードを作らない (全アーカイブを配信するフィードで、後から
+// 届いた過去分や、掃除で消えた既読記事が未読として戻ってくるのを
+// 防ぐ)。'read' は既読として作る (記事としては残り再生もできるが、
+// 未読にはならない)。'off' はガードなし (未読として作る)。
+// 既存レコードの更新はモードによらず従来どおり。
 function buildUpsertRecords(existingById, resolved, feed, fetchedAtIso) {
-  const targets = isYouTubeManagedFeed(feed)
-    ? resolved
-    : resolved.filter(
+  const guard = effectivePastGuard(feed);
+  const targets = guard === 'skip'
+    ? resolved.filter(
         ({ id, entry }) => (existingById && existingById[id]) || !isBackCatalogEntry(entry, fetchedAtIso)
-      );
+      )
+    : resolved;
   return targets.map(({ id, entry }) => {
     const prev = existingById ? existingById[id] : null;
     if (prev) {
@@ -160,6 +175,7 @@ function buildUpsertRecords(existingById, resolved, feed, fetchedAtIso) {
         ...resolveAudioFields(prev, entry, fetchedAtIso),
       };
     }
+    const asRead = guard === 'read' && isBackCatalogEntry(entry, fetchedAtIso);
     return {
       id,
       feed_id: feed.id,
@@ -175,8 +191,8 @@ function buildUpsertRecords(existingById, resolved, feed, fetchedAtIso) {
       audio_stale: false,
       duration_sec: entry.durationSec ?? null,
       play_pos: 0,
-      is_read: false,
-      read_at: '',
+      is_read: asRead,
+      read_at: asRead ? fetchedAtIso : '',
       // スターはサーバーが正本。取り込みでは作らず・消さず、
       // list 応答からの同期 (syncLocalArticleStars) と付け外し
       // (setLocalArticleStar) だけで変わる。既存レコードは

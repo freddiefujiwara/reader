@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   planUpserts,
+  effectivePastGuard,
   planLocalPrune,
   planSyncDeletions,
   planOrphanArticles,
@@ -163,12 +164,52 @@ describe('planUpserts', () => {
     expect(records[0].is_read).toBe(true);
     expect(records[0].title).toBe('new title');
   });
-  it('YouTube チャンネル／プレイリストのフィードでは過去分も作る', async () => {
+  it('YouTube チャンネル／プレイリストのフィードでは過去分を既読として作る (既定 read)', async () => {
     const old = entry('v1', { publishedAt: '2020-01-01T00:00:00.000Z' });
     const channelFeed = { id: 'yt1', title: 'ch', url: 'https://www.youtube.com/channel/UC0123456789ab' };
     const playlistFeed = { id: 'yt2', title: 'pl', url: 'https://www.youtube.com/playlist?list=PL0123456789ab' };
-    await expect(planUpserts({}, [old], channelFeed, FETCHED)).resolves.toHaveLength(1);
-    await expect(planUpserts({}, [old], playlistFeed, FETCHED)).resolves.toHaveLength(1);
+    const [fromChannel] = await planUpserts({}, [old], channelFeed, FETCHED);
+    expect(fromChannel.is_read).toBe(true);
+    expect(fromChannel.read_at).toBe(FETCHED);
+    const [fromPlaylist] = await planUpserts({}, [old], playlistFeed, FETCHED);
+    expect(fromPlaylist.is_read).toBe(true);
+    // 新しい動画は従来どおり未読で作る。
+    const [fresh] = await planUpserts({}, [entry('v2')], channelFeed, FETCHED);
+    expect(fresh.is_read).toBe(false);
+    expect(fresh.read_at).toBe('');
+  });
+  it('pastGuard=read の通常フィードでは過去分を既読として作る', async () => {
+    const old = entry('old1', { publishedAt: '2026-09-14T01:00:00.000Z' });
+    const [record] = await planUpserts({}, [old], { ...FEED, pastGuard: 'read' }, FETCHED);
+    expect(record.is_read).toBe(true);
+    expect(record.read_at).toBe(FETCHED);
+  });
+  it('pastGuard=off では過去分も未読として作る (ガードなし)', async () => {
+    const old = entry('old1', { publishedAt: '2026-09-14T01:00:00.000Z' });
+    const [record] = await planUpserts({}, [old], { ...FEED, pastGuard: 'off' }, FETCHED);
+    expect(record.is_read).toBe(false);
+    const ytOff = { id: 'yt1', title: 'ch', url: 'https://www.youtube.com/channel/UC0123456789ab', pastGuard: 'off' };
+    const [ytRecord] = await planUpserts({}, [entry('v1', { publishedAt: '2020-01-01T00:00:00.000Z' })], ytOff, FETCHED);
+    expect(ytRecord.is_read).toBe(false);
+  });
+  it('pastGuard=skip の YouTube フィードでは過去分を作らない', async () => {
+    const ytSkip = { id: 'yt1', title: 'ch', url: 'https://www.youtube.com/channel/UC0123456789ab', pastGuard: 'skip' };
+    const records = await planUpserts({}, [entry('v1', { publishedAt: '2020-01-01T00:00:00.000Z' })], ytSkip, FETCHED);
+    expect(records).toHaveLength(0);
+  });
+});
+
+describe('effectivePastGuard', () => {
+  it('未指定なら種別既定 (通常=skip、YouTube=read)、保存値があればそれを使う', () => {
+    expect(effectivePastGuard(FEED)).toBe('skip');
+    expect(effectivePastGuard({ id: 'yt1', url: 'https://www.youtube.com/channel/UC0123456789ab' })).toBe('read');
+    expect(effectivePastGuard({ id: 'yt2', url: 'https://www.youtube.com/playlist?list=PL0123456789ab' })).toBe('read');
+    expect(effectivePastGuard({ ...FEED, pastGuard: 'read' })).toBe('read');
+    expect(effectivePastGuard({ ...FEED, pastGuard: 'off' })).toBe('off');
+    expect(effectivePastGuard({ id: 'yt1', url: 'https://www.youtube.com/channel/UC0123456789ab', pastGuard: 'skip' })).toBe('skip');
+    // 不正値・null (サーバー未対応) は未指定として種別既定に倒す。
+    expect(effectivePastGuard({ ...FEED, pastGuard: null })).toBe('skip');
+    expect(effectivePastGuard({ ...FEED, pastGuard: 'junk' })).toBe('skip');
   });
 });
 
