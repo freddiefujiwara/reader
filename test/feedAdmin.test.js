@@ -16,6 +16,7 @@ import {
   resolveFeedAddForm,
   buildSaveFeedPayload,
   isFeedFormDirty,
+  normalizeSortDirection,
   filterAdminFeeds,
   genreSuggestions,
   formatFeedStatus,
@@ -26,10 +27,10 @@ import {
 } from '../src/lib/feedAdmin.js';
 
 describe('createFeedForm / feedFormFromFeed', () => {
-  it('追加フォームは URL とジャンルだけ', () => {
-    expect(createFeedForm()).toEqual({ url: '', category: '' });
+  it('追加フォームは URL とジャンルと並び順 (既定は新しい順)', () => {
+    expect(createFeedForm()).toEqual({ url: '', category: '', sortDirection: 'desc' });
   });
-  it('編集フォームは表示用の ID / タイトル / URL と、編集用のジャンルだけを持つ', () => {
+  it('編集フォームは表示用の ID / タイトル / URL と、編集用のジャンルと並び順を持つ', () => {
     const feed = {
       id: 'nhk',
       title: 'NHK',
@@ -43,14 +44,19 @@ describe('createFeedForm / feedFormFromFeed', () => {
       title: 'NHK',
       url: 'https://example.com/rss',
       category: 'news',
+      sortDirection: 'desc',
     });
+  });
+  it('フィードの並び順が asc ならフォームにも asc が入る', () => {
+    const form = feedFormFromFeed({ id: 'x', title: 'X', url: 'https://example.com/f', category: '', sortDirection: 'asc' });
+    expect(form.sortDirection).toBe('asc');
   });
   it('フィードに enabled があってもフォームには持ち込まない', () => {
     const form = feedFormFromFeed({ id: 'x', title: 'X', url: 'https://example.com/f', category: '', enabled: false });
     expect('enabled' in form).toBe(false);
   });
   it('null フィードでも空フォームになる', () => {
-    expect(feedFormFromFeed(null)).toEqual({ id: '', title: '', url: '', category: '' });
+    expect(feedFormFromFeed(null)).toEqual({ id: '', title: '', url: '', category: '', sortDirection: 'desc' });
   });
 });
 
@@ -268,7 +274,7 @@ describe('resolveFeedAddForm (取得結果でタイトルを決める)', () => {
     const resolved = resolveFeedAddForm({ url: ` ${url} `, category: ' tech ' }, { xml: RSS });
     expect(resolved).toEqual({
       ok: true,
-      form: { url, category: 'tech', title: 'Rebuild' },
+      form: { url, category: 'tech', sortDirection: 'desc', title: 'Rebuild' },
     });
     expect('id' in resolved.form).toBe(false);
   });
@@ -290,6 +296,7 @@ describe('buildSaveFeedPayload', () => {
       title: 'Rebuild',
       url: 'https://feeds.rebuild.fm/rebuildfm',
       category: 'tech',
+      sortDirection: 'desc',
     });
     expect('id' in payload).toBe(false);
   });
@@ -303,6 +310,7 @@ describe('buildSaveFeedPayload', () => {
       title: '',
       url: 'https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjX9efdf',
       category: '音楽',
+      sortDirection: 'desc',
     });
     expect('id' in payload).toBe(false);
   });
@@ -315,7 +323,7 @@ describe('buildSaveFeedPayload', () => {
     expect(payload.title).toBe('');
     expect('id' in payload).toBe(false);
   });
-  it('編集時は ID / タイトル / URL は元を引き継ぎ、ジャンルだけをフォームから取る', () => {
+  it('編集時は ID / タイトル / URL は元を引き継ぎ、ジャンルと並び順をフォームから取る', () => {
     const base = {
       id: 'b81e59da11f890d2',
       title: 'Rebuild',
@@ -332,7 +340,18 @@ describe('buildSaveFeedPayload', () => {
       title: 'Rebuild',
       url: 'https://feeds.rebuild.fm/rebuildfm',
       category: 'new',
+      sortDirection: 'desc',
     });
+  });
+  it('並び順 asc は追加・編集どちらのペイロードにも入る', () => {
+    const added = buildSaveFeedPayload({ title: 'T', url: 'https://example.com/f', category: '', sortDirection: 'asc' });
+    expect(added.sortDirection).toBe('asc');
+    const base = { id: 'x', title: 'X', url: 'https://example.com/f', category: '' };
+    const edited = buildSaveFeedPayload({ category: '', sortDirection: 'asc' }, base);
+    expect(edited.sortDirection).toBe('asc');
+    expect(normalizeSortDirection('ASC')).toBe('asc');
+    expect(normalizeSortDirection('')).toBe('desc');
+    expect(normalizeSortDirection(undefined)).toBe('desc');
   });
   it('編集でフォームに enabled があってもペイロードには含めない', () => {
     const base = { id: 'x', title: 'X', url: 'https://example.com/f', category: 'old' };
@@ -355,6 +374,12 @@ describe('isFeedFormDirty (編集フォームの変更判定)', () => {
 
   it('ジャンルが変われば変更あり', () => {
     expect(isFeedFormDirty(original, { title: 'Rebuild', category: 'ニュース' })).toBe(true);
+  });
+
+  it('並び順が変われば変更あり、既定 (未指定) と desc は同じとみなす', () => {
+    expect(isFeedFormDirty(original, { title: 'Rebuild', category: 'ポッドキャスト', sortDirection: 'asc' })).toBe(true);
+    expect(isFeedFormDirty(original, { title: 'Rebuild', category: 'ポッドキャスト', sortDirection: 'desc' })).toBe(false);
+    expect(isFeedFormDirty({ ...original, sortDirection: 'asc' }, { title: 'Rebuild', category: 'ポッドキャスト', sortDirection: 'desc' })).toBe(true);
   });
 
   it('前後の空白だけの差は未変更 (保存時に trim される値で比べる)', () => {

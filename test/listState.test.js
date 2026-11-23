@@ -4,9 +4,11 @@ import {
   visibleArticles,
   patchArticle,
   patchFeedCategory,
+  patchFeedSortDirection,
   shouldClearCategorySelection,
   withUnreadCounts,
   sortArticlesDesc,
+  sortArticlesAsc,
   markAllReadInList,
   markAllReadScope,
   markAllReadTargets,
@@ -56,6 +58,28 @@ describe('visibleArticles', () => {
     const s = { ...baseState(), filter: 'all' };
     expect(visibleArticles(s, new Set(['2'])).map((a) => a.id)).toEqual(['1', '2', '3']);
   });
+  it('並び順が asc のフィードの単体表示では古い順になる', () => {
+    const dated = (id, feedId, publishedAt) => ({ id, feedId, isRead: false, publishedAt, fetchedAt: publishedAt });
+    const s = {
+      ...createListState(),
+      feeds: [
+        { id: 'cal', title: '予定', sortDirection: 'asc' },
+        { id: 'nhk', title: 'NHK', sortDirection: 'desc' },
+      ],
+      articles: [
+        dated('new', 'cal', '2026-11-25T00:00:00.000Z'),
+        dated('old', 'cal', '2026-11-23T00:00:00.000Z'),
+        dated('mid', 'cal', '2026-11-24T00:00:00.000Z'),
+        dated('n1', 'nhk', '2026-11-25T00:00:00.000Z'),
+      ],
+      feedId: 'cal',
+    };
+    expect(visibleArticles(s).map((a) => a.id)).toEqual(['old', 'mid', 'new']);
+    // desc のフィードは state の順 (新しい順) のまま。
+    expect(visibleArticles({ ...s, feedId: 'nhk' }).map((a) => a.id)).toEqual(['n1']);
+    // フィード単体でない表示 (全件) では asc の記事も並べ替えない。
+    expect(visibleArticles({ ...s, feedId: '' }).map((a) => a.id)).toEqual(['new', 'old', 'mid', 'n1']);
+  });
 });
 
 describe('patchArticle', () => {
@@ -88,6 +112,32 @@ describe('sortArticlesDesc', () => {
     ];
     expect(sortArticlesDesc(articles).map((x) => x.id)).toEqual(['b', 'c', 'a']);
     expect(articles.map((x) => x.id)).toEqual(['a', 'b', 'c']);
+  });
+});
+
+describe('sortArticlesAsc', () => {
+  it('publishedAt の古い順、無ければ fetchedAt で並べる (desc の逆)', () => {
+    const articles = [
+      { id: 'a', publishedAt: '2026-11-10T00:00:00.000Z', fetchedAt: '2026-11-14T00:00:00.000Z' },
+      { id: 'b', publishedAt: '2026-11-12T00:00:00.000Z', fetchedAt: '2026-11-13T00:00:00.000Z' },
+      { id: 'c', publishedAt: '', fetchedAt: '2026-11-11T00:00:00.000Z' },
+    ];
+    expect(sortArticlesAsc(articles).map((x) => x.id)).toEqual(['a', 'c', 'b']);
+    expect(articles.map((x) => x.id)).toEqual(['a', 'b', 'c']);
+  });
+});
+
+describe('patchFeedSortDirection', () => {
+  it('対象フィードの並び順だけを差し替え、値は asc / desc に寄せる', () => {
+    const feeds = [
+      { id: 'a', sortDirection: 'desc' },
+      { id: 'b', sortDirection: 'asc' },
+    ];
+    const next = patchFeedSortDirection(feeds, 'a', 'asc');
+    expect(next[0].sortDirection).toBe('asc');
+    expect(next[1].sortDirection).toBe('asc');
+    expect(feeds[0].sortDirection).toBe('desc');
+    expect(patchFeedSortDirection(feeds, 'b', 'weird')[1].sortDirection).toBe('desc');
   });
 });
 

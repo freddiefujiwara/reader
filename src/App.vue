@@ -48,6 +48,7 @@ import {
   mergePendingStarMarks,
   patchArticle,
   patchFeedCategory,
+  patchFeedSortDirection,
   shouldClearCategorySelection,
   sortArticlesDesc,
   visibleArticles,
@@ -2767,7 +2768,8 @@ async function backToTimeline() {
   }
 }
 
-// 管理で保存したフィードのジャンルを、タイムライン側の共有状態
+// 管理で保存したフィードのジャンルと並び順を、タイムライン側の
+// 共有状態
 // (メモリ内の state と IndexedDB のフィードキャッシュ) へ即座に
 // 反映する。タイムラインのジャンルチップ・絞り込みはこの共有状態
 // から作られるが、背景更新が状態を読み直すのは全フィード再取得の
@@ -2780,10 +2782,12 @@ async function reflectSavedFeedToTimeline(payload) {
   const id = payload?.id;
   if (!id) return;
   const category = String(payload.category || '');
-  state.value = { ...state.value, feeds: patchFeedCategory(state.value.feeds, id, category) };
+  const sortDirection = payload.sortDirection === 'asc' ? 'asc' : 'desc';
+  const patch = (feeds) => patchFeedSortDirection(patchFeedCategory(feeds, id, category), id, sortDirection);
+  state.value = { ...state.value, feeds: patch(state.value.feeds) };
   const cached = await loadLocalFeeds();
   if (cached.some((f) => f.id === id)) {
-    await saveLocalFeeds(patchFeedCategory(cached, id, category));
+    await saveLocalFeeds(patch(cached));
   }
 }
 
@@ -3032,7 +3036,7 @@ async function saveFeedForm(payload) {
 
 async function submitFeedForm() {
   if (formSaving.value || formFetching.value) return;
-  // 編集はジャンルと有効/無効だけ (ID・タイトル・URL は変更できない)。
+  // 編集はジャンルと並び順だけ (ID・タイトル・URL は変更できない)。
   if (formMode.value === 'edit') {
     // 未変更では保存しない (ボタンも非活性だが、入力欄からの
     // Enter 送信でも同じにそろえる)。
@@ -3503,6 +3507,14 @@ onMounted(async () => {
                   @click="form.category = c"
                 >{{ c }}</button>
               </div>
+            </div>
+            <div class="field">
+              <label for="feed-sort-direction">並び順</label>
+              <select id="feed-sort-direction" v-model="form.sortDirection">
+                <option value="desc">新しい順（上が最新）</option>
+                <option value="asc">古い順（上が最古）</option>
+              </select>
+              <p class="field-note">フィード単体で開いたときの記事の並びです。予定のように日時順に読みたいフィードは「古い順」が向いています。</p>
             </div>
             <p v-if="formError" class="error">{{ formError }}</p>
             <div class="form-actions">

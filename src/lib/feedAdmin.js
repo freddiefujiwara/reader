@@ -1,24 +1,32 @@
 // フィード管理の純粋な補助 (フォーム検証・保存ペイロード組み立て・状態表示)。
 // Vue に依存しない関数だけにし、単体テストで振る舞いを固定する。
 // フィード ID は URL のハッシュ (サーバーが決める) になったため、
-// フォームが扱うのは URL とジャンル (サーバー側の category) だけ。
+// フォームが扱うのは URL とジャンル (サーバー側の category) と
+// 並び順 (sortDirection) だけ。
 // タイトルはフィードからの自動取得のみで、人は入力しない。
 import { formatPublishedAt } from './format.js';
 import { parseFeedMeta } from './feedParse.js';
 
-// 新規追加フォームの初期値。扱うのは URL とジャンルだけ。
+// 並び順の正規化: 'asc' (古い順) か、それ以外は既定の 'desc'
+// (新しい順)。サーバー応答に無い (旧サーバー) 場合も 'desc'。
+export function normalizeSortDirection(value) {
+  return String(value || '').trim().toLowerCase() === 'asc' ? 'asc' : 'desc';
+}
+
+// 新規追加フォームの初期値。扱うのは URL とジャンルと並び順だけ。
 export function createFeedForm() {
-  return { url: '', category: '' };
+  return { url: '', category: '', sortDirection: 'desc' };
 }
 
 // 編集フォーム初期値。ID / タイトル / URL は表示専用 (変更できない)、
-// ジャンルだけが編集対象。
+// ジャンルと並び順だけが編集対象。
 export function feedFormFromFeed(feed) {
   return {
     id: feed?.id || '',
     title: feed?.title || '',
     url: feed?.url || '',
     category: feed?.category || '',
+    sortDirection: normalizeSortDirection(feed?.sortDirection),
   };
 }
 
@@ -176,6 +184,7 @@ export function resolveFeedAddForm(form, { xml = '' } = {}) {
   const base = {
     url: String(form?.url || '').trim(),
     category: String(form?.category || '').trim(),
+    sortDirection: normalizeSortDirection(form?.sortDirection),
   };
   const title = parseFeedMeta(xml).title;
   if (!title) {
@@ -187,7 +196,7 @@ export function resolveFeedAddForm(form, { xml = '' } = {}) {
 // saveFeed へ送る feed オブジェクトを組み立てる。
 // 新規 (base なし): ID は送らない (サーバーが URL から決める)。
 // 編集 (base あり): ID / タイトル / URL は元のフィードのまま、
-// ジャンルだけをフォームから反映する。
+// ジャンルと並び順だけをフォームから反映する。
 export function buildSaveFeedPayload(form, base = null) {
   if (base) {
     return {
@@ -195,6 +204,7 @@ export function buildSaveFeedPayload(form, base = null) {
       title: base.title || '',
       url: base.url || '',
       category: String(form?.category || '').trim(),
+      sortDirection: normalizeSortDirection(form?.sortDirection),
     };
   }
   const url = String(form?.url || '').trim();
@@ -204,12 +214,13 @@ export function buildSaveFeedPayload(form, base = null) {
     // URL ハッシュで決まるため、揺れをここで吸収する)。
     url: normalizeYouTubePlaylistUrl(url) || url,
     category: String(form?.category || '').trim(),
+    sortDirection: normalizeSortDirection(form?.sortDirection),
   };
 }
 
 // 編集フォームが編集開始時点から変わっているか (保存ボタンの
-// 活性化判定)。比べるのは保存される値 (タイトルとジャンル) で、
-// 前後の空白を取り除いてから比べる (保存時にも trim されるため、
+// 活性化判定)。比べるのは保存される値 (タイトル・ジャンル・並び順)
+// で、前後の空白を取り除いてから比べる (保存時にも trim されるため、
 // 空白だけの差は変更に数えない)。値を変えて元に戻せば未変更に
 // 戻る。original が無い場合は比べようがないので、保存を妨げない
 // よう変更ありとして扱う。
@@ -218,7 +229,8 @@ export function isFeedFormDirty(original, form) {
   const norm = (v) => String(v ?? '').trim();
   return (
     norm(original.title) !== norm(form.title) ||
-    norm(original.category) !== norm(form.category)
+    norm(original.category) !== norm(form.category) ||
+    normalizeSortDirection(original.sortDirection) !== normalizeSortDirection(form.sortDirection)
   );
 }
 
