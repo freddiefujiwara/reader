@@ -3,7 +3,7 @@
 //   GET <exec>?u=<encodeURIComponent(fetchUrl)>&token=<値>
 //   -> { url, content, error } (content がフィード XML の生テキスト)
 // 失敗したフィードはその回だけ諦め、ローカルの記事を残す (呼び出し側の判断)。
-import { parseFeedXml } from './feedParse.js';
+import { parseFeedXml, isCompleteFeedXml } from './feedParse.js';
 import { withRetry } from './retry.js';
 
 // url-fetch-gas の /exec URL (portfolio-treemap と同じデプロイ)。
@@ -56,7 +56,7 @@ export async function fetchOneFeed(feed, opts) {
   const fetchUrl = feed.fetchUrl || feed.url;
   try {
     const xml = await fetchFeedXml(fetchUrl, opts);
-    return { feed, ok: true, entries: parseFeedXml(xml, feed), error: null };
+    return { feed, ok: true, entries: parseFeedXml(xml, feed), complete: isCompleteFeedXml(xml), error: null };
   } catch (error) {
     return { feed, ok: false, entries: [], error };
   }

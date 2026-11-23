@@ -28,7 +28,7 @@ import {
 
 describe('createFeedForm / feedFormFromFeed', () => {
   it('追加フォームは URL とジャンルと並び順 (既定は新しい順)', () => {
-    expect(createFeedForm()).toEqual({ url: '', category: '', sortDirection: 'desc' });
+    expect(createFeedForm()).toEqual({ url: '', category: '', sortDirection: 'desc', syncDeletes: false });
   });
   it('編集フォームは表示用の ID / タイトル / URL と、編集用のジャンルと並び順を持つ', () => {
     const feed = {
@@ -45,6 +45,7 @@ describe('createFeedForm / feedFormFromFeed', () => {
       url: 'https://example.com/rss',
       category: 'news',
       sortDirection: 'desc',
+      syncDeletes: false,
     });
   });
   it('フィードの並び順が asc ならフォームにも asc が入る', () => {
@@ -56,7 +57,7 @@ describe('createFeedForm / feedFormFromFeed', () => {
     expect('enabled' in form).toBe(false);
   });
   it('null フィードでも空フォームになる', () => {
-    expect(feedFormFromFeed(null)).toEqual({ id: '', title: '', url: '', category: '', sortDirection: 'desc' });
+    expect(feedFormFromFeed(null)).toEqual({ id: '', title: '', url: '', category: '', sortDirection: 'desc', syncDeletes: false });
   });
 });
 
@@ -274,7 +275,7 @@ describe('resolveFeedAddForm (取得結果でタイトルを決める)', () => {
     const resolved = resolveFeedAddForm({ url: ` ${url} `, category: ' tech ' }, { xml: RSS });
     expect(resolved).toEqual({
       ok: true,
-      form: { url, category: 'tech', sortDirection: 'desc', title: 'Rebuild' },
+      form: { url, category: 'tech', sortDirection: 'desc', syncDeletes: false, title: 'Rebuild' },
     });
     expect('id' in resolved.form).toBe(false);
   });
@@ -297,6 +298,7 @@ describe('buildSaveFeedPayload', () => {
       url: 'https://feeds.rebuild.fm/rebuildfm',
       category: 'tech',
       sortDirection: 'desc',
+      syncDeletes: false,
     });
     expect('id' in payload).toBe(false);
   });
@@ -311,6 +313,7 @@ describe('buildSaveFeedPayload', () => {
       url: 'https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjX9efdf',
       category: '音楽',
       sortDirection: 'desc',
+      syncDeletes: false,
     });
     expect('id' in payload).toBe(false);
   });
@@ -341,6 +344,7 @@ describe('buildSaveFeedPayload', () => {
       url: 'https://feeds.rebuild.fm/rebuildfm',
       category: 'new',
       sortDirection: 'desc',
+      syncDeletes: false,
     });
   });
   it('並び順 asc は追加・編集どちらのペイロードにも入る', () => {
@@ -635,5 +639,28 @@ describe('genreSuggestions (フォームのジャンル候補)', () => {
     expect(genreSuggestions([], '')).toEqual([]);
     expect(genreSuggestions(null, '')).toEqual([]);
     expect(genreSuggestions(undefined, 'x')).toEqual([]);
+  });
+});
+
+describe('削除同期 (syncDeletes) のフォームとペイロード', () => {
+  it('フィードの syncDeletes が真ならフォームにも入る', () => {
+    const form = feedFormFromFeed({ id: 'x', title: 'X', url: 'https://example.com/f', category: '', syncDeletes: true });
+    expect(form.syncDeletes).toBe(true);
+    const off = feedFormFromFeed({ id: 'x', title: 'X', url: 'https://example.com/f', category: '' });
+    expect(off.syncDeletes).toBe(false);
+  });
+  it('追加・編集どちらのペイロードにも入る', () => {
+    const added = buildSaveFeedPayload({ title: 'T', url: 'https://example.com/f', category: '', syncDeletes: true });
+    expect(added.syncDeletes).toBe(true);
+    const base = { id: 'x', title: 'X', url: 'https://example.com/f', category: '' };
+    const edited = buildSaveFeedPayload({ category: '', syncDeletes: true }, base);
+    expect(edited.syncDeletes).toBe(true);
+    const editedOff = buildSaveFeedPayload({ category: '' }, base);
+    expect(editedOff.syncDeletes).toBe(false);
+  });
+  it('削除同期だけの変更でも編集フォームは変更ありになる', () => {
+    const original = { title: 'X', category: '', sortDirection: 'desc', syncDeletes: false };
+    expect(isFeedFormDirty(original, { title: 'X', category: '', sortDirection: 'desc', syncDeletes: true })).toBe(true);
+    expect(isFeedFormDirty(original, { title: 'X', category: '', sortDirection: 'desc', syncDeletes: false })).toBe(false);
   });
 });

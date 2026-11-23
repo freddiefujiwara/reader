@@ -2,7 +2,7 @@
 // Vue に依存しない関数だけにし、単体テストで振る舞いを固定する。
 // フィード ID は URL のハッシュ (サーバーが決める) になったため、
 // フォームが扱うのは URL とジャンル (サーバー側の category) と
-// 並び順 (sortDirection) だけ。
+// 並び順 (sortDirection) と削除同期 (syncDeletes) だけ。
 // タイトルはフィードからの自動取得のみで、人は入力しない。
 import { formatPublishedAt } from './format.js';
 import { parseFeedMeta } from './feedParse.js';
@@ -13,13 +13,20 @@ export function normalizeSortDirection(value) {
   return String(value || '').trim().toLowerCase() === 'asc' ? 'asc' : 'desc';
 }
 
-// 新規追加フォームの初期値。扱うのは URL とジャンルと並び順だけ。
+// 削除同期の正規化: サーバー応答が真 (boolean true / 'on') のとき
+// だけオン。それ以外 (未対応の旧サーバー含む) はオフ。
+export function normalizeSyncDeletes(value) {
+  return value === true || String(value || '').trim().toLowerCase() === 'on';
+}
+
+// 新規追加フォームの初期値。扱うのは URL とジャンルと並び順と
+// 削除同期だけ。
 export function createFeedForm() {
-  return { url: '', category: '', sortDirection: 'desc' };
+  return { url: '', category: '', sortDirection: 'desc', syncDeletes: false };
 }
 
 // 編集フォーム初期値。ID / タイトル / URL は表示専用 (変更できない)、
-// ジャンルと並び順だけが編集対象。
+// ジャンルと並び順と削除同期だけが編集対象。
 export function feedFormFromFeed(feed) {
   return {
     id: feed?.id || '',
@@ -27,6 +34,7 @@ export function feedFormFromFeed(feed) {
     url: feed?.url || '',
     category: feed?.category || '',
     sortDirection: normalizeSortDirection(feed?.sortDirection),
+    syncDeletes: normalizeSyncDeletes(feed?.syncDeletes),
   };
 }
 
@@ -185,6 +193,7 @@ export function resolveFeedAddForm(form, { xml = '' } = {}) {
     url: String(form?.url || '').trim(),
     category: String(form?.category || '').trim(),
     sortDirection: normalizeSortDirection(form?.sortDirection),
+    syncDeletes: normalizeSyncDeletes(form?.syncDeletes),
   };
   const title = parseFeedMeta(xml).title;
   if (!title) {
@@ -196,7 +205,7 @@ export function resolveFeedAddForm(form, { xml = '' } = {}) {
 // saveFeed へ送る feed オブジェクトを組み立てる。
 // 新規 (base なし): ID は送らない (サーバーが URL から決める)。
 // 編集 (base あり): ID / タイトル / URL は元のフィードのまま、
-// ジャンルと並び順だけをフォームから反映する。
+// ジャンルと並び順と削除同期だけをフォームから反映する。
 export function buildSaveFeedPayload(form, base = null) {
   if (base) {
     return {
@@ -205,6 +214,7 @@ export function buildSaveFeedPayload(form, base = null) {
       url: base.url || '',
       category: String(form?.category || '').trim(),
       sortDirection: normalizeSortDirection(form?.sortDirection),
+      syncDeletes: normalizeSyncDeletes(form?.syncDeletes),
     };
   }
   const url = String(form?.url || '').trim();
@@ -215,6 +225,7 @@ export function buildSaveFeedPayload(form, base = null) {
     url: normalizeYouTubePlaylistUrl(url) || url,
     category: String(form?.category || '').trim(),
     sortDirection: normalizeSortDirection(form?.sortDirection),
+    syncDeletes: normalizeSyncDeletes(form?.syncDeletes),
   };
 }
 
@@ -230,7 +241,8 @@ export function isFeedFormDirty(original, form) {
   return (
     norm(original.title) !== norm(form.title) ||
     norm(original.category) !== norm(form.category) ||
-    normalizeSortDirection(original.sortDirection) !== normalizeSortDirection(form.sortDirection)
+    normalizeSortDirection(original.sortDirection) !== normalizeSortDirection(form.sortDirection) ||
+    normalizeSyncDeletes(original.syncDeletes) !== normalizeSyncDeletes(form.syncDeletes)
   );
 }
 

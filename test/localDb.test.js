@@ -504,3 +504,72 @@ describe('DB 接続のクローズ (closeLocalDb)', () => {
     expect(() => closeLocalDb()).not.toThrow();
   });
 });
+
+describe('ingestFeedArticles の削除同期 (syncDeletes)', () => {
+  const FEED = { id: 'sync-feed', title: 'Sync', url: 'https://example.com/sync.xml', syncDeletes: true };
+  const FETCHED1 = '2026-11-14T01:00:00.000Z';
+  const FETCHED2 = '2026-11-15T01:00:00.000Z';
+  const entry = (g) => ({
+    guid: g,
+    title: `t-${g}`,
+    link: `https://example.com/${g}`,
+    publishedAt: '2026-11-13T00:00:00.000Z',
+    summary: '',
+    author: '',
+    audioUrl: '',
+    durationSec: null,
+  });
+  const rowsOfFeed = async (feedId) =>
+    (await loadLocalArticles()).filter((a) => a.feed_id === feedId);
+  const cleanupFeed = async (feedId) => {
+    const rows = await rowsOfFeed(feedId);
+    await deleteLocalArticles(rows.map((a) => a.id));
+  };
+
+  it('完全な取得では、フィードから消えた記事が端末からも消える', async () => {
+    await cleanupFeed(FEED.id);
+    await ingestFeedArticles(FEED, [entry('a1'), entry('a2'), entry('a3')], FETCHED1, null, { feedComplete: true });
+    expect((await rowsOfFeed(FEED.id)).length).toBe(3);
+    const { syncDeletedIds } = await ingestFeedArticles(FEED, [entry('a1'), entry('a3')], FETCHED2, null, { feedComplete: true });
+    const rows = await rowsOfFeed(FEED.id);
+    expect(rows.map((a) => a.title).sort()).toEqual(['t-a1', 't-a3']);
+    expect(syncDeletedIds.length).toBe(1);
+  });
+
+  it('文書が不完全 (feedComplete でない) なら消さない', async () => {
+    await cleanupFeed(FEED.id);
+    await ingestFeedArticles(FEED, [entry('a1'), entry('a2')], FETCHED1, null, { feedComplete: true });
+    const { syncDeletedIds } = await ingestFeedArticles(FEED, [entry('a1')], FETCHED2, null, { feedComplete: false });
+    expect((await rowsOfFeed(FEED.id)).length).toBe(2);
+    expect(syncDeletedIds).toEqual([]);
+  });
+
+  it('設定がオフのフィードでは、完全な取得でも消さない', async () => {
+    const offFeed = { id: 'sync-off-feed', title: 'Off', url: 'https://example.com/off.xml' };
+    await cleanupFeed(offFeed.id);
+    await ingestFeedArticles(offFeed, [entry('a1'), entry('a2')], FETCHED1, null, { feedComplete: true });
+    await ingestFeedArticles(offFeed, [entry('a1')], FETCHED2, null, { feedComplete: true });
+    expect((await rowsOfFeed(offFeed.id)).length).toBe(2);
+  });
+
+  it('取得集合が空なら消さない', async () => {
+    await cleanupFeed(FEED.id);
+    await ingestFeedArticles(FEED, [entry('a1')], FETCHED1, null, { feedComplete: true });
+    const { syncDeletedIds } = await ingestFeedArticles(FEED, [], FETCHED2, null, { feedComplete: true });
+    expect((await rowsOfFeed(FEED.id)).length).toBe(1);
+    expect(syncDeletedIds).toEqual([]);
+  });
+
+  it('YouTube 由来のフィードでは、設定がオンでも消さない (サーバー管理のため)', async () => {
+    const ytFeed = {
+      id: 'sync-yt-feed',
+      title: 'YT',
+      url: 'https://www.youtube.com/channel/UCxNfaRC6MbAnwSR1Dqqv69A',
+      syncDeletes: true,
+    };
+    await cleanupFeed(ytFeed.id);
+    await ingestFeedArticles(ytFeed, [entry('a1'), entry('a2')], FETCHED1, null, { feedComplete: true });
+    await ingestFeedArticles(ytFeed, [entry('a1')], FETCHED2, null, { feedComplete: true });
+    expect((await rowsOfFeed(ytFeed.id)).length).toBe(2);
+  });
+});

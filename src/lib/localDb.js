@@ -224,6 +224,31 @@ function articleTime(a) {
   return parseTimeMs(a.published_at || a.fetched_at);
 }
 
+// 削除同期の上限 (1回の取り込みで消す記事数)。プレイリストの
+// サーバー側同期と同じ考え方で、取得側の異常 (フィードが別物に
+// 化けた等) で大量に消してしまわないための歯止め。超えたら今回の
+// 同期だけを見送る (blocked: true)。
+export const SYNC_DELETES_MAX_PER_RUN = 100;
+
+// 削除同期の計画 (純関数): そのフィードの既存記事のうち、今回の
+// 取得集合 (presentIds) に無いものを消す対象にする。取得集合が
+// 空のときは同期しない (空 = 取得異常と区別できないため)。
+// 削除候補が上限を超えたら blocked にして何も消さない。
+export function planSyncDeletions(articles, feedId, presentIds, { maxDeletions = SYNC_DELETES_MAX_PER_RUN } = {}) {
+  const present = new Set(presentIds || []);
+  if (!feedId || present.size === 0) return { deleteIds: [], blocked: false, candidates: 0 };
+  const deleteIds = [];
+  (Array.isArray(articles) ? articles : []).forEach((a) => {
+    if (!a || typeof a !== 'object' || !a.id) return;
+    if (String(a.feed_id || '') !== String(feedId)) return;
+    if (!present.has(a.id)) deleteIds.push(a.id);
+  });
+  if (deleteIds.length > maxDeletions) {
+    return { deleteIds: [], blocked: true, candidates: deleteIds.length };
+  }
+  return { deleteIds, blocked: false, candidates: deleteIds.length };
+}
+
 // フィード一覧から消えたフィードの記事 (残しておくと行き場のない記事になる)。
 export function planOrphanArticles(articles, feedIds) {
   const live = new Set(feedIds || []);
@@ -476,7 +501,7 @@ export function deleteLocalArticles(ids) {
 // 取り込み開始時点の古いスナップショットで状態が巻き戻ることはない。
 // transfer は付け替え状態のマップ (無ければ null)。戻り値の consumedKeys
 // は取り込みで消費できたキーで、マップからの削除は呼び出し側が行う。
-export async function ingestFeedArticles(feed, entries, fetchedAtIso, transfer) {
+export async function ingestFeedArticles(feed, entries, fetchedAtIso, transfer, options) {
   const resolved = await resolveEntryIds(entries, feed.id);
   const db = await openLocalDb();
   const tx = db.transaction('articles', 'readwrite');
@@ -492,8 +517,23 @@ export async function ingestFeedArticles(feed, entries, fetchedAtIso, transfer) 
     consumedKeys = applied.consumedKeys;
   }
   records.forEach((r) => store.put(r));
+  // 削除同期: フィード設定 (syncDeletes) がオンで、文書を最後まで
+  // 受信できた (options.feedComplete) ときだけ、取得集合に無い既存
+  // 記事を同じトランザクションで消す。YouTube 由来はサーバー管理
+  // (プレイリストはサーバー側で同期済み) のため対象にしない。
+  let syncDeletedIds = [];
+  if (
+    feed && feed.syncDeletes === true && !isYouTubeManagedFeed(feed)
+    && options && options.feedComplete === true
+  ) {
+    const plan = planSyncDeletions(existing, feed.id, resolved.map(({ id }) => id));
+    if (!plan.blocked) {
+      plan.deleteIds.forEach((id) => store.delete(id));
+      syncDeletedIds = plan.deleteIds;
+    }
+  }
   await txDone(tx);
-  return { records, consumedKeys };
+  return { records, consumedKeys, syncDeletedIds };
 }
 
 // 記事レコード1件を読み、mutate を適用して書き戻す共通処理。
