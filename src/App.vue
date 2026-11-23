@@ -50,11 +50,7 @@ import {
   mergePendingReadMarks,
   mergePendingStarMarks,
   patchArticle,
-  patchFeedCategory,
-  patchFeedSortDirection,
-  patchFeedSyncDeletes,
-  patchFeedStarSettings,
-  patchFeedPastGuard,
+  patchFeedAttrs,
   planArticleJump,
   shouldClearCategorySelection,
   sortArticlesDesc,
@@ -2836,22 +2832,15 @@ async function backToTimeline() {
 async function reflectSavedFeedToTimeline(payload) {
   const id = payload?.id;
   if (!id) return;
-  const category = String(payload.category || '');
-  const sortDirection = payload.sortDirection === 'asc' ? 'asc' : 'desc';
-  const syncDeletes = payload.syncDeletes === true;
-  const patch = (feeds) => patchFeedPastGuard(
-    patchFeedStarSettings(
-      patchFeedSyncDeletes(
-        patchFeedSortDirection(patchFeedCategory(feeds, id, category), id, sortDirection),
-        id,
-        syncDeletes
-      ),
-      id,
-      { starMode: payload.starMode, starCount: payload.starCount, starMinSec: payload.starMinSec }
-    ),
-    id,
-    payload.pastGuard || null
-  );
+  const patch = (feeds) => patchFeedAttrs(feeds, id, {
+    category: payload.category,
+    sortDirection: payload.sortDirection,
+    syncDeletes: payload.syncDeletes,
+    starMode: payload.starMode,
+    starCount: payload.starCount,
+    starMinSec: payload.starMinSec,
+    pastGuard: payload.pastGuard,
+  });
   state.value = { ...state.value, feeds: patch(state.value.feeds) };
   const cached = await loadLocalFeeds();
   if (cached.some((f) => f.id === id)) {

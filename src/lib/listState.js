@@ -110,45 +110,30 @@ export function planArticleJump(state, article, displayLimit) {
   return { category: nextState.category, feedId: feed.id, displayLimit: Math.max(base, index + 1) };
 }
 
-// フィード1件のカテゴリだけを差し替えた新しい配列を返す (元の配列は
-// 壊さない)。管理画面でのジャンル保存を、タイムライン側の共有状態へ
-// 即座に反映するために使う。
-export function patchFeedCategory(feeds, feedId, category) {
-  return (Array.isArray(feeds) ? feeds : []).map((f) => (f && f.id === feedId ? { ...f, category } : f));
-}
+// フィード1件の属性 (ジャンル・並び順・削除同期・スター選定・
+// 過去分ガード) をまとめて差し替えた新しい配列を返す (元の配列は
+// 壊さない)。管理画面で保存したフィード設定を、タイムライン側の
+// 共有状態へ即座に反映するために使う。fields に含まれるキーだけを
+// 差し替え、値は API の形に寄せて持つ (それまでの patchFeedCategory /
+// patchFeedSortDirection / patchFeedSyncDeletes / patchFeedStarSettings /
+// patchFeedPastGuard の寄せをここへ集約した)。
+const FEED_ATTR_NORMALIZERS = {
+  category: (v) => String(v || ''),
+  sortDirection: (v) => (v === 'asc' ? 'asc' : 'desc'),
+  syncDeletes: (v) => v === true,
+  starMode: (v) => (v === 'none' || v === 'recent' || v === 'all' ? v : null),
+  starCount: (v) => (Number.isInteger(v) ? v : null),
+  starMinSec: (v) => (Number.isInteger(v) ? v : null),
+  pastGuard: (v) => (v === 'skip' || v === 'read' || v === 'off' ? v : null),
+};
 
-// フィード1件の並び順だけを差し替えた新しい配列を返す
-// (patchFeedCategory と同じ位置づけ)。値は 'asc' か、それ以外は
-// 既定の 'desc' に寄せて持つ。
-export function patchFeedSortDirection(feeds, feedId, sortDirection) {
-  const dir = sortDirection === 'asc' ? 'asc' : 'desc';
-  return (Array.isArray(feeds) ? feeds : []).map((f) => (f && f.id === feedId ? { ...f, sortDirection: dir } : f));
-}
-
-// フィード1件の削除同期設定だけを差し替えた新しい配列を返す
-// (patchFeedSortDirection と同じ位置づけ)。値は真偽値に寄せて持つ。
-export function patchFeedSyncDeletes(feeds, feedId, syncDeletes) {
-  const on = syncDeletes === true;
-  return (Array.isArray(feeds) ? feeds : []).map((f) => (f && f.id === feedId ? { ...f, syncDeletes: on } : f));
-}
-
-// フィード1件のスター選定設定だけを差し替えた新しい配列を返す
-// (patchFeedSyncDeletes と同じ位置づけ)。値はサーバー応答の形
-// (モードは文字列か null、数値は整数か null) に寄せて持つ。
-export function patchFeedStarSettings(feeds, feedId, settings) {
-  const s = settings || {};
-  const starMode = s.starMode === 'none' || s.starMode === 'recent' || s.starMode === 'all' ? s.starMode : null;
-  const starCount = Number.isInteger(s.starCount) ? s.starCount : null;
-  const starMinSec = Number.isInteger(s.starMinSec) ? s.starMinSec : null;
-  return (Array.isArray(feeds) ? feeds : []).map((f) => (f && f.id === feedId ? { ...f, starMode, starCount, starMinSec } : f));
-}
-
-// フィード1件の過去分ガード設定だけを差し替えた新しい配列を返す
-// (patchFeedStarSettings と同じ位置づけ)。値はサーバー応答の形
-// ('skip' / 'read' / 'off' か、未指定は null) に寄せて持つ。
-export function patchFeedPastGuard(feeds, feedId, pastGuard) {
-  const mode = pastGuard === 'skip' || pastGuard === 'read' || pastGuard === 'off' ? pastGuard : null;
-  return (Array.isArray(feeds) ? feeds : []).map((f) => (f && f.id === feedId ? { ...f, pastGuard: mode } : f));
+export function patchFeedAttrs(feeds, feedId, fields) {
+  const src = fields || {};
+  const patch = {};
+  for (const key of Object.keys(FEED_ATTR_NORMALIZERS)) {
+    if (key in src) patch[key] = FEED_ATTR_NORMALIZERS[key](src[key]);
+  }
+  return (Array.isArray(feeds) ? feeds : []).map((f) => (f && f.id === feedId ? { ...f, ...patch } : f));
 }
 
 // 1件の記事の一部フィールドを差し替えた新しい articles を返す
