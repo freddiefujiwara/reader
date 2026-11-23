@@ -49,6 +49,7 @@ import {
   patchArticle,
   patchFeedCategory,
   patchFeedSortDirection,
+  planArticleJump,
   shouldClearCategorySelection,
   sortArticlesDesc,
   visibleArticles,
@@ -567,6 +568,27 @@ function scrollToTop() {
 function goHome() {
   applyRoute({ view: 'timeline', category: '', feedId: '', unread: false, staging: routeStaging });
   scrollToTop();
+}
+
+// プレイヤーのタイトル押下: 再生中の記事のカードへ移動する。表示を
+// その記事のフィード単体 (全件) へ切り替え、必要なら表示上限を
+// 広げてから、カードが見える位置までスクロールして短くハイライト
+// する。再生は止めない。対象が一覧に無ければ何もしない。
+async function jumpToCurrentArticle() {
+  const ep = currentEpisode.value;
+  if (!ep) return;
+  const plan = planArticleJump(state.value, ep, DISPLAY_LIMIT);
+  if (!plan) return;
+  applyRoute({ view: 'timeline', category: plan.category, feedId: plan.feedId, unread: false, staging: routeStaging });
+  if (plan.displayLimit > displayLimit.value) displayLimit.value = plan.displayLimit;
+  await nextTick();
+  const el = document.querySelector(`[data-article-id="${ep.id}"]`);
+  if (!el) return;
+  if (typeof el.scrollIntoView === 'function') {
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  el.classList.add('is-flash');
+  setTimeout(() => el.classList.remove('is-flash'), 2400);
 }
 
 function onBrandClick(event) {
@@ -3328,6 +3350,7 @@ onMounted(async () => {
           <article
             v-for="a in displayArticles"
             :key="a.id"
+            :data-article-id="a.id"
             class="card article-card"
             :class="{ 'is-read': a.isRead }"
           >
@@ -3709,8 +3732,10 @@ onMounted(async () => {
 
       <div v-if="currentEpisode" class="player-bar">
         <div class="player-now">
-          <span class="player-title">{{ currentEpisode.title }}</span>
-          <span v-if="currentEpisode.feedTitle" class="player-feed">{{ currentEpisode.feedTitle }}</span>
+          <button type="button" class="player-jump" title="再生中の記事を表示" aria-label="再生中の記事を表示" @click="jumpToCurrentArticle">
+            <span class="player-title">{{ currentEpisode.title }}</span>
+            <span v-if="currentEpisode.feedTitle" class="player-feed">{{ currentEpisode.feedTitle }}</span>
+          </button>
           <span v-if="currentEpisode.audioStale" class="player-stale">古い音声URL</span>
           <button type="button" class="player-close" aria-label="プレイヤーを閉じる" @click="stopPlayer">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" /></svg>
