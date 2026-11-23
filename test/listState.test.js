@@ -6,6 +6,7 @@ import {
   patchFeedCategory,
   patchFeedSortDirection,
   patchFeedSyncDeletes,
+  patchFeedStarSettings,
   shouldClearCategorySelection,
   withUnreadCounts,
   sortArticlesDesc,
@@ -154,6 +155,22 @@ describe('patchFeedSyncDeletes', () => {
     expect(next[1].syncDeletes).toBe(true);
     expect(feeds[0].syncDeletes).toBe(false);
     expect(patchFeedSyncDeletes(feeds, 'b', 'on')[1].syncDeletes).toBe(false);
+  });
+});
+
+describe('patchFeedStarSettings', () => {
+  it('対象フィードのスター選定だけを差し替え、値は API の形に寄せる', () => {
+    const feeds = [
+      { id: 'a', starMode: null, starCount: null, starMinSec: null },
+      { id: 'b', starMode: 'all', starCount: null, starMinSec: null },
+    ];
+    const next = patchFeedStarSettings(feeds, 'a', { starMode: 'recent', starCount: 5, starMinSec: 0 });
+    expect(next[0]).toMatchObject({ starMode: 'recent', starCount: 5, starMinSec: 0 });
+    expect(next[1].starMode).toBe('all');
+    expect(feeds[0].starMode).toBe(null);
+    // ペイロードの未指定 (モード ''・数値なし) は null に寄せる。
+    const cleared = patchFeedStarSettings(feeds, 'b', { starMode: '', starCount: undefined, starMinSec: undefined });
+    expect(cleared[1]).toMatchObject({ starMode: null, starCount: null, starMinSec: null });
   });
 });
 

@@ -17,6 +17,11 @@ import {
   buildSaveFeedPayload,
   isFeedFormDirty,
   normalizeSortDirection,
+  normalizeStarMode,
+  normalizeStarCount,
+  normalizeStarMinSec,
+  defaultStarModeForUrl,
+  effectiveStarMode,
   filterAdminFeeds,
   genreSuggestions,
   formatFeedStatus,
@@ -28,7 +33,7 @@ import {
 
 describe('createFeedForm / feedFormFromFeed', () => {
   it('追加フォームは URL とジャンルと並び順 (既定は新しい順)', () => {
-    expect(createFeedForm()).toEqual({ url: '', category: '', sortDirection: 'desc', syncDeletes: false });
+    expect(createFeedForm()).toEqual({ url: '', category: '', sortDirection: 'desc', syncDeletes: false, starMode: '', starCount: '', starMinSec: '' });
   });
   it('編集フォームは表示用の ID / タイトル / URL と、編集用のジャンルと並び順を持つ', () => {
     const feed = {
@@ -46,6 +51,9 @@ describe('createFeedForm / feedFormFromFeed', () => {
       category: 'news',
       sortDirection: 'desc',
       syncDeletes: false,
+      starMode: '',
+      starCount: '',
+      starMinSec: '',
     });
   });
   it('フィードの並び順が asc ならフォームにも asc が入る', () => {
@@ -57,7 +65,7 @@ describe('createFeedForm / feedFormFromFeed', () => {
     expect('enabled' in form).toBe(false);
   });
   it('null フィードでも空フォームになる', () => {
-    expect(feedFormFromFeed(null)).toEqual({ id: '', title: '', url: '', category: '', sortDirection: 'desc', syncDeletes: false });
+    expect(feedFormFromFeed(null)).toEqual({ id: '', title: '', url: '', category: '', sortDirection: 'desc', syncDeletes: false, starMode: '', starCount: '', starMinSec: '' });
   });
 });
 
@@ -275,7 +283,7 @@ describe('resolveFeedAddForm (取得結果でタイトルを決める)', () => {
     const resolved = resolveFeedAddForm({ url: ` ${url} `, category: ' tech ' }, { xml: RSS });
     expect(resolved).toEqual({
       ok: true,
-      form: { url, category: 'tech', sortDirection: 'desc', syncDeletes: false, title: 'Rebuild' },
+      form: { url, category: 'tech', sortDirection: 'desc', syncDeletes: false, starMode: '', starCount: null, starMinSec: null, title: 'Rebuild' },
     });
     expect('id' in resolved.form).toBe(false);
   });
@@ -299,6 +307,9 @@ describe('buildSaveFeedPayload', () => {
       category: 'tech',
       sortDirection: 'desc',
       syncDeletes: false,
+      starMode: '',
+      starCount: null,
+      starMinSec: null,
     });
     expect('id' in payload).toBe(false);
   });
@@ -314,6 +325,9 @@ describe('buildSaveFeedPayload', () => {
       category: '音楽',
       sortDirection: 'desc',
       syncDeletes: false,
+      starMode: '',
+      starCount: null,
+      starMinSec: null,
     });
     expect('id' in payload).toBe(false);
   });
@@ -345,6 +359,9 @@ describe('buildSaveFeedPayload', () => {
       category: 'new',
       sortDirection: 'desc',
       syncDeletes: false,
+      starMode: '',
+      starCount: null,
+      starMinSec: null,
     });
   });
   it('並び順 asc は追加・編集どちらのペイロードにも入る', () => {
@@ -662,5 +679,56 @@ describe('削除同期 (syncDeletes) のフォームとペイロード', () => {
     const original = { title: 'X', category: '', sortDirection: 'desc', syncDeletes: false };
     expect(isFeedFormDirty(original, { title: 'X', category: '', sortDirection: 'desc', syncDeletes: true })).toBe(true);
     expect(isFeedFormDirty(original, { title: 'X', category: '', sortDirection: 'desc', syncDeletes: false })).toBe(false);
+  });
+});
+
+describe('スター選定 (starMode / starCount / starMinSec) のフォームとペイロード', () => {
+  it('正規化: モードは3値か未指定、数値は範囲内の整数か未指定', () => {
+    expect(normalizeStarMode(' RECENT ')).toBe('recent');
+    expect(normalizeStarMode('junk')).toBe('');
+    expect(normalizeStarCount('5')).toBe(5);
+    expect(normalizeStarCount(0)).toBe(null);
+    expect(normalizeStarCount('')).toBe(null);
+    expect(normalizeStarMinSec(0)).toBe(0);
+    expect(normalizeStarMinSec(-1)).toBe(null);
+    expect(normalizeStarMinSec('90')).toBe(90);
+  });
+  it('種別既定と実効モード: チャンネルは新しい順、プレイリストと本人のチャンネルは全件、それ以外はなし', () => {
+    expect(defaultStarModeForUrl('https://www.youtube.com/channel/UCxNfaRC6MbAnwSR1Dqqv69A')).toBe('recent');
+    expect(defaultStarModeForUrl('https://www.youtube.com/channel/UCbiDZXbr391oT_vsRiqwPFg')).toBe('all');
+    expect(defaultStarModeForUrl('https://www.youtube.com/playlist?list=PLxNfaRC6MbAnwSR1Dqqv69A00')).toBe('all');
+    expect(defaultStarModeForUrl('https://example.com/feed')).toBe('none');
+    expect(effectiveStarMode({ starMode: 'none', url: 'https://www.youtube.com/channel/UCxNfaRC6MbAnwSR1Dqqv69A' })).toBe('none');
+    expect(effectiveStarMode({ url: 'https://www.youtube.com/channel/UCxNfaRC6MbAnwSR1Dqqv69A' })).toBe('recent');
+  });
+  it('フィードの設定がフォームに入り、未指定は空になる', () => {
+    const form = feedFormFromFeed({ id: 'x', title: 'X', url: 'https://www.youtube.com/channel/UCxNfaRC6MbAnwSR1Dqqv69A', category: '', starMode: 'recent', starCount: 5, starMinSec: 0 });
+    expect(form.starMode).toBe('recent');
+    expect(form.starCount).toBe(5);
+    expect(form.starMinSec).toBe(0);
+    const bare = feedFormFromFeed({ id: 'x', title: 'X', url: 'https://example.com/f', category: '' });
+    expect(bare.starMode).toBe('');
+    expect(bare.starCount).toBe('');
+    expect(bare.starMinSec).toBe('');
+  });
+  it('ペイロードには常に3項目が入り、未指定はモード空・数値 null', () => {
+    const base = { id: 'x', title: 'X', url: 'https://www.youtube.com/channel/UCxNfaRC6MbAnwSR1Dqqv69A', category: '' };
+    const edited = buildSaveFeedPayload({ category: '', starMode: 'all', starCount: '7', starMinSec: '30' }, base);
+    expect(edited.starMode).toBe('all');
+    expect(edited.starCount).toBe(7);
+    expect(edited.starMinSec).toBe(30);
+    const cleared = buildSaveFeedPayload({ category: '', starMode: '', starCount: '', starMinSec: '' }, base);
+    expect(cleared.starMode).toBe('');
+    expect(cleared.starCount).toBe(null);
+    expect(cleared.starMinSec).toBe(null);
+  });
+  it('スター選定だけの変更でも編集フォームは変更ありになる', () => {
+    const original = { title: 'X', category: '', sortDirection: 'desc', syncDeletes: false, starMode: '', starCount: '', starMinSec: '' };
+    expect(isFeedFormDirty(original, { ...original, starCount: 5 })).toBe(true);
+    expect(isFeedFormDirty(original, { ...original, starMode: 'all' })).toBe(true);
+    expect(isFeedFormDirty(original, { ...original })).toBe(false);
+    // 数値と文字列の揺れは変更に数えない。
+    const withNum = { ...original, starCount: 5, starMinSec: 90 };
+    expect(isFeedFormDirty(withNum, { ...withNum, starCount: '5', starMinSec: '90' })).toBe(false);
   });
 });
