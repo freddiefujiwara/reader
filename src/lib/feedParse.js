@@ -241,6 +241,15 @@ export function toIsoDate(value) {
 
 // フィード XML をエントリ配列へ変換する。feed は guid の決定には使わず、
 // 呼び出し側がフィード文脈を持つための受け口 (サーバー版と形を揃える)。
+// フィード文書を最後まで受信できたか。手書きパーサは途中で切れた
+// 文書でも読めた分だけ返してしまうため、削除同期のような「載って
+// いない = 消えた」とみなす処理では、末尾の閉じタグまで届いたことを
+// 別途確認する。RSS は </rss>、Atom は </feed> で終わる。
+export function isCompleteFeedXml(xmlText) {
+  const tail = String(xmlText || '').trimEnd();
+  return tail.endsWith('</rss>') || tail.endsWith('</feed>');
+}
+
 export function parseFeedXml(xmlText, feed) {
   void feed;
   const root = parseXml(xmlText);

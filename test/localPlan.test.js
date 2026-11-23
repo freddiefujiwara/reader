@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   planUpserts,
   planLocalPrune,
+  planSyncDeletions,
   planOrphanArticles,
   articleRecordToView,
   planFeedRekey,
@@ -556,5 +557,32 @@ describe('付け替え状態のマップ操作', () => {
       .toEqual([transferKey('f2', 'https://e/2')]);
     expect(pruneTransferredState(transfer, new Set())).toEqual({});
     expect(pruneTransferredState(null, new Set(['f1']))).toEqual({});
+  });
+});
+
+describe('planSyncDeletions', () => {
+  const rec = (id, feed_id = 'cal') => ({ id, feed_id, title: id });
+
+  it('取得集合に無い、そのフィードの記事だけを消す対象にする', () => {
+    const articles = [rec('a'), rec('b'), rec('c'), rec('z', 'other')];
+    const plan = planSyncDeletions(articles, 'cal', ['a', 'c']);
+    expect(plan).toEqual({ deleteIds: ['b'], blocked: false, candidates: 1 });
+  });
+
+  it('取得集合が空なら同期しない (空は取得異常と区別できない)', () => {
+    const plan = planSyncDeletions([rec('a')], 'cal', []);
+    expect(plan).toEqual({ deleteIds: [], blocked: false, candidates: 0 });
+  });
+
+  it('削除候補が上限を超えたら blocked にして何も消さない', () => {
+    const articles = [rec('a'), rec('b'), rec('c'), rec('d')];
+    const plan = planSyncDeletions(articles, 'cal', ['a'], { maxDeletions: 2 });
+    expect(plan).toEqual({ deleteIds: [], blocked: true, candidates: 3 });
+  });
+
+  it('ID の無い要素や他フィードの記事は数えない', () => {
+    const articles = [null, { feed_id: 'cal' }, rec('a'), rec('b', 'other')];
+    const plan = planSyncDeletions(articles, 'cal', ['a']);
+    expect(plan).toEqual({ deleteIds: [], blocked: false, candidates: 0 });
   });
 });

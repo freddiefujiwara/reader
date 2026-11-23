@@ -1442,6 +1442,18 @@ button.ghost.danger {
   opacity: 0.55;
 }
 
+.field label.checkbox-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 400;
+}
+
+.field .checkbox-field input {
+  width: auto;
+  padding: 0;
+}
+
 .field select {
   width: 100%;
   font: inherit;

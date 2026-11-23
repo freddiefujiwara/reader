@@ -5,6 +5,7 @@ import {
   patchArticle,
   patchFeedCategory,
   patchFeedSortDirection,
+  patchFeedSyncDeletes,
   shouldClearCategorySelection,
   withUnreadCounts,
   sortArticlesDesc,
@@ -139,6 +140,20 @@ describe('patchFeedSortDirection', () => {
     expect(next[1].sortDirection).toBe('asc');
     expect(feeds[0].sortDirection).toBe('desc');
     expect(patchFeedSortDirection(feeds, 'b', 'weird')[1].sortDirection).toBe('desc');
+  });
+});
+
+describe('patchFeedSyncDeletes', () => {
+  it('対象フィードの削除同期だけを差し替え、値は真偽値に寄せる', () => {
+    const feeds = [
+      { id: 'a', syncDeletes: false },
+      { id: 'b', syncDeletes: true },
+    ];
+    const next = patchFeedSyncDeletes(feeds, 'a', true);
+    expect(next[0].syncDeletes).toBe(true);
+    expect(next[1].syncDeletes).toBe(true);
+    expect(feeds[0].syncDeletes).toBe(false);
+    expect(patchFeedSyncDeletes(feeds, 'b', 'on')[1].syncDeletes).toBe(false);
   });
 });
 

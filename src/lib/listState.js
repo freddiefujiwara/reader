@@ -125,6 +125,13 @@ export function patchFeedSortDirection(feeds, feedId, sortDirection) {
   return (Array.isArray(feeds) ? feeds : []).map((f) => (f && f.id === feedId ? { ...f, sortDirection: dir } : f));
 }
 
+// フィード1件の削除同期設定だけを差し替えた新しい配列を返す
+// (patchFeedSortDirection と同じ位置づけ)。値は真偽値に寄せて持つ。
+export function patchFeedSyncDeletes(feeds, feedId, syncDeletes) {
+  const on = syncDeletes === true;
+  return (Array.isArray(feeds) ? feeds : []).map((f) => (f && f.id === feedId ? { ...f, syncDeletes: on } : f));
+}
+
 // 1件の記事の一部フィールドを差し替えた新しい articles を返す
 // (元の配列は壊さない)。差し替えるのは既読 (isRead) とスター
 // (starred / starState) だけ。

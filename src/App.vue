@@ -49,6 +49,7 @@ import {
   patchArticle,
   patchFeedCategory,
   patchFeedSortDirection,
+  patchFeedSyncDeletes,
   planArticleJump,
   shouldClearCategorySelection,
   sortArticlesDesc,
@@ -780,7 +781,8 @@ async function refreshOnce() {
     for (const result of results) {
       if (!result.ok) continue;
       const { consumedKeys } = await ingestFeedArticles(
-        result.feed, result.entries, fetchedAt, hasTransfer ? transfer : null
+        result.feed, result.entries, fetchedAt, hasTransfer ? transfer : null,
+        { feedComplete: result.complete === true }
       );
       consumedKeys.forEach((key) => { delete transfer[key]; });
     }
@@ -2812,8 +2814,8 @@ async function backToTimeline() {
   }
 }
 
-// 管理で保存したフィードのジャンルと並び順を、タイムライン側の
-// 共有状態
+// 管理で保存したフィードのジャンルと並び順と削除同期を、
+// タイムライン側の共有状態
 // (メモリ内の state と IndexedDB のフィードキャッシュ) へ即座に
 // 反映する。タイムラインのジャンルチップ・絞り込みはこの共有状態
 // から作られるが、背景更新が状態を読み直すのは全フィード再取得の
@@ -2827,7 +2829,12 @@ async function reflectSavedFeedToTimeline(payload) {
   if (!id) return;
   const category = String(payload.category || '');
   const sortDirection = payload.sortDirection === 'asc' ? 'asc' : 'desc';
-  const patch = (feeds) => patchFeedSortDirection(patchFeedCategory(feeds, id, category), id, sortDirection);
+  const syncDeletes = payload.syncDeletes === true;
+  const patch = (feeds) => patchFeedSyncDeletes(
+    patchFeedSortDirection(patchFeedCategory(feeds, id, category), id, sortDirection),
+    id,
+    syncDeletes
+  );
   state.value = { ...state.value, feeds: patch(state.value.feeds) };
   const cached = await loadLocalFeeds();
   if (cached.some((f) => f.id === id)) {
@@ -3560,6 +3567,13 @@ onMounted(async () => {
                 <option value="asc">古い順（上が最古）</option>
               </select>
               <p class="field-note">フィード単体で開いたときの記事の並びです。予定のように日時順に読みたいフィードは「古い順」が向いています。</p>
+            </div>
+            <div v-if="!youtubeChannelIdFromUrl(form.url) && !youtubePlaylistIdFromUrl(form.url)" class="field">
+              <label class="checkbox-field">
+                <input id="feed-sync-deletes" v-model="form.syncDeletes" type="checkbox" />
+                フィードから消えた記事を端末からも消す（削除同期）
+              </label>
+              <p class="field-note">更新のたびに、フィードに載っていない記事を削除します。予定のように、配信から外れたら消えてよいフィード向けです。</p>
             </div>
             <p v-if="formError" class="error">{{ formError }}</p>
             <div class="form-actions">

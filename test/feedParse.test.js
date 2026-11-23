@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseFeedXml, parseFeedMeta, parseItunesDuration, decodeXmlEntities, stripTags, toIsoDate, summarize } from '../src/lib/feedParse.js';
+import { parseFeedXml, parseFeedMeta, parseItunesDuration, decodeXmlEntities, stripTags, toIsoDate, summarize, isCompleteFeedXml } from '../src/lib/feedParse.js';
 
 const RSS2 = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
@@ -478,5 +478,17 @@ describe('補助関数', () => {
   it('空の入力ではエントリゼロ', () => {
     expect(parseFeedXml('', { id: 'x' })).toEqual([]);
     expect(parseFeedXml('<html><body>not a feed</body></html>', { id: 'x' })).toEqual([]);
+  });
+});
+
+describe('isCompleteFeedXml', () => {
+  it('閉じタグまで届いた文書だけを完全とする', () => {
+    expect(isCompleteFeedXml('<rss><channel></channel></rss>')).toBe(true);
+    expect(isCompleteFeedXml('<rss><channel></channel></rss>\n')).toBe(true);
+    expect(isCompleteFeedXml('<feed></feed>')).toBe(true);
+    expect(isCompleteFeedXml('<rss><channel><item></item>')).toBe(false);
+    expect(isCompleteFeedXml('<rss><channel></channel>')).toBe(false);
+    expect(isCompleteFeedXml('')).toBe(false);
+    expect(isCompleteFeedXml(null)).toBe(false);
   });
 });
