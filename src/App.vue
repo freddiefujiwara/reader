@@ -54,6 +54,7 @@ import {
   patchFeedSortDirection,
   patchFeedSyncDeletes,
   patchFeedStarSettings,
+  patchFeedPastGuard,
   planArticleJump,
   shouldClearCategorySelection,
   sortArticlesDesc,
@@ -2822,8 +2823,8 @@ async function backToTimeline() {
   }
 }
 
-// 管理で保存したフィードのジャンルと並び順と削除同期を、
-// タイムライン側の共有状態
+// 管理で保存したフィードのジャンルと並び順と削除同期と
+// スター選定と過去分ガードを、タイムライン側の共有状態
 // (メモリ内の state と IndexedDB のフィードキャッシュ) へ即座に
 // 反映する。タイムラインのジャンルチップ・絞り込みはこの共有状態
 // から作られるが、背景更新が状態を読み直すのは全フィード再取得の
@@ -2838,14 +2839,18 @@ async function reflectSavedFeedToTimeline(payload) {
   const category = String(payload.category || '');
   const sortDirection = payload.sortDirection === 'asc' ? 'asc' : 'desc';
   const syncDeletes = payload.syncDeletes === true;
-  const patch = (feeds) => patchFeedStarSettings(
-    patchFeedSyncDeletes(
-      patchFeedSortDirection(patchFeedCategory(feeds, id, category), id, sortDirection),
+  const patch = (feeds) => patchFeedPastGuard(
+    patchFeedStarSettings(
+      patchFeedSyncDeletes(
+        patchFeedSortDirection(patchFeedCategory(feeds, id, category), id, sortDirection),
+        id,
+        syncDeletes
+      ),
       id,
-      syncDeletes
+      { starMode: payload.starMode, starCount: payload.starCount, starMinSec: payload.starMinSec }
     ),
     id,
-    { starMode: payload.starMode, starCount: payload.starCount, starMinSec: payload.starMinSec }
+    payload.pastGuard || null
   );
   state.value = { ...state.value, feeds: patch(state.value.feeds) };
   const cached = await loadLocalFeeds();
@@ -3621,6 +3626,16 @@ onMounted(async () => {
                 :placeholder="String(STAR_DEFAULT_MIN_SEC)"
               />
               <p class="field-note">これより短いと分かっている動画は本数に数えません。空欄は既定の{{ STAR_DEFAULT_MIN_SEC }}秒、0で除外なしになります。</p>
+            </div>
+            <div class="field">
+              <label for="feed-past-guard">過去分の扱い</label>
+              <select id="feed-past-guard" v-model="form.pastGuard">
+                <option value="">自動（種別ごとの既定）</option>
+                <option value="skip">取り込まない</option>
+                <option value="read">既読として取り込む</option>
+                <option value="off">未読として取り込む（ガードなし）</option>
+              </select>
+              <p class="field-note">公開から60日を過ぎた記事を、まだ端末に無いときにどう取り込むかです。自動の既定は、通常のフィードは「取り込まない」、YouTubeは「既読として取り込む」です。</p>
             </div>
             <p v-if="formError" class="error">{{ formError }}</p>
             <div class="form-actions">

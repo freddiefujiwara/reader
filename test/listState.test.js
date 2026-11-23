@@ -7,6 +7,7 @@ import {
   patchFeedSortDirection,
   patchFeedSyncDeletes,
   patchFeedStarSettings,
+  patchFeedPastGuard,
   shouldClearCategorySelection,
   withUnreadCounts,
   sortArticlesDesc,
@@ -171,6 +172,22 @@ describe('patchFeedStarSettings', () => {
     // ペイロードの未指定 (モード ''・数値なし) は null に寄せる。
     const cleared = patchFeedStarSettings(feeds, 'b', { starMode: '', starCount: undefined, starMinSec: undefined });
     expect(cleared[1]).toMatchObject({ starMode: null, starCount: null, starMinSec: null });
+  });
+});
+
+describe('patchFeedPastGuard', () => {
+  it('対象フィードの過去分ガードだけを差し替え、値は API の形に寄せる', () => {
+    const feeds = [
+      { id: 'a', pastGuard: null },
+      { id: 'b', pastGuard: 'read' },
+    ];
+    const next = patchFeedPastGuard(feeds, 'a', 'off');
+    expect(next[0].pastGuard).toBe('off');
+    expect(next[1].pastGuard).toBe('read');
+    expect(feeds[0].pastGuard).toBe(null);
+    // ペイロードの未指定 (空文字) は null に寄せる。
+    expect(patchFeedPastGuard(feeds, 'b', '')[1].pastGuard).toBe(null);
+    expect(patchFeedPastGuard(feeds, 'b', null)[1].pastGuard).toBe(null);
   });
 });
 

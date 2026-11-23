@@ -3,7 +3,7 @@
 // フィード ID は URL のハッシュ (サーバーが決める) になったため、
 // フォームが扱うのは URL とジャンル (サーバー側の category) と
 // 並び順 (sortDirection) と削除同期 (syncDeletes) とスター選定
-// (starMode / starCount / starMinSec) だけ。
+// (starMode / starCount / starMinSec) と過去分ガード (pastGuard) だけ。
 // タイトルはフィードからの自動取得のみで、人は入力しない。
 import { formatPublishedAt } from './format.js';
 import { parseFeedMeta } from './feedParse.js';
@@ -46,6 +46,16 @@ export function normalizeStarMinSec(value) {
   return i >= 0 && i <= 3600 ? i : null;
 }
 
+// 過去分ガードの正規化: 'skip' (取り込まない) / 'read' (既読として
+// 取り込む) / 'off' (未読として取り込む = ガードなし) か、未指定は ''。
+// サーバー側 (reader-gas の normalizePastGuard) と同じ規則。実効値の
+// 解決 (種別既定への fallback) は取り込み側 (localDb の
+// effectivePastGuard) が行う。
+export function normalizePastGuard(value) {
+  const v = String(value ?? '').trim().toLowerCase();
+  return v === 'skip' || v === 'read' || v === 'off' ? v : '';
+}
+
 // 本人のチャンネル (reader-gas の YT_AUDIO_ALWAYS_CHANNEL_ID と同じ)。
 // 種別既定では全件クラスになる。
 export const OWN_YOUTUBE_CHANNEL_ID = 'UCbiDZXbr391oT_vsRiqwPFg';
@@ -70,16 +80,16 @@ export function effectiveStarMode(feed) {
 }
 
 // 新規追加フォームの初期値。扱うのは URL とジャンルと並び順と
-// 削除同期とスター選定だけ。
+// 削除同期とスター選定と過去分ガードだけ。
 export function createFeedForm() {
   return {
     url: '', category: '', sortDirection: 'desc', syncDeletes: false,
-    starMode: '', starCount: '', starMinSec: '',
+    starMode: '', starCount: '', starMinSec: '', pastGuard: '',
   };
 }
 
 // 編集フォーム初期値。ID / タイトル / URL は表示専用 (変更できない)、
-// ジャンルと並び順と削除同期とスター選定だけが編集対象。
+// ジャンルと並び順と削除同期とスター選定と過去分ガードだけが編集対象。
 // 本数・下限は未指定を '' (入力欄は空 = 既定値) で表す。
 export function feedFormFromFeed(feed) {
   return {
@@ -92,6 +102,7 @@ export function feedFormFromFeed(feed) {
     starMode: normalizeStarMode(feed?.starMode),
     starCount: normalizeStarCount(feed?.starCount) ?? '',
     starMinSec: normalizeStarMinSec(feed?.starMinSec) ?? '',
+    pastGuard: normalizePastGuard(feed?.pastGuard),
   };
 }
 
@@ -254,6 +265,7 @@ export function resolveFeedAddForm(form, { xml = '' } = {}) {
     starMode: normalizeStarMode(form?.starMode),
     starCount: normalizeStarCount(form?.starCount),
     starMinSec: normalizeStarMinSec(form?.starMinSec),
+    pastGuard: normalizePastGuard(form?.pastGuard),
   };
   const title = parseFeedMeta(xml).title;
   if (!title) {
@@ -274,6 +286,9 @@ export function buildSaveFeedPayload(form, base = null) {
     starCount: normalizeStarCount(form?.starCount),
     starMinSec: normalizeStarMinSec(form?.starMinSec),
   };
+  // 過去分ガードも常に送る (未指定は '')。スター選定と同じく、
+  // クリアもこの形で伝わる。
+  const pastGuard = normalizePastGuard(form?.pastGuard);
   if (base) {
     return {
       id: base.id,
@@ -283,6 +298,7 @@ export function buildSaveFeedPayload(form, base = null) {
       sortDirection: normalizeSortDirection(form?.sortDirection),
       syncDeletes: normalizeSyncDeletes(form?.syncDeletes),
       ...star,
+      pastGuard,
     };
   }
   const url = String(form?.url || '').trim();
@@ -295,6 +311,7 @@ export function buildSaveFeedPayload(form, base = null) {
     sortDirection: normalizeSortDirection(form?.sortDirection),
     syncDeletes: normalizeSyncDeletes(form?.syncDeletes),
     ...star,
+    pastGuard,
   };
 }
 
@@ -314,7 +331,8 @@ export function isFeedFormDirty(original, form) {
     normalizeSyncDeletes(original.syncDeletes) !== normalizeSyncDeletes(form.syncDeletes) ||
     normalizeStarMode(original.starMode) !== normalizeStarMode(form.starMode) ||
     normalizeStarCount(original.starCount) !== normalizeStarCount(form.starCount) ||
-    normalizeStarMinSec(original.starMinSec) !== normalizeStarMinSec(form.starMinSec)
+    normalizeStarMinSec(original.starMinSec) !== normalizeStarMinSec(form.starMinSec) ||
+    normalizePastGuard(original.pastGuard) !== normalizePastGuard(form.pastGuard)
   );
 }
 

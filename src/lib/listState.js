@@ -143,6 +143,14 @@ export function patchFeedStarSettings(feeds, feedId, settings) {
   return (Array.isArray(feeds) ? feeds : []).map((f) => (f && f.id === feedId ? { ...f, starMode, starCount, starMinSec } : f));
 }
 
+// フィード1件の過去分ガード設定だけを差し替えた新しい配列を返す
+// (patchFeedStarSettings と同じ位置づけ)。値はサーバー応答の形
+// ('skip' / 'read' / 'off' か、未指定は null) に寄せて持つ。
+export function patchFeedPastGuard(feeds, feedId, pastGuard) {
+  const mode = pastGuard === 'skip' || pastGuard === 'read' || pastGuard === 'off' ? pastGuard : null;
+  return (Array.isArray(feeds) ? feeds : []).map((f) => (f && f.id === feedId ? { ...f, pastGuard: mode } : f));
+}
+
 // 1件の記事の一部フィールドを差し替えた新しい articles を返す
 // (元の配列は壊さない)。差し替えるのは既読 (isRead) とスター
 // (starred / starState) だけ。

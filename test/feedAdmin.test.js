@@ -18,6 +18,7 @@ import {
   isFeedFormDirty,
   normalizeSortDirection,
   normalizeStarMode,
+  normalizePastGuard,
   normalizeStarCount,
   normalizeStarMinSec,
   defaultStarModeForUrl,
@@ -33,7 +34,7 @@ import {
 
 describe('createFeedForm / feedFormFromFeed', () => {
   it('追加フォームは URL とジャンルと並び順 (既定は新しい順)', () => {
-    expect(createFeedForm()).toEqual({ url: '', category: '', sortDirection: 'desc', syncDeletes: false, starMode: '', starCount: '', starMinSec: '' });
+    expect(createFeedForm()).toEqual({ url: '', category: '', sortDirection: 'desc', syncDeletes: false, starMode: '', starCount: '', starMinSec: '', pastGuard: '' });
   });
   it('編集フォームは表示用の ID / タイトル / URL と、編集用のジャンルと並び順を持つ', () => {
     const feed = {
@@ -54,6 +55,7 @@ describe('createFeedForm / feedFormFromFeed', () => {
       starMode: '',
       starCount: '',
       starMinSec: '',
+      pastGuard: '',
     });
   });
   it('フィードの並び順が asc ならフォームにも asc が入る', () => {
@@ -65,7 +67,7 @@ describe('createFeedForm / feedFormFromFeed', () => {
     expect('enabled' in form).toBe(false);
   });
   it('null フィードでも空フォームになる', () => {
-    expect(feedFormFromFeed(null)).toEqual({ id: '', title: '', url: '', category: '', sortDirection: 'desc', syncDeletes: false, starMode: '', starCount: '', starMinSec: '' });
+    expect(feedFormFromFeed(null)).toEqual({ id: '', title: '', url: '', category: '', sortDirection: 'desc', syncDeletes: false, starMode: '', starCount: '', starMinSec: '', pastGuard: '' });
   });
 });
 
@@ -283,7 +285,7 @@ describe('resolveFeedAddForm (取得結果でタイトルを決める)', () => {
     const resolved = resolveFeedAddForm({ url: ` ${url} `, category: ' tech ' }, { xml: RSS });
     expect(resolved).toEqual({
       ok: true,
-      form: { url, category: 'tech', sortDirection: 'desc', syncDeletes: false, starMode: '', starCount: null, starMinSec: null, title: 'Rebuild' },
+      form: { url, category: 'tech', sortDirection: 'desc', syncDeletes: false, starMode: '', starCount: null, starMinSec: null, pastGuard: '', title: 'Rebuild' },
     });
     expect('id' in resolved.form).toBe(false);
   });
@@ -310,6 +312,7 @@ describe('buildSaveFeedPayload', () => {
       starMode: '',
       starCount: null,
       starMinSec: null,
+      pastGuard: '',
     });
     expect('id' in payload).toBe(false);
   });
@@ -328,6 +331,7 @@ describe('buildSaveFeedPayload', () => {
       starMode: '',
       starCount: null,
       starMinSec: null,
+      pastGuard: '',
     });
     expect('id' in payload).toBe(false);
   });
@@ -362,6 +366,7 @@ describe('buildSaveFeedPayload', () => {
       starMode: '',
       starCount: null,
       starMinSec: null,
+      pastGuard: '',
     });
   });
   it('並び順 asc は追加・編集どちらのペイロードにも入る', () => {
@@ -730,5 +735,32 @@ describe('スター選定 (starMode / starCount / starMinSec) のフォームと
     // 数値と文字列の揺れは変更に数えない。
     const withNum = { ...original, starCount: 5, starMinSec: 90 };
     expect(isFeedFormDirty(withNum, { ...withNum, starCount: '5', starMinSec: '90' })).toBe(false);
+  });
+});
+
+describe('過去分ガード (pastGuard) のフォームとペイロード', () => {
+  it('正規化: 3値か未指定', () => {
+    expect(normalizePastGuard(' READ ')).toBe('read');
+    expect(normalizePastGuard('skip')).toBe('skip');
+    expect(normalizePastGuard('off')).toBe('off');
+    expect(normalizePastGuard('junk')).toBe('');
+    expect(normalizePastGuard(null)).toBe('');
+  });
+  it('フィードの設定がフォームに入り、未指定は空になる', () => {
+    const form = feedFormFromFeed({ id: 'x', title: 'X', url: 'https://example.com/f', category: '', pastGuard: 'off' });
+    expect(form.pastGuard).toBe('off');
+    const bare = feedFormFromFeed({ id: 'x', title: 'X', url: 'https://example.com/f', category: '' });
+    expect(bare.pastGuard).toBe('');
+  });
+  it('ペイロードには常に入り、未指定は空文字', () => {
+    const base = { id: 'x', title: 'X', url: 'https://example.com/f', category: '' };
+    expect(buildSaveFeedPayload({ category: '', pastGuard: 'skip' }, base).pastGuard).toBe('skip');
+    expect(buildSaveFeedPayload({ category: '' }, base).pastGuard).toBe('');
+    expect(buildSaveFeedPayload({ title: 'T', url: 'https://example.com/f', category: '', pastGuard: 'read' }).pastGuard).toBe('read');
+  });
+  it('過去分ガードだけの変更でも編集フォームは変更ありになる', () => {
+    const original = { title: 'X', category: '', sortDirection: 'desc', syncDeletes: false, pastGuard: '' };
+    expect(isFeedFormDirty(original, { ...original, pastGuard: 'read' })).toBe(true);
+    expect(isFeedFormDirty(original, { ...original })).toBe(false);
   });
 });
