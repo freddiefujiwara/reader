@@ -132,6 +132,17 @@ export function patchFeedSyncDeletes(feeds, feedId, syncDeletes) {
   return (Array.isArray(feeds) ? feeds : []).map((f) => (f && f.id === feedId ? { ...f, syncDeletes: on } : f));
 }
 
+// フィード1件のスター選定設定だけを差し替えた新しい配列を返す
+// (patchFeedSyncDeletes と同じ位置づけ)。値はサーバー応答の形
+// (モードは文字列か null、数値は整数か null) に寄せて持つ。
+export function patchFeedStarSettings(feeds, feedId, settings) {
+  const s = settings || {};
+  const starMode = s.starMode === 'none' || s.starMode === 'recent' || s.starMode === 'all' ? s.starMode : null;
+  const starCount = Number.isInteger(s.starCount) ? s.starCount : null;
+  const starMinSec = Number.isInteger(s.starMinSec) ? s.starMinSec : null;
+  return (Array.isArray(feeds) ? feeds : []).map((f) => (f && f.id === feedId ? { ...f, starMode, starCount, starMinSec } : f));
+}
+
 // 1件の記事の一部フィールドを差し替えた新しい articles を返す
 // (元の配列は壊さない)。差し替えるのは既読 (isRead) とスター
 // (starred / starState) だけ。

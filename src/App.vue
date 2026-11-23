@@ -35,6 +35,9 @@ import {
   validateFeedUrl,
   youtubeChannelIdFromUrl,
   youtubePlaylistIdFromUrl,
+  effectiveStarMode,
+  STAR_DEFAULT_COUNT,
+  STAR_DEFAULT_MIN_SEC,
 } from './lib/feedAdmin.js';
 import { clearSession, loadSession, saveSession } from './lib/session.js';
 import {
@@ -50,6 +53,7 @@ import {
   patchFeedCategory,
   patchFeedSortDirection,
   patchFeedSyncDeletes,
+  patchFeedStarSettings,
   planArticleJump,
   shouldClearCategorySelection,
   sortArticlesDesc,
@@ -224,6 +228,10 @@ const formScroll = createScrollRestorer(window);
 // 追加フォームでは formBase が無いため常に「変更あり」になるが、
 // 非活性の条件は編集フォームだけに効かせる。
 const formDirty = computed(() => isFeedFormDirty(formBase.value, form.value));
+
+// フォームのスター選定の実効モード (選択値が無ければ種別既定)。
+// 本数・下限の入力欄は、実効モードが「新しい順」のときだけ出す。
+const formStarMode = computed(() => effectiveStarMode({ starMode: form.value.starMode, url: form.value.url }));
 
 const isReadonly = computed(() => session.value?.role === 'readonly');
 const isOwner = computed(() => session.value?.role === 'owner');
@@ -2830,10 +2838,14 @@ async function reflectSavedFeedToTimeline(payload) {
   const category = String(payload.category || '');
   const sortDirection = payload.sortDirection === 'asc' ? 'asc' : 'desc';
   const syncDeletes = payload.syncDeletes === true;
-  const patch = (feeds) => patchFeedSyncDeletes(
-    patchFeedSortDirection(patchFeedCategory(feeds, id, category), id, sortDirection),
+  const patch = (feeds) => patchFeedStarSettings(
+    patchFeedSyncDeletes(
+      patchFeedSortDirection(patchFeedCategory(feeds, id, category), id, sortDirection),
+      id,
+      syncDeletes
+    ),
     id,
-    syncDeletes
+    { starMode: payload.starMode, starCount: payload.starCount, starMinSec: payload.starMinSec }
   );
   state.value = { ...state.value, feeds: patch(state.value.feeds) };
   const cached = await loadLocalFeeds();
@@ -3574,6 +3586,41 @@ onMounted(async () => {
                 フィードから消えた記事を端末からも消す（削除同期）
               </label>
               <p class="field-note">更新のたびに、フィードに載っていない記事を削除します。予定のように、配信から外れたら消えてよいフィード向けです。</p>
+            </div>
+            <div v-if="youtubeChannelIdFromUrl(form.url) || youtubePlaylistIdFromUrl(form.url)" class="field">
+              <label for="feed-star-mode">スター選定（再生対象）</label>
+              <select id="feed-star-mode" v-model="form.starMode">
+                <option value="">自動（種別ごとの既定）</option>
+                <option value="none">なし</option>
+                <option value="recent">新しい順</option>
+                <option value="all">全件</option>
+              </select>
+              <p class="field-note">自動でスターが付く動画の選び方です。自動の既定は、チャンネルは新しい順{{ STAR_DEFAULT_COUNT }}本、プレイリストと本人のチャンネルは全件です。手動で付け外ししたスターは、この設定より優先されます。</p>
+            </div>
+            <div v-if="(youtubeChannelIdFromUrl(form.url) || youtubePlaylistIdFromUrl(form.url)) && formStarMode === 'recent'" class="field">
+              <label for="feed-star-count">本数（新しい順）</label>
+              <input
+                id="feed-star-count"
+                v-model="form.starCount"
+                type="number"
+                min="1"
+                max="100"
+                inputmode="numeric"
+                :placeholder="String(STAR_DEFAULT_COUNT)"
+              />
+            </div>
+            <div v-if="(youtubeChannelIdFromUrl(form.url) || youtubePlaylistIdFromUrl(form.url)) && formStarMode === 'recent'" class="field">
+              <label for="feed-star-min-sec">短尺除外の下限（秒）</label>
+              <input
+                id="feed-star-min-sec"
+                v-model="form.starMinSec"
+                type="number"
+                min="0"
+                max="3600"
+                inputmode="numeric"
+                :placeholder="String(STAR_DEFAULT_MIN_SEC)"
+              />
+              <p class="field-note">これより短いと分かっている動画は本数に数えません。空欄は既定の{{ STAR_DEFAULT_MIN_SEC }}秒、0で除外なしになります。</p>
             </div>
             <p v-if="formError" class="error">{{ formError }}</p>
             <div class="form-actions">

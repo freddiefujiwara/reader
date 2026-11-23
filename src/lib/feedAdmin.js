@@ -2,7 +2,8 @@
 // Vue に依存しない関数だけにし、単体テストで振る舞いを固定する。
 // フィード ID は URL のハッシュ (サーバーが決める) になったため、
 // フォームが扱うのは URL とジャンル (サーバー側の category) と
-// 並び順 (sortDirection) と削除同期 (syncDeletes) だけ。
+// 並び順 (sortDirection) と削除同期 (syncDeletes) とスター選定
+// (starMode / starCount / starMinSec) だけ。
 // タイトルはフィードからの自動取得のみで、人は入力しない。
 import { formatPublishedAt } from './format.js';
 import { parseFeedMeta } from './feedParse.js';
@@ -19,14 +20,67 @@ export function normalizeSyncDeletes(value) {
   return value === true || String(value || '').trim().toLowerCase() === 'on';
 }
 
+// スター選定モードの正規化: 'none' / 'recent' / 'all' か、未指定は ''。
+// サーバー側 (reader-gas の normalizeStarMode) と同じ規則。
+export function normalizeStarMode(value) {
+  const v = String(value ?? '').trim().toLowerCase();
+  return v === 'none' || v === 'recent' || v === 'all' ? v : '';
+}
+
+// スター選定の本数の正規化: 1〜100 の整数か、未指定は null。
+export function normalizeStarCount(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  const i = Math.floor(n);
+  return i >= 1 && i <= 100 ? i : null;
+}
+
+// スター選定の短尺除外の下限 (秒) の正規化: 0〜3600 の整数か、
+// 未指定は null。0 は「除外しない」の明示。
+export function normalizeStarMinSec(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  const i = Math.floor(n);
+  return i >= 0 && i <= 3600 ? i : null;
+}
+
+// 本人のチャンネル (reader-gas の YT_AUDIO_ALWAYS_CHANNEL_ID と同じ)。
+// 種別既定では全件クラスになる。
+export const OWN_YOUTUBE_CHANNEL_ID = 'UCbiDZXbr391oT_vsRiqwPFg';
+
+// スター選定の既定値 (reader-gas の YT_AUDIO_TRIGGER_PER_FEED /
+// YT_AUDIO_TRIGGER_MIN_DURATION_SEC と同じ)。
+export const STAR_DEFAULT_COUNT = 3;
+export const STAR_DEFAULT_MIN_SEC = 90;
+
+// 種別ごとの既定モード: プレイリストと本人のチャンネルは全件、
+// 通常チャンネルは新しい順、それ以外はなし。
+export function defaultStarModeForUrl(url) {
+  if (youtubePlaylistIdFromUrl(url)) return 'all';
+  const channelId = youtubeChannelIdFromUrl(url);
+  if (!channelId) return 'none';
+  return channelId === OWN_YOUTUBE_CHANNEL_ID ? 'all' : 'recent';
+}
+
+// 実効モード: 保存値があればそれ、無ければ種別既定。
+export function effectiveStarMode(feed) {
+  return normalizeStarMode(feed?.starMode) || defaultStarModeForUrl(feed?.url);
+}
+
 // 新規追加フォームの初期値。扱うのは URL とジャンルと並び順と
-// 削除同期だけ。
+// 削除同期とスター選定だけ。
 export function createFeedForm() {
-  return { url: '', category: '', sortDirection: 'desc', syncDeletes: false };
+  return {
+    url: '', category: '', sortDirection: 'desc', syncDeletes: false,
+    starMode: '', starCount: '', starMinSec: '',
+  };
 }
 
 // 編集フォーム初期値。ID / タイトル / URL は表示専用 (変更できない)、
-// ジャンルと並び順と削除同期だけが編集対象。
+// ジャンルと並び順と削除同期とスター選定だけが編集対象。
+// 本数・下限は未指定を '' (入力欄は空 = 既定値) で表す。
 export function feedFormFromFeed(feed) {
   return {
     id: feed?.id || '',
@@ -35,6 +89,9 @@ export function feedFormFromFeed(feed) {
     category: feed?.category || '',
     sortDirection: normalizeSortDirection(feed?.sortDirection),
     syncDeletes: normalizeSyncDeletes(feed?.syncDeletes),
+    starMode: normalizeStarMode(feed?.starMode),
+    starCount: normalizeStarCount(feed?.starCount) ?? '',
+    starMinSec: normalizeStarMinSec(feed?.starMinSec) ?? '',
   };
 }
 
@@ -194,6 +251,9 @@ export function resolveFeedAddForm(form, { xml = '' } = {}) {
     category: String(form?.category || '').trim(),
     sortDirection: normalizeSortDirection(form?.sortDirection),
     syncDeletes: normalizeSyncDeletes(form?.syncDeletes),
+    starMode: normalizeStarMode(form?.starMode),
+    starCount: normalizeStarCount(form?.starCount),
+    starMinSec: normalizeStarMinSec(form?.starMinSec),
   };
   const title = parseFeedMeta(xml).title;
   if (!title) {
@@ -207,6 +267,13 @@ export function resolveFeedAddForm(form, { xml = '' } = {}) {
 // 編集 (base あり): ID / タイトル / URL は元のフィードのまま、
 // ジャンルと並び順と削除同期だけをフォームから反映する。
 export function buildSaveFeedPayload(form, base = null) {
+  // スター選定は常に全項目を送る (未指定はモード ''・数値 null)。
+  // サーバーは「キーがあれば使う」ため、クリアもこの形で伝わる。
+  const star = {
+    starMode: normalizeStarMode(form?.starMode),
+    starCount: normalizeStarCount(form?.starCount),
+    starMinSec: normalizeStarMinSec(form?.starMinSec),
+  };
   if (base) {
     return {
       id: base.id,
@@ -215,6 +282,7 @@ export function buildSaveFeedPayload(form, base = null) {
       category: String(form?.category || '').trim(),
       sortDirection: normalizeSortDirection(form?.sortDirection),
       syncDeletes: normalizeSyncDeletes(form?.syncDeletes),
+      ...star,
     };
   }
   const url = String(form?.url || '').trim();
@@ -226,6 +294,7 @@ export function buildSaveFeedPayload(form, base = null) {
     category: String(form?.category || '').trim(),
     sortDirection: normalizeSortDirection(form?.sortDirection),
     syncDeletes: normalizeSyncDeletes(form?.syncDeletes),
+    ...star,
   };
 }
 
@@ -242,7 +311,10 @@ export function isFeedFormDirty(original, form) {
     norm(original.title) !== norm(form.title) ||
     norm(original.category) !== norm(form.category) ||
     normalizeSortDirection(original.sortDirection) !== normalizeSortDirection(form.sortDirection) ||
-    normalizeSyncDeletes(original.syncDeletes) !== normalizeSyncDeletes(form.syncDeletes)
+    normalizeSyncDeletes(original.syncDeletes) !== normalizeSyncDeletes(form.syncDeletes) ||
+    normalizeStarMode(original.starMode) !== normalizeStarMode(form.starMode) ||
+    normalizeStarCount(original.starCount) !== normalizeStarCount(form.starCount) ||
+    normalizeStarMinSec(original.starMinSec) !== normalizeStarMinSec(form.starMinSec)
   );
 }
 

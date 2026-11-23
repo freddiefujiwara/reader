@@ -794,6 +794,9 @@ describe('管理画面の YouTube チャンネル URL 追加', () => {
       category: '',
       sortDirection: 'desc',
       syncDeletes: false,
+      starMode: '',
+      starCount: null,
+      starMinSec: null,
     });
     // 保存後はフォームが閉じ、サーバーが返した解決済みフィードが一覧に出る。
     expect(el.querySelector('.feed-form'), '保存後はフォームが閉じる').toBeNull();
@@ -897,6 +900,9 @@ describe('管理画面の YouTube プレイリストフィード', () => {
       category: '',
       sortDirection: 'desc',
       syncDeletes: false,
+      starMode: '',
+      starCount: null,
+      starMinSec: null,
     });
     expect(el.querySelector('.feed-form'), '保存後はフォームが閉じる').toBeNull();
     const titles = [...el.querySelectorAll('.feed-card .feed-name')].map((n) => n.textContent.trim());
@@ -935,6 +941,45 @@ describe('管理画面の YouTube プレイリストフィード', () => {
       url: PLAYLIST_FEED.url,
       category: 'お気に入り',
     });
+  });
+
+  it('プレイリストの編集ではスター選定が出て、既定 (全件) では本数欄は出ない', async () => {
+    await mountAdminWithPlaylist();
+    const form = await openEdit(WITH_PLAYLIST.length - 1);
+    expect(errors).toEqual([]);
+    expect(form.querySelector('#feed-star-mode'), 'スター選定のセレクトが出る').toBeTruthy();
+    expect(form.querySelector('#feed-star-mode').value).toBe('');
+    expect(form.querySelector('#feed-star-count'), '全件では本数欄は出ない').toBeNull();
+    expect(form.querySelector('#feed-sync-deletes'), 'YouTube系では削除同期は出ない').toBeNull();
+  });
+
+  it('スター選定を新しい順に変えると本数・下限欄が出て、保存ペイロードに乗る', async () => {
+    await mountAdminWithPlaylist();
+    const form = await openEdit(WITH_PLAYLIST.length - 1);
+    const select = form.querySelector('#feed-star-mode');
+    select.value = 'recent';
+    select.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await flush();
+    const count = form.querySelector('#feed-star-count');
+    expect(count, '本数欄が出る').toBeTruthy();
+    count.value = '5';
+    count.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await flush();
+    form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+    await flush();
+    await flush();
+    expect(errors).toEqual([]);
+    expect(saveFeed).toHaveBeenCalledTimes(1);
+    const [, payload] = saveFeed.mock.calls[0];
+    expect(payload).toMatchObject({ id: PLAYLIST_FEED.id, starMode: 'recent', starCount: 5, starMinSec: null });
+  });
+
+  it('通常フィードの編集ではスター選定は出ない', async () => {
+    await mountAdmin();
+    const form = await openEdit(0);
+    expect(errors).toEqual([]);
+    expect(form.querySelector('#feed-star-mode')).toBeNull();
+    expect(form.querySelector('#feed-sync-deletes'), '通常フィードでは削除同期が出る').toBeTruthy();
   });
 });
 
