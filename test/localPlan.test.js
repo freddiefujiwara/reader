@@ -130,6 +130,45 @@ describe('planUpserts', () => {
     const records = await planUpserts({}, [entry('', { link: 'https://example.com/only-link' })], FEED, FETCHED);
     expect(records[0].id).toBe(await articleId('nhk', 'https://example.com/only-link'));
   });
+  it('過去分 (公開が保持期間の60日より古い) の新規エントリはレコードを作らない', async () => {
+    // FETCHED = 2026-11-14。61日前 = 2026-09-14 は過去分、59日前は対象内。
+    const old = entry('old1', { publishedAt: '2026-09-14T01:00:00.000Z' });
+    const recent = entry('new1', { publishedAt: '2026-09-16T01:00:00.000Z' });
+    const records = await planUpserts({}, [old, recent], FEED, FETCHED);
+    expect(records.map((r) => r.title)).toEqual(['title-new1']);
+  });
+  it('ちょうど60日ちょうどのエントリは作る (掃除側の「60日を過ぎたら」と対称)', async () => {
+    const boundary = entry('b1', { publishedAt: '2026-09-15T01:00:00.000Z' });
+    const records = await planUpserts({}, [boundary], FEED, FETCHED);
+    expect(records.length).toBe(1);
+  });
+  it('公開日時が空・エントリに無い場合は過去分とみなさず作る', async () => {
+    const noDate = entry('n1', { publishedAt: '' });
+    const badDate = entry('n2', { publishedAt: 'not-a-date' });
+    const records = await planUpserts({}, [noDate, badDate], FEED, FETCHED);
+    expect(records.length).toBe(2);
+  });
+  it('過去分でも既存レコードは更新され、既読状態を保つ', async () => {
+    const id = await articleId('nhk', 'old1');
+    const existing = {
+      [id]: {
+        id, feed_id: 'nhk', title: 'old', link: 'https://example.com/old1',
+        published_at: '2020-01-01T00:00:00.000Z', fetched_at: '2026-11-05T00:00:00.000Z',
+        summary: 'old summary', author: '', is_read: true, read_at: '2026-11-06T00:00:00.000Z',
+      },
+    };
+    const records = await planUpserts(existing, [entry('old1', { publishedAt: '2020-01-01T00:00:00.000Z', title: 'new title' })], FEED, FETCHED);
+    expect(records.length).toBe(1);
+    expect(records[0].is_read).toBe(true);
+    expect(records[0].title).toBe('new title');
+  });
+  it('YouTube チャンネル／プレイリストのフィードでは過去分も作る', async () => {
+    const old = entry('v1', { publishedAt: '2020-01-01T00:00:00.000Z' });
+    const channelFeed = { id: 'yt1', title: 'ch', url: 'https://www.youtube.com/channel/UC0123456789ab' };
+    const playlistFeed = { id: 'yt2', title: 'pl', url: 'https://www.youtube.com/playlist?list=PL0123456789ab' };
+    await expect(planUpserts({}, [old], channelFeed, FETCHED)).resolves.toHaveLength(1);
+    await expect(planUpserts({}, [old], playlistFeed, FETCHED)).resolves.toHaveLength(1);
+  });
 });
 
 describe('planUpserts の音声URL保持 (stale)', () => {
