@@ -81,6 +81,13 @@ export function visibleArticles(state, stickyReadIds) {
     const sticky = stickyReadIds instanceof Set ? stickyReadIds : new Set(stickyReadIds || []);
     out = out.filter((a) => !a.isRead || sticky.has(a.id));
   }
+  // フィード単体表示で、そのフィードの並び順が古い順 (asc) のときだけ
+  // 昇順に並べ替える (予定など日時順に読みたいフィード用)。全件・
+  // カテゴリ表示は従来どおり新しい順のまま (state.articles の順)。
+  if (state.feedId) {
+    const feed = (state.feeds || []).find((f) => f && f.id === state.feedId);
+    if (feed && feed.sortDirection === 'asc') out = sortArticlesAsc(out);
+  }
   return out;
 }
 
@@ -89,6 +96,14 @@ export function visibleArticles(state, stickyReadIds) {
 // 即座に反映するために使う。
 export function patchFeedCategory(feeds, feedId, category) {
   return (Array.isArray(feeds) ? feeds : []).map((f) => (f && f.id === feedId ? { ...f, category } : f));
+}
+
+// フィード1件の並び順だけを差し替えた新しい配列を返す
+// (patchFeedCategory と同じ位置づけ)。値は 'asc' か、それ以外は
+// 既定の 'desc' に寄せて持つ。
+export function patchFeedSortDirection(feeds, feedId, sortDirection) {
+  const dir = sortDirection === 'asc' ? 'asc' : 'desc';
+  return (Array.isArray(feeds) ? feeds : []).map((f) => (f && f.id === feedId ? { ...f, sortDirection: dir } : f));
 }
 
 // 1件の記事の一部フィールドを差し替えた新しい articles を返す
@@ -199,6 +214,22 @@ export function sortArticlesDesc(articles) {
     const fa = timeMs(a?.fetchedAt);
     const fb = timeMs(b?.fetchedAt);
     if (fb !== fa) return fb - fa;
+    const ia = idKey(a);
+    const ib = idKey(b);
+    return ia < ib ? -1 : ia > ib ? 1 : 0;
+  });
+}
+
+// 古い順 (sortArticlesDesc の逆) に並べ替えた配列を返す。並び順が
+// 古い順 (asc) のフィードの単体表示でだけ使う。
+export function sortArticlesAsc(articles) {
+  return (Array.isArray(articles) ? articles : []).slice().sort((a, b) => {
+    const ta = timeMs(a?.publishedAt || a?.fetchedAt);
+    const tb = timeMs(b?.publishedAt || b?.fetchedAt);
+    if (ta !== tb) return ta - tb;
+    const fa = timeMs(a?.fetchedAt);
+    const fb = timeMs(b?.fetchedAt);
+    if (fa !== fb) return fa - fb;
     const ia = idKey(a);
     const ib = idKey(b);
     return ia < ib ? -1 : ia > ib ? 1 : 0;

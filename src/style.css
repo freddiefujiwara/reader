@@ -1410,6 +1410,18 @@ button.ghost.danger {
   opacity: 0.55;
 }
 
+.field select {
+  width: 100%;
+  font: inherit;
+  /* .field input と同じく、iOS Safari の自動拡大を避けるため16pxに固定する */
+  font-size: 16px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+
 .field-label {
   display: block;
   font-weight: 700;

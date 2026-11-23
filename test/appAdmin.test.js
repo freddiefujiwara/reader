@@ -792,6 +792,7 @@ describe('管理画面の YouTube チャンネル URL 追加', () => {
       title: '',
       url: 'https://www.youtube.com/@rakutentech',
       category: '',
+      sortDirection: 'desc',
     });
     // 保存後はフォームが閉じ、サーバーが返した解決済みフィードが一覧に出る。
     expect(el.querySelector('.feed-form'), '保存後はフォームが閉じる').toBeNull();
@@ -893,6 +894,7 @@ describe('管理画面の YouTube プレイリストフィード', () => {
       title: '',
       url: 'https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjX9efdf',
       category: '',
+      sortDirection: 'desc',
     });
     expect(el.querySelector('.feed-form'), '保存後はフォームが閉じる').toBeNull();
     const titles = [...el.querySelectorAll('.feed-card .feed-name')].map((n) => n.textContent.trim());
