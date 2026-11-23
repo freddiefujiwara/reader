@@ -570,6 +570,20 @@ function goHome() {
   scrollToTop();
 }
 
+// 固定表示のナビと絞り込みバーの下端 (ビューポート座標) ＋余白。
+// バーの高さは画面幅やチップの折り返しで変わるため実測する。
+// バーが無ければナビの高さ＋余白で見積もる。
+function stickyBarOffset() {
+  const bar = document.querySelector('.filter-bar');
+  return bar ? bar.getBoundingClientRect().bottom + 8 : 76;
+}
+
+// カードの上端が固定バーの下にちょうど出る位置へスクロールする。
+function scrollCardIntoView(el, smooth) {
+  const top = el.getBoundingClientRect().top + window.scrollY - stickyBarOffset();
+  window.scrollTo({ top: Math.max(0, top), behavior: smooth ? 'smooth' : 'auto' });
+}
+
 // プレイヤーのタイトル押下: 再生中の記事のカードへ移動する。表示を
 // その記事のフィード単体 (全件) へ切り替え、必要なら表示上限を
 // 広げてから、カードが見える位置までスクロールして短くハイライト
@@ -584,11 +598,19 @@ async function jumpToCurrentArticle() {
   await nextTick();
   const el = document.querySelector(`[data-article-id="${ep.id}"]`);
   if (!el) return;
-  if (typeof el.scrollIntoView === 'function') {
-    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }
-  el.classList.add('is-flash');
-  setTimeout(() => el.classList.remove('is-flash'), 2400);
+  scrollCardIntoView(el, true);
+  // スクロールが落ち着く頃、要約の再計測などで生じた位置のずれを
+  // 1回だけ直し、収まった位置でハイライトする。大きくずれていたら
+  // (本人が自分でスクロールした等) 直さない。
+  setTimeout(() => {
+    if (!el.isConnected) return;
+    const drift = el.getBoundingClientRect().top - stickyBarOffset();
+    if (Math.abs(drift) > 4 && Math.abs(drift) <= 120) {
+      window.scrollTo({ top: Math.max(0, window.scrollY + drift), behavior: 'auto' });
+    }
+    el.classList.add('is-flash');
+    setTimeout(() => el.classList.remove('is-flash'), 2400);
+  }, 600);
 }
 
 function onBrandClick(event) {
