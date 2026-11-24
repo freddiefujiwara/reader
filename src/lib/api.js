@@ -110,14 +110,6 @@ export function logEvents(sessionToken, events, opts) {
   return postJson({ action: 'log_events', sessionToken, events }, { retries: 0, ...opts });
 }
 
-// 視聴の週次集計 (オーナーセッションのみ)。weekly は確定済みの週の
-// 集計、current は今週分 (未集計) をその場で集計したもので、どちらも
-// {week, feed_id, feed_title, views, opens, plays, seconds} の配列。
-// -> { ok, weekly, currentWeek, current }
-export function getStats(sessionToken, opts) {
-  return postJson({ action: 'stats', sessionToken }, opts);
-}
-
 // 共有リンク (マジックリンク) の発行 (オーナーセッションのみ)。
 // リンクは30日有効で、発行するとそれまでのリンクは無効になる。
 // -> { ok, token, expiresAt } (token は平文。この応答でしか得られない)

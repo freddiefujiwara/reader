@@ -6,7 +6,6 @@ import {
   exchangeSession,
   exchangeShare,
   getShareLinkStatus,
-  getStats,
   issueShareLink,
   listArticles,
   listFeeds,
@@ -204,11 +203,6 @@ let copiedArticleTimer = null;
 onUnmounted(() => {
   if (copiedArticleTimer) clearTimeout(copiedArticleTimer);
 });
-// 今週の視聴 (管理画面の共有リンクの下)。週単位の集計なので、
-// 取得は管理画面を開いたときの1回だけにする。
-const statsData = ref(null); // null=未取得 / { currentWeek, current }
-const statsLoading = ref(false);
-const statsError = ref('');
 const formMode = ref(''); // '' | 'add' | 'edit'
 const formEl = ref(null);
 const form = ref(createFeedForm());
@@ -2721,35 +2715,6 @@ async function onRevokeShare() {
   }
 }
 
-/* ---- 今週の視聴 (管理画面の共有リンクの下) ---- */
-
-async function loadStats() {
-  if (!session.value) return;
-  statsLoading.value = true;
-  try {
-    const payload = await getStats(session.value.token);
-    statsData.value = {
-      currentWeek: payload.currentWeek || '',
-      current: Array.isArray(payload.current) ? payload.current : [],
-    };
-    statsError.value = '';
-  } catch (e) {
-    if (!expireIfUnauthorized(e)) statsError.value = `視聴集計を取得できませんでした（${e.message}）。`;
-  } finally {
-    statsLoading.value = false;
-  }
-}
-
-// 今週分のうち再生があったフィードを、再生時間の長い順に最大5件。
-const currentWeekListening = computed(() => {
-  if (!statsData.value) return [];
-  return statsData.value.current
-    .filter((s) => (s.plays || 0) > 0)
-    .slice()
-    .sort((a, b) => (b.seconds || 0) - (a.seconds || 0) || (b.plays || 0) - (a.plays || 0))
-    .slice(0, 5);
-});
-
 // クリップボードへコピーし、成否を返す。コピーできない環境では
 // false になり、呼び出し側はフィードバックを出さない。
 async function copyTextToClipboard(text) {
@@ -2797,7 +2762,6 @@ function openFeedAdmin() {
   shareConfirm.value = '';
   loadFeeds();
   loadShareStatus();
-  loadStats();
 }
 
 async function backToTimeline() {
@@ -3797,23 +3761,6 @@ onMounted(async () => {
             <p v-if="shareError" class="error">{{ shareError }}</p>
           </section>
 
-          <!-- 今週の視聴 (視聴ログの週次集計のうち今週分)。
-               週が変わるまで内容は変わらないため、取得は管理画面を
-               開いたときの1回だけ。 -->
-          <section class="panel usage-stats-panel">
-            <h2 class="feed-form-title">今週の視聴</h2>
-            <p v-if="statsLoading && !statsData" class="hint"><span class="spinner"></span>読み込み中…</p>
-            <template v-else-if="statsData">
-              <ul v-if="currentWeekListening.length" class="usage-stats-list">
-                <li v-for="s in currentWeekListening" :key="s.feed_id">
-                  <span class="usage-stats-feed">{{ s.feed_title || s.feed_id }}</span>
-                  <span class="usage-stats-meta">{{ formatTime(s.seconds) }}・{{ s.plays }}回</span>
-                </li>
-              </ul>
-              <p v-else class="hint">今週の再生はまだありません。</p>
-            </template>
-            <p v-if="statsError" class="error">{{ statsError }}</p>
-          </section>
         </template>
       </template>
 

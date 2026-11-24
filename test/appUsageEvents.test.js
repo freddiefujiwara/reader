@@ -1,5 +1,5 @@
-// 視聴ログ (feed_view / article_open / play / scroll) の送信と、
-// 管理画面の「今週の視聴」表示のコンポーネントテスト。
+// 視聴ログ (feed_view / article_open / play / scroll) の送信の
+// コンポーネントテスト。
 // 固定したい振る舞い:
 // - feed_view はフィード選択の変更時だけ送り、初期表示・背景更新・
 //   ジャンル変更・選択解除では送らない。
@@ -53,7 +53,6 @@ vi.mock('../src/lib/api.js', () => ({
   issueShareLink: vi.fn(async () => ({ ok: true, token: 'dummy-share-token', expiresAt: '2026-12-16T05:47:00.000Z' })),
   revokeShareLink: vi.fn(async () => ({ ok: true })),
   logEvents: vi.fn(async () => ({ ok: true, saved: 0 })),
-  getStats: vi.fn(async () => ({ ok: true, weekly: [], currentWeek: '', current: [] })),
   reorderFeeds: vi.fn(async () => ({ ok: true })),
   saveFeed: vi.fn(async () => ({ ok: true })),
 }));
@@ -70,7 +69,7 @@ vi.mock('../src/config.js', () => ({
 }));
 
 import App from '../src/App.vue';
-import { logEvents, getStats } from '../src/lib/api.js';
+import { logEvents } from '../src/lib/api.js';
 import { saveLocalFeeds, putLocalArticles } from '../src/lib/localDb.js';
 
 const rec = (id, feedId, title, published_at, audio_url = '') => ({
@@ -198,7 +197,6 @@ beforeEach(() => {
   nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => fakeNow);
   vi.stubGlobal('Audio', FakeAudio);
   vi.clearAllMocks();
-  getStats.mockImplementation(async () => ({ ok: true, weekly: [], currentWeek: '2026-11-16', current: [] }));
 });
 
 afterEach(async () => {
@@ -419,53 +417,6 @@ describe('読み取り専用では送らない', () => {
     window.dispatchEvent(new window.Event('scroll'));
     await settleApp();
     expect(logEvents).not.toHaveBeenCalled();
-    expect(errors).toEqual([]);
-  });
-});
-
-describe('今週の視聴の表示', () => {
-  async function openAdmin() {
-    findButton(el, '管理').click();
-    await flushUntil(() => !!el.querySelector('.usage-stats-panel'));
-    return el.querySelector('.usage-stats-panel');
-  }
-
-  it('管理画面を開くと stats を1回取得し、再生時間の長い順に表示する', async () => {
-    getStats.mockImplementation(async () => ({
-      ok: true,
-      weekly: [],
-      currentWeek: '2026-11-16',
-      current: [
-        { week: '2026-11-16', feed_id: FEED_B.id, feed_title: 'X freddie', views: 3, opens: 1, plays: 2, seconds: 300 },
-        { week: '2026-11-16', feed_id: FEED_A.id, feed_title: 'Rebuild', views: 1, opens: 4, plays: 5, seconds: 3661 },
-        { week: '2026-11-16', feed_id: 'views-only', feed_title: '見ただけ', views: 9, opens: 9, plays: 0, seconds: 0 },
-      ],
-    }));
-    await seedAndMount();
-    const panel = await openAdmin();
-    expect(getStats).toHaveBeenCalledTimes(1);
-    expect(getStats).toHaveBeenCalledWith('tok');
-    const rows = [...panel.querySelectorAll('.usage-stats-list li')];
-    // 再生があったフィードだけを、再生時間の長い順に出す。
-    expect(rows.map((li) => li.querySelector('.usage-stats-feed').textContent)).toEqual(['Rebuild', 'X freddie']);
-    expect(rows[0].querySelector('.usage-stats-meta').textContent).toBe('1:01:01・5回');
-    expect(rows[1].querySelector('.usage-stats-meta').textContent).toBe('5:00・2回');
-    expect(errors).toEqual([]);
-  });
-
-  it('今週の再生が無ければ、その旨が出る', async () => {
-    await seedAndMount();
-    const panel = await openAdmin();
-    expect(panel.textContent).toContain('今週の再生はまだありません。');
-    expect(errors).toEqual([]);
-  });
-
-  it('取得に失敗するとエラーが出る', async () => {
-    getStats.mockImplementation(async () => { throw new Error('boom'); });
-    await seedAndMount();
-    const panel = await openAdmin();
-    await flushUntil(() => panel.textContent.includes('視聴集計を取得できませんでした'));
-    expect(panel.textContent).toContain('視聴集計を取得できませんでした（boom）。');
     expect(errors).toEqual([]);
   });
 });

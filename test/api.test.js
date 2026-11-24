@@ -13,7 +13,6 @@ import {
   getShareLinkStatus,
   revokeShareLink,
   logEvents,
-  getStats,
 } from '../src/lib/api.js';
 
 const API = 'https://example.invalid/exec';
@@ -213,13 +212,5 @@ describe('視聴ログの action', () => {
     const fetcher = vi.fn(async () => { throw new TypeError('Load failed'); });
     await expect(logEvents('tok', [], { fetcher, apiUrl: API, retryDelayMs: 0 })).rejects.toThrow('Load failed');
     expect(fetcher).toHaveBeenCalledTimes(1);
-  });
-  it('getStats は stats を送り、weekly と current を返す', async () => {
-    const current = [{ week: '2026-11-16', feed_id: 'nhk', feed_title: 'NHK', views: 1, opens: 2, plays: 3, seconds: 600 }];
-    const fetcher = okFetcher({ ok: true, weekly: [], currentWeek: '2026-11-16', current });
-    const data = await getStats('tok', { fetcher, apiUrl: API });
-    expect(data.currentWeek).toBe('2026-11-16');
-    expect(data.current).toEqual(current);
-    expect(lastBody(fetcher)).toEqual({ action: 'stats', sessionToken: 'tok' });
   });
 });
