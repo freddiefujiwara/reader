@@ -85,6 +85,27 @@ describe('fetchOneFeed / fetchAllFeeds', () => {
   });
 });
 
+describe('パースの合間にメインスレッドへ制御を返す', () => {
+  it('即時に返る取得でも、fetchAllFeeds の完了前にタイマーが処理される', async () => {
+    // パースがマイクロタスクの連鎖だけで進むと、背景更新の間は
+    // タップ等のタスクが一切処理されず「既読ボタンの効きが悪い」
+    // 体感になる。パースごとにメインスレッドへ制御を返すことで、
+    // 先に登録した 0ms タイマーが完了前に処理されることを固定する。
+    let resolved = false;
+    let timerFiredBeforeResolve = false;
+    setTimeout(() => { if (!resolved) timerFiredBeforeResolve = true; }, 0);
+    const feeds = [0, 1, 2].map((i) => ({
+      id: `y${i}`,
+      url: `https://example.com/y${i}.xml`,
+      fetchUrl: `https://example.com/y${i}.xml`,
+    }));
+    const results = await fetchAllFeeds(feeds, { fetcher: okFetcher(), retryDelayMs: 0 });
+    resolved = true;
+    expect(results.map((r) => r.ok)).toEqual([true, true, true]);
+    expect(timerFiredBeforeResolve).toBe(true);
+  });
+});
+
 describe('fetchAllFeeds の同時実行数', () => {
   it('同時実行は6件までに抑え、完了が前後しても結果は入力順で返る', async () => {
     const feeds = Array.from({ length: 10 }, (_, i) => ({
