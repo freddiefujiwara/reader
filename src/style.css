@@ -1304,6 +1304,13 @@ button.ghost.active {
   margin: 4px 0 0;
 }
 
+/* フィードの利用状況 (削除候補の判断材料)。状態行と同じ控えめな表示。 */
+.feed-usage {
+  color: var(--muted);
+  font-size: 0.88rem;
+  margin: 2px 0 0;
+}
+
 .feed-actions {
   display: flex;
   flex-wrap: wrap;

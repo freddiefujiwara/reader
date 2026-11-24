@@ -129,3 +129,11 @@ export function getShareLinkStatus(sessionToken, opts) {
 export function revokeShareLink(sessionToken, opts) {
   return postJson({ action: 'revokeShareLink', sessionToken }, opts);
 }
+
+// フィード別の利用状況 (オーナーセッションのみ)。視聴ログの集計を
+// フィード ID キーの { plays, playSeconds, opens, expands, views,
+// lastAt } で返す。記録の無いフィードは stats に含まれない。
+// -> { ok, stats }
+export function getFeedStats(sessionToken, opts) {
+  return postJson({ action: 'feed_stats', sessionToken }, opts);
+}

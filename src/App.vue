@@ -5,6 +5,7 @@ import {
   deleteFeed,
   exchangeSession,
   exchangeShare,
+  getFeedStats,
   getShareLinkStatus,
   issueShareLink,
   listArticles,
@@ -16,6 +17,7 @@ import {
   setStar,
 } from './lib/api.js';
 import { buildShareUrl, formatShareExpiry } from './lib/shareLink.js';
+import { formatFeedUsage } from './lib/feedStats.js';
 import { buildXShareUrl, buildFacebookShareUrl, buildThreadsShareUrl } from './lib/shareArticle.js';
 import {
   buildSaveFeedPayload,
@@ -189,6 +191,9 @@ const confirmDeleteId = ref('');
 // 共有リンク (マジックリンク)。サーバーはトークンのハッシュしか
 // 持たないため、平文の URL を表示できるのは発行したこの画面だけ
 // (shareUrl は発行直後にだけ入る)。
+// フィード別の利用状況 (削除候補の判断材料)。サーバーの feed_stats
+// 集計をフィード ID キーで持つ。null=未取得 (行は出さない)。
+const feedStats = ref(null);
 const shareStatus = ref(null); // null=未取得 / { active, expiresAt }
 const shareUrl = ref('');
 const shareLoading = ref(false);
@@ -2762,6 +2767,19 @@ function openFeedAdmin() {
   shareConfirm.value = '';
   loadFeeds();
   loadShareStatus();
+  loadFeedStats();
+}
+
+// 利用状況の取得に失敗しても管理画面はそのまま使えるよう、失敗時は
+// 行を出さない (未取得のままにする)。セッション切れだけは共通処理へ。
+async function loadFeedStats() {
+  if (!session.value || !isOwner.value) return;
+  try {
+    const payload = await getFeedStats(session.value.token);
+    feedStats.value = payload && payload.stats ? payload.stats : {};
+  } catch (e) {
+    expireIfUnauthorized(e);
+  }
 }
 
 async function backToTimeline() {
@@ -3649,6 +3667,7 @@ onMounted(async () => {
               </p>
               <p class="feed-url">{{ f.url }}</p>
               <p class="feed-status">{{ formatFeedStatus(f) }}</p>
+              <p v-if="feedStats" class="feed-usage">{{ formatFeedUsage(feedStats[f.id]) }}</p>
               <div v-if="confirmDeleteId === f.id" class="delete-confirm">
                 <p class="error">このフィードを削除しますか？このフィードの記事もすべて削除されます。</p>
                 <div class="feed-actions">

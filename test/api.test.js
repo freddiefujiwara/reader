@@ -11,6 +11,7 @@ import {
   reorderFeeds,
   issueShareLink,
   getShareLinkStatus,
+  getFeedStats,
   revokeShareLink,
   logEvents,
 } from '../src/lib/api.js';
@@ -189,6 +190,13 @@ describe('共有リンクの action', () => {
     const data = await getShareLinkStatus('tok', { fetcher, apiUrl: API });
     expect(data.active).toBe(true);
     expect(lastBody(fetcher)).toEqual({ action: 'getShareLinkStatus', sessionToken: 'tok' });
+  });
+  it('getFeedStats はフィード別の集計を返す', async () => {
+    const stats = { 'feed-a': { plays: 2, playSeconds: 91, opens: 1, expands: 0, views: 3, lastAt: '2026-11-22T10:00:00.000Z' } };
+    const fetcher = okFetcher({ ok: true, stats });
+    const data = await getFeedStats('tok', { fetcher, apiUrl: API });
+    expect(data.stats).toEqual(stats);
+    expect(lastBody(fetcher)).toEqual({ action: 'feed_stats', sessionToken: 'tok' });
   });
   it('revokeShareLink', async () => {
     const fetcher = okFetcher({ ok: true });

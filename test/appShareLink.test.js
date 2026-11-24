@@ -24,6 +24,7 @@ vi.mock('../src/lib/api.js', () => ({
   exchangeSession: vi.fn(async () => ({ ok: true })),
   exchangeShare: vi.fn(async () => ({ ok: true })),
   getShareLinkStatus: vi.fn(async () => ({ ok: true, active: false, expiresAt: null })),
+  getFeedStats: vi.fn(async () => ({ ok: true, stats: {} })),
   issueShareLink: vi.fn(async () => ({ ok: true, token: 'dummy-share-token', expiresAt: EXPIRES })),
   listArticles: vi.fn(async () => ({ ok: true, feeds: FEEDS, articles: [] })),
   listFeeds: vi.fn(async () => ({ ok: true, feeds: FEEDS })),

@@ -56,6 +56,7 @@ vi.mock('../src/lib/api.js', () => ({
   listArticles: vi.fn(async () => ({ ok: true, feeds: [FEED], articles: [] })),
   listFeeds: vi.fn(async () => ({ ok: true, feeds: [FEED] })),
   getShareLinkStatus: vi.fn(async () => ({ ok: true, active: false, expiresAt: null })),
+  getFeedStats: vi.fn(async () => ({ ok: true, stats: {} })),
   issueShareLink: vi.fn(async () => ({ ok: true, token: 'dummy-share-token', expiresAt: '2026-12-16T05:47:00.000Z' })),
   revokeShareLink: vi.fn(async () => ({ ok: true })),
   logEvents: vi.fn(async () => ({ ok: true, saved: 0 })),
