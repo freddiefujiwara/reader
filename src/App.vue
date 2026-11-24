@@ -2952,6 +2952,19 @@ function askDeleteFeed(feed) {
   confirmDeleteId.value = feed.id;
 }
 
+// 削除ボタンの入口。YouTube チャンネルフィードは購読同期が正で
+// リーダー側では消せないため、チャンネルページを新しいタブで開き、
+// 解除は YouTube 側で行ってもらう (解除されれば次の同期でリーダー
+// からも消える)。それ以外は通常の削除確認へ進む。
+function onDeleteButton(feed) {
+  const channelId = youtubeChannelIdFromUrl(feed.url);
+  if (channelId) {
+    window.open(`https://www.youtube.com/channel/${channelId}`, '_blank', 'noopener');
+    return;
+  }
+  askDeleteFeed(feed);
+}
+
 function cancelDeleteFeed() {
   confirmDeleteId.value = '';
 }
@@ -3691,18 +3704,17 @@ onMounted(async () => {
               <!-- 編集・削除はカード下段の専用行に置く (カード本体の
                    フレックス行の最後の要素で、全幅に折り返す)。削除
                    確認が出ている間は隠す (確認のボタンは本体側に出る)。
-                   YouTube チャンネルフィードは追加・解除が YouTube
-                   側の正のため削除は出さない。ただしジャンルだけは
-                   リーダー側が正 (購読同期は既存行のジャンルには触れ
-                   ない) なので、編集は通常どおり出し、解除は YouTube
-                   アプリ側での操作を案内する小さな注記を添える
-                   (並び替えも従来どおり可能)。判定はチャンネル ID が
-                   取れるかで、プレイリストフィードは購読同期の対象外
-                   のため通常フィードと同じく削除も出す。 -->
+                   YouTube チャンネルフィードも見た目は他のフィードと
+                   揃えて削除ボタンを出すが、追加・解除は YouTube 側が
+                   正 (購読同期) のため、押したときの動作だけが違い、
+                   チャンネルページを開く (onDeleteButton)。ジャンル
+                   だけはリーダー側が正 (購読同期は既存行のジャンルに
+                   は触れない) なので、編集は通常どおり出す。判定は
+                   チャンネル ID が取れるかで、プレイリストフィードは
+                   購読同期の対象外のため通常の削除確認へ進む。 -->
               <div v-if="confirmDeleteId !== f.id" class="feed-actions feed-card-actions">
-                <p v-if="youtubeChannelIdFromUrl(f.url)" class="feed-youtube-note">解除はYouTubeアプリで</p>
                 <button class="ghost" type="button" @click="startEditFeed(f)">編集</button>
-                <button v-if="!youtubeChannelIdFromUrl(f.url)" class="ghost danger" type="button" @click="askDeleteFeed(f)">削除</button>
+                <button class="ghost danger" type="button" @click="onDeleteButton(f)">削除</button>
               </div>
             </article>
             </template>
