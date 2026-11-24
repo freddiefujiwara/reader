@@ -73,7 +73,7 @@ vi.mock('../src/lib/feedFetch.js', () => ({
 }));
 
 import App from '../src/App.vue';
-import { saveFeed, listFeeds, listArticles, reorderFeeds, getFeedStats } from '../src/lib/api.js';
+import { saveFeed, listFeeds, listArticles, reorderFeeds, getFeedStats, deleteFeed } from '../src/lib/api.js';
 import { fetchFeedXml } from '../src/lib/feedFetch.js';
 
 const scrollCalls = [];
@@ -362,15 +362,28 @@ describe('管理画面の YouTube フィード', () => {
   // FEEDS[1] が YouTube フィード (videos.xml 形式の URL)。
   const youtubeCard = () => el.querySelectorAll('.feed-card')[1];
 
-  it('YouTube フィードには編集ボタンが出て削除ボタンは出ず、解除の案内文言が出る', async () => {
+  it('YouTube フィードにも編集・削除ボタンが出て、解除の案内文言は出ない', async () => {
     await mountAdmin();
     expect(errors).toEqual([]);
     const card = youtubeCard();
     expect(findButton(card, '編集'), '編集ボタンが出る').toBeTruthy();
-    expect(findButton(card, '削除'), '削除ボタンは無い').toBeUndefined();
-    const note = card.querySelector('.feed-youtube-note');
-    expect(note, '案内文言が出る').toBeTruthy();
-    expect(note.textContent.trim()).toBe('解除はYouTubeアプリで');
+    expect(findButton(card, '削除'), '削除ボタンも出る').toBeTruthy();
+    expect(card.querySelector('.feed-youtube-note'), '案内文言は出ない').toBeNull();
+  });
+
+  it('YouTube フィードの削除ボタンを押すとチャンネルページを開き、削除確認は出ない', async () => {
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+    try {
+      await mountAdmin();
+      findButton(youtubeCard(), '削除').click();
+      await flush();
+      expect(errors).toEqual([]);
+      expect(openSpy).toHaveBeenCalledWith('https://www.youtube.com/channel/UCxxxxxxxxxxxxxxxxxxxxxx', '_blank', 'noopener');
+      expect(youtubeCard().querySelector('.delete-confirm'), '削除確認は出ない').toBeNull();
+      expect(deleteFeed).not.toHaveBeenCalled();
+    } finally {
+      openSpy.mockRestore();
+    }
   });
 
   it('YouTube フィードの編集を開くとジャンルだけ変更でき、保存すると元の ID / タイトル / URL のまま saveFeed へ渡る', async () => {
@@ -410,13 +423,12 @@ describe('管理画面の YouTube フィード', () => {
     expect(el.querySelector('.feed-form'), '保存後はフォームが閉じる').toBeNull();
   });
 
-  it('YouTube 以外のフィードには従来どおり編集・削除ボタンが出て、案内文言は出ない', async () => {
+  it('YouTube 以外のフィードには従来どおり編集・削除ボタンが出る', async () => {
     await mountAdmin();
     expect(errors).toEqual([]);
     const card = el.querySelectorAll('.feed-card')[0];
     expect(findButton(card, '編集'), '編集ボタンが出る').toBeTruthy();
     expect(findButton(card, '削除'), '削除ボタンが出る').toBeTruthy();
-    expect(card.querySelector('.feed-youtube-note'), '案内文言は出ない').toBeNull();
   });
 
   it('YouTube フィードでも並び替えハンドルは残る', async () => {
@@ -425,7 +437,7 @@ describe('管理画面の YouTube フィード', () => {
     expect(youtubeCard().querySelector('button.drag-handle'), 'ドラッグハンドルが出る').toBeTruthy();
   });
 
-  it('ジャンルで絞った先が YouTube フィードだけでも、案内文言と編集が出て削除は出ない', async () => {
+  it('ジャンルで絞った先が YouTube フィードだけでも、編集・削除が出る', async () => {
     await mountAdmin();
     const tablist = el.querySelector('[aria-label="ジャンルで絞り込み"]');
     findButton(tablist, '教養・ラジオ').click();
@@ -434,8 +446,7 @@ describe('管理画面の YouTube フィード', () => {
     const cards = el.querySelectorAll('.feed-card');
     expect(cards.length).toBe(1);
     expect(findButton(cards[0], '編集'), '編集ボタンが出る').toBeTruthy();
-    expect(findButton(cards[0], '削除')).toBeUndefined();
-    expect(cards[0].querySelector('.feed-youtube-note'), '案内文言が出る').toBeTruthy();
+    expect(findButton(cards[0], '削除'), '削除ボタンが出る').toBeTruthy();
   });
 });
 
@@ -911,13 +922,12 @@ describe('管理画面の YouTube プレイリストフィード', () => {
     expect(titles).toContain('お気に入りプレイリスト');
   });
 
-  it('プレイリストフィードには編集・削除の両方が出て、解除の案内文言は出ない', async () => {
+  it('プレイリストフィードには編集・削除の両方が出る', async () => {
     await mountAdminWithPlaylist();
     expect(errors).toEqual([]);
     const card = playlistCard();
     expect(findButton(card, '編集'), '編集ボタンが出る').toBeTruthy();
     expect(findButton(card, '削除'), '削除ボタンが出る').toBeTruthy();
-    expect(card.querySelector('.feed-youtube-note'), '案内文言は出ない').toBeNull();
   });
 
   it('プレイリストフィードの編集は通常フィードと同じ注記で、ジャンルだけ保存できる', async () => {
