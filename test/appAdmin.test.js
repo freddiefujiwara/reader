@@ -112,11 +112,11 @@ async function openEdit(idx) {
   return el.querySelector('.feed-form');
 }
 
-it('編集・削除ボタンはカード右側の専用領域にあり、本体には無い', async () => {
+it('編集・削除ボタンはカード直下の専用領域にあり、本体には無い', async () => {
   await mountAdmin();
   const card = el.querySelector('.feed-card');
   const actions = card.querySelector(':scope > .feed-card-actions');
-  expect(actions, 'カード直下の右側領域がある').toBeTruthy();
+  expect(actions, 'カード直下の専用領域がある').toBeTruthy();
   expect(findButton(actions, '編集')).toBeTruthy();
   expect(findButton(actions, '削除')).toBeTruthy();
   const main = card.querySelector('.feed-card-main');
