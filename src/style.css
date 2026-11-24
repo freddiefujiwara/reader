@@ -1236,6 +1236,7 @@ button.ghost.active {
 
 .feed-card {
   display: flex;
+  flex-wrap: wrap;
   align-items: stretch;
   gap: 10px;
   padding: 18px 20px;
@@ -1318,20 +1319,24 @@ button.ghost.active {
   margin-top: 12px;
 }
 
-/* カード右側に置く編集・削除ボタン。カード本体 (.feed-card) の
-   フレックス行の最後の要素として、右端に縦中央で並べる。本体側の
-   削除確認内の .feed-actions には効かないよう、専用クラスで分ける。 */
+/* 編集・削除ボタンはカード下段の専用行に置く。右側の列にすると
+   その分だけ情報側が狭くなって行が折り返し、カードが縦に伸びて
+   右列の下に余白が残るため、本体 (ハンドル＋情報) の下に全幅の
+   行として右寄せで並べる。本体側の削除確認内の .feed-actions には
+   効かないよう、専用クラスで分ける。 */
 .feed-card-actions {
-  flex: 0 0 auto;
-  flex-wrap: nowrap;
-  align-self: center;
-  margin-top: 0;
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  margin-top: 2px;
 }
 
 /* YouTube フィードで編集・削除ボタンの代わりに出す注記。画面が
-   うるさくならないよう、くすんだ色・小さいフォントの1行に留める。 */
+   うるさくならないよう、くすんだ色・小さいフォントの1行に留める。
+   下段の行では左端に置き、ボタン類は右に寄せる。 */
 .feed-youtube-note {
-  margin: 0;
+  margin: 0 auto 0 0;
   font-size: 0.78rem;
   color: var(--muted);
   white-space: nowrap;
