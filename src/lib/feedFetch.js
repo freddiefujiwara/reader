@@ -50,13 +50,33 @@ export async function fetchFeedXml(fetchUrl, { fetcher = fetch, proxyBase = URL_
   }, { retries, retryDelayMs, isRetryable });
 }
 
+// パースはメインスレッドで同期的に走る。大きいフィード (数百件の
+// ポッドキャスト等) では実機で秒単位のブロックになり、その間に
+// 落ちたタップはパースが終わるまで処理されず「ボタンの効きが悪い」
+// 体感になる。パース同士はもともと単一スレッドで順番にしか進まない
+// ため、直列のキューに載せ、1件ごとにメインスレッドへ制御を返して
+// から次を始める (入力や描画が合間に処理される)。全体の所要時間は
+// ほぼ変わらない。
+const yieldToMain = () => new Promise((resolve) => { setTimeout(resolve, 0); });
+let parseQueue = Promise.resolve();
+
+function parseFeedXmlQueued(xml, feed) {
+  const run = parseQueue.then(async () => {
+    await yieldToMain();
+    return parseFeedXml(xml, feed);
+  });
+  // 1件の失敗でキュー全体を止めない。
+  parseQueue = run.then(() => {}, () => {});
+  return run;
+}
+
 // フィード1件を取得してエントリまで変換する。失敗しても投げず、
 // { ok: false } で返して呼び出し側がそのフィードをスキップできるようにする。
 export async function fetchOneFeed(feed, opts) {
   const fetchUrl = feed.fetchUrl || feed.url;
   try {
     const xml = await fetchFeedXml(fetchUrl, opts);
-    return { feed, ok: true, entries: parseFeedXml(xml, feed), complete: isCompleteFeedXml(xml), error: null };
+    return { feed, ok: true, entries: await parseFeedXmlQueued(xml, feed), complete: isCompleteFeedXml(xml), error: null };
   } catch (error) {
     return { feed, ok: false, entries: [], error };
   }
