@@ -30,7 +30,6 @@ vi.mock('../src/lib/api.js', () => ({
   reorderFeeds: vi.fn(async () => ({ ok: true })),
   revokeShareLink: vi.fn(async () => ({ ok: true })),
   logEvents: vi.fn(async () => ({ ok: true, saved: 0 })),
-  getStats: vi.fn(async () => ({ ok: true, weekly: [], currentWeek: '', current: [] })),
   saveFeed: vi.fn(async () => ({ ok: true, feed: FEEDS[0] })),
 }));
 
