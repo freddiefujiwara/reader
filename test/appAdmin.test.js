@@ -58,6 +58,7 @@ vi.mock('../src/lib/api.js', () => ({
   listArticles: vi.fn(async () => ({ ok: true, feeds: FEEDS, articles: [] })),
   listFeeds: vi.fn(async () => ({ ok: true, feeds: FEEDS })),
   getShareLinkStatus: vi.fn(async () => ({ ok: true, active: false, expiresAt: null })),
+  getFeedStats: vi.fn(async () => ({ ok: true, stats: {} })),
   issueShareLink: vi.fn(async () => ({ ok: true, token: 'dummy-share-token', expiresAt: '2026-12-16T05:47:00.000Z' })),
   revokeShareLink: vi.fn(async () => ({ ok: true })),
   logEvents: vi.fn(async () => ({ ok: true, saved: 0 })),
@@ -72,7 +73,7 @@ vi.mock('../src/lib/feedFetch.js', () => ({
 }));
 
 import App from '../src/App.vue';
-import { saveFeed, listFeeds, listArticles, reorderFeeds } from '../src/lib/api.js';
+import { saveFeed, listFeeds, listArticles, reorderFeeds, getFeedStats } from '../src/lib/api.js';
 import { fetchFeedXml } from '../src/lib/feedFetch.js';
 
 const scrollCalls = [];
@@ -1076,6 +1077,34 @@ describe('ジャンル候補 (datalist を使わない)', () => {
     expect(el.querySelector('.feed-form')).toBeNull();
     expect(suggestions()).toBeNull();
     expect(errors).toEqual([]);
+  });
+});
+
+describe('管理画面の利用状況表示', () => {
+  it('各フィード行に利用状況が出て、記録の無いフィードは「記録なし」になる', async () => {
+    vi.mocked(getFeedStats).mockResolvedValue({
+      ok: true,
+      stats: {
+        b81e59da11f890d2: { plays: 12, playSeconds: 43 * 60, opens: 2, expands: 0, views: 5, lastAt: '2026-11-24T10:00:00.000Z' },
+      },
+    });
+    await mountAdmin();
+    const cards = el.querySelectorAll('.feed-card');
+    const usage0 = cards[0].querySelector('.feed-usage');
+    expect(usage0, '利用状況の行がある').toBeTruthy();
+    expect(usage0.textContent).toContain('再生 12回（約43分）');
+    expect(usage0.textContent).toContain('開く 2回');
+    expect(usage0.textContent).toContain('表示 5回');
+    expect(usage0.textContent).toContain('11/24');
+    const usage1 = cards[1].querySelector('.feed-usage');
+    expect(usage1.textContent).toContain('直近90日の記録なし');
+  });
+
+  it('利用状況の取得に失敗しても一覧はそのまま使える', async () => {
+    vi.mocked(getFeedStats).mockRejectedValueOnce(new Error('boom'));
+    await mountAdmin();
+    expect(el.querySelectorAll('.feed-card').length).toBe(FEEDS.length);
+    expect(el.querySelector('.feed-usage')).toBeNull();
   });
 });
 
