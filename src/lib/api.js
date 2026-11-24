@@ -60,11 +60,14 @@ export function exchangeShare(shareToken, opts) {
 
 // 記事一覧 (状態マージ済み・新しい順) ＋フィード一覧。
 // v2 ではフィード一覧 (fetchUrl 付き) の取得と、既読状態の初回取り込みに使う。
+// scope='stars' は背景更新のスター同期専用の軽量形 (記事は id と
+// スター状態だけ)。全項目が要る初回取り込みでは付けない。
 // -> { ok, articles, total, feeds, generatedAt }
-export function listArticles(sessionToken, { feedId = '', category = '', filter = 'all', limit = 50, offset = 0 } = {}, opts) {
+export function listArticles(sessionToken, { feedId = '', category = '', filter = 'all', limit = 50, offset = 0, scope = '' } = {}, opts) {
   const body = { action: 'list', sessionToken, filter, limit, offset };
   if (feedId) body.feedId = feedId;
   if (category) body.category = category;
+  if (scope) body.scope = scope;
   return postJson(body, opts);
 }
 

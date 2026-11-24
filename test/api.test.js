@@ -119,6 +119,11 @@ describe('action の組み立て', () => {
     await listArticles('tok', { category: '楽天' }, { fetcher, apiUrl: API });
     expect(lastBody(fetcher)).toEqual({ action: 'list', sessionToken: 'tok', filter: 'all', limit: 50, offset: 0, category: '楽天' });
   });
+  it('listArticles は scope を送れる (空なら送らない)', async () => {
+    const fetcher = okFetcher({ ok: true, articles: [], feeds: [], total: 0 });
+    await listArticles('tok', { scope: 'stars' }, { fetcher, apiUrl: API });
+    expect(lastBody(fetcher)).toEqual({ action: 'list', sessionToken: 'tok', filter: 'all', limit: 50, offset: 0, scope: 'stars' });
+  });
 });
 
 describe('フィード管理の action', () => {

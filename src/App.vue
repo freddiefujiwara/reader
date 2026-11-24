@@ -739,8 +739,10 @@ async function refreshOnce() {
     const needImport = !(await getLocalMeta('statesImportedV2'));
     try {
       // スター状態の同期にも使うため、記事も毎回まとめて取る
-      // (サーバー側で上限は調整される)。
-      const payload = await listArticles(session.value.token, { limit: IMPORT_LIMIT });
+      // (サーバー側で上限は調整される)。初回取り込みが済んでいれば
+      // 全項目は要らないため、スター同期専用の軽量形 (scope=stars)
+      // で取り、応答を小さくする。
+      const payload = await listArticles(session.value.token, { limit: IMPORT_LIMIT, scope: needImport ? '' : 'stars' });
       if (Array.isArray(payload.feeds)) feeds = payload.feeds;
       if (needImport) importPayload = payload;
       if (Array.isArray(payload.articles)) starRows = payload.articles;
