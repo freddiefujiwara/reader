@@ -371,16 +371,26 @@ describe('管理画面の YouTube フィード', () => {
     expect(card.querySelector('.feed-youtube-note'), '案内文言は出ない').toBeNull();
   });
 
-  it('YouTube フィードの削除ボタンを押すとチャンネルページを開き、削除確認は出ない', async () => {
+  it('YouTube フィードの削除ボタンを押すとアプリを開きに行き、開けなければウェブのチャンネルページへフォールバックする', async () => {
     const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
     try {
       await mountAdmin();
       findButton(youtubeCard(), '削除').click();
       await flush();
       expect(errors).toEqual([]);
-      expect(openSpy).toHaveBeenCalledWith('https://www.youtube.com/channel/UCxxxxxxxxxxxxxxxxxxxxxx', '_blank', 'noopener');
+      // 押した直後はアプリのスキームで開きに行く段階で、ウェブは
+      // まだ開かれず、削除確認も出ない。
+      expect(openSpy, '押した直後はウェブを開かない').not.toHaveBeenCalled();
       expect(youtubeCard().querySelector('.delete-confirm'), '削除確認は出ない').toBeNull();
       expect(deleteFeed).not.toHaveBeenCalled();
+      // jsdom ではページが隠れない (= アプリが開かなかった) ため、
+      // フォールバックでウェブのチャンネルページが開く。
+      const deadline = Date.now() + 3000;
+      while (!openSpy.mock.calls.length && Date.now() < deadline) {
+        await new Promise((resolve) => { setTimeout(resolve, 50); });
+      }
+      expect(openSpy).toHaveBeenCalledWith('https://www.youtube.com/channel/UCxxxxxxxxxxxxxxxxxxxxxx', '_blank', 'noopener');
+      expect(errors).toEqual([]);
     } finally {
       openSpy.mockRestore();
     }

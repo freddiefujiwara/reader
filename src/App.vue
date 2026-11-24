@@ -2953,16 +2953,37 @@ function askDeleteFeed(feed) {
 }
 
 // 削除ボタンの入口。YouTube チャンネルフィードは購読同期が正で
-// リーダー側では消せないため、チャンネルページを新しいタブで開き、
-// 解除は YouTube 側で行ってもらう (解除されれば次の同期でリーダー
+// リーダー側では消せないため、チャンネルを YouTube 側で開き、
+// 解除はそちらで行ってもらう (解除されれば次の同期でリーダー
 // からも消える)。それ以外は通常の削除確認へ進む。
 function onDeleteButton(feed) {
   const channelId = youtubeChannelIdFromUrl(feed.url);
   if (channelId) {
-    window.open(`https://www.youtube.com/channel/${channelId}`, '_blank', 'noopener');
+    openYouTubeChannel(channelId);
     return;
   }
   askDeleteFeed(feed);
+}
+
+// YouTube チャンネルをアプリで直接開く。ウェブの URL を開くと
+// PWA ではアプリ内ブラウザのシートが開き、ユニバーサルリンクで
+// アプリへ渡ったあとに真っ白なシートだけが残る (戻ると白画面に
+// なる) ため、アプリの URL スキームで直接開く。アプリが無くて
+// 開けなかった場合 (ページが隠れなかった場合) だけ、少し待って
+// からウェブのチャンネルページを開く。
+function openYouTubeChannel(channelId) {
+  const webUrl = `https://www.youtube.com/channel/${channelId}`;
+  let leftPage = false;
+  const markLeft = () => { leftPage = true; };
+  document.addEventListener('visibilitychange', markLeft);
+  window.addEventListener('pagehide', markLeft);
+  window.location.href = `youtube://www.youtube.com/channel/${channelId}`;
+  window.setTimeout(() => {
+    document.removeEventListener('visibilitychange', markLeft);
+    window.removeEventListener('pagehide', markLeft);
+    if (leftPage || document.hidden) return;
+    window.open(webUrl, '_blank', 'noopener');
+  }, 1200);
 }
 
 function cancelDeleteFeed() {
@@ -3707,7 +3728,7 @@ onMounted(async () => {
                    YouTube チャンネルフィードも見た目は他のフィードと
                    揃えて削除ボタンを出すが、追加・解除は YouTube 側が
                    正 (購読同期) のため、押したときの動作だけが違い、
-                   チャンネルページを開く (onDeleteButton)。ジャンル
+                   チャンネルをアプリで開く (onDeleteButton)。ジャンル
                    だけはリーダー側が正 (購読同期は既存行のジャンルに
                    は触れない) なので、編集は通常どおり出す。判定は
                    チャンネル ID が取れるかで、プレイリストフィードは
