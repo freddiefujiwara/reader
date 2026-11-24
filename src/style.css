@@ -1234,11 +1234,16 @@ button.ghost.active {
   margin-bottom: 16px;
 }
 
+/* 配置は grid で固定する (ハンドル=1列目、本文=2列目、ボタン行=
+   全幅)。flex の折り返し任せだと、長い URL の幅に引きずられて本文が
+   次の行へ落ち、ハンドルだけがずれる崩れが起きたため。列の間の
+   余白はハンドル側の margin で取り、ハンドルが無いとき (ジャンル
+   絞り込み中) は空の1列目が幅0に潰れて本文が左端から始まる。 */
 .feed-card {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: auto 1fr;
   align-items: stretch;
-  gap: 10px;
+  gap: 10px 0;
   padding: 18px 20px;
   /* ドラッグ中、掴んだ行以外の行が詰めて動くアニメーション。 */
   transition: transform 160ms ease;
@@ -1258,11 +1263,10 @@ button.ghost.active {
   transition: none;
 }
 
-/* 本体の flex-basis は 0 にする。auto (中身の max-content) だと、
-   カードの flex-wrap が行を割り当てるときに長い URL の幅へ引きずられ、
-   本体ごと次の行へ落ちてハンドルだけが1行目に残る。 */
+/* 本文は grid の2列目 (1fr) に固定する。min-width: 0 で列幅まで
+   縮められるようにし、長い URL は省略表示に収める。 */
 .feed-card-main {
-  flex: 1 1 0;
+  grid-column: 2;
   min-width: 0;
 }
 
@@ -1270,7 +1274,8 @@ button.ghost.active {
    掴みやすくする。touch-action: none で、ドラッグ中にページの
    スクロールへ競合させない (ドラッグはハンドルからのみ始まる)。 */
 .drag-handle {
-  flex: 0 0 auto;
+  grid-column: 1;
+  margin-right: 10px;
   display: flex;
   align-items: center;
   padding: 0 8px;
@@ -1328,7 +1333,7 @@ button.ghost.active {
    行として右寄せで並べる。本体側の削除確認内の .feed-actions には
    効かないよう、専用クラスで分ける。 */
 .feed-card-actions {
-  flex: 1 1 100%;
+  grid-column: 1 / -1;
   flex-wrap: wrap;
   justify-content: flex-end;
   align-items: center;
