@@ -1258,8 +1258,11 @@ button.ghost.active {
   transition: none;
 }
 
+/* 本体の flex-basis は 0 にする。auto (中身の max-content) だと、
+   カードの flex-wrap が行を割り当てるときに長い URL の幅へ引きずられ、
+   本体ごと次の行へ落ちてハンドルだけが1行目に残る。 */
 .feed-card-main {
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-width: 0;
 }
 
