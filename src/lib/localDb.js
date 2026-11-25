@@ -17,6 +17,11 @@ import {
 export const RETENTION_DAYS = 60;
 export const MAX_ARTICLES = 5000;
 
+// 墓標 (掃除で消した既読記事の ID と既読の記録) の保持。記事より
+// ずっと小さいので、記事本体より長く・多く残す。
+export const TOMBSTONE_RETENTION_DAYS = 180;
+export const MAX_TOMBSTONES = 20000;
+
 // 音声URLの保持期限。reader-gas は抽出から5時間以内のエントリにだけ
 // enclosure を付けるが、ストリームURL自体は抽出から約6時間は有効な
 // ことが多い。背景更新で enclosure が来なくなっても、最後に新鮮な
@@ -154,7 +159,10 @@ export function isBackCatalogEntry(entry, fetchedAtIso, retentionDays = RETENTIO
 // 防ぐ)。'read' は既読として作る (記事としては残り再生もできるが、
 // 未読にはならない)。'off' はガードなし (未読として作る)。
 // 既存レコードの更新はモードによらず従来どおり。
-function buildUpsertRecords(existingById, resolved, feed, fetchedAtIso) {
+// 墓標 (tombstonesById) がある新規記事は、ガードの判定より優先して
+// 既読として作る。掃除で消えた既読記事が、公開が保持期間より新しい
+// ためにガードを通って未読で戻ってくるのを防ぐのが墓標の役割。
+function buildUpsertRecords(existingById, resolved, feed, fetchedAtIso, tombstonesById) {
   const guard = effectivePastGuard(feed);
   const targets = guard === 'skip'
     ? resolved.filter(
@@ -175,7 +183,8 @@ function buildUpsertRecords(existingById, resolved, feed, fetchedAtIso) {
         ...resolveAudioFields(prev, entry, fetchedAtIso),
       };
     }
-    const asRead = guard === 'read' && isBackCatalogEntry(entry, fetchedAtIso);
+    const tomb = tombstonesById ? tombstonesById[id] : null;
+    const asRead = !!tomb || (guard === 'read' && isBackCatalogEntry(entry, fetchedAtIso));
     return {
       id,
       feed_id: feed.id,
@@ -192,7 +201,7 @@ function buildUpsertRecords(existingById, resolved, feed, fetchedAtIso) {
       duration_sec: entry.durationSec ?? null,
       play_pos: 0,
       is_read: asRead,
-      read_at: asRead ? fetchedAtIso : '',
+      read_at: asRead ? ((tomb && tomb.read_at) || fetchedAtIso) : '',
       // スターはサーバーが正本。取り込みでは作らず・消さず、
       // list 応答からの同期 (syncLocalArticleStars) と付け外し
       // (setLocalArticleStar) だけで変わる。既存レコードは
@@ -204,9 +213,9 @@ function buildUpsertRecords(existingById, resolved, feed, fetchedAtIso) {
 }
 
 // 取得エントリから、IndexedDB へ put する記事レコードを組み立てる。
-export async function planUpserts(existingById, entries, feed, fetchedAtIso) {
+export async function planUpserts(existingById, entries, feed, fetchedAtIso, tombstonesById) {
   const resolved = await resolveEntryIds(entries, feed.id);
-  return buildUpsertRecords(existingById, resolved, feed, fetchedAtIso);
+  return buildUpsertRecords(existingById, resolved, feed, fetchedAtIso, tombstonesById);
 }
 
 // ローカルの保持ルール: 既読記事は「取り込んでから60日」を過ぎたら消す。
@@ -226,6 +235,46 @@ export function planLocalPrune(articles, nowIso, { retentionDays = RETENTION_DAY
     const t = parseTimeMs(a.fetched_at || a.published_at);
     const tooOld = t > 0 && now - t > retentionMs;
     if (tooOld || !keepRank[a.id]) ids.push(a.id);
+  });
+  return ids;
+}
+
+// 掃除で消す既読記事の墓標を作る。記事本体は消しても、ID・フィード・
+// 既読日時のだけを残し、同じ記事が再配信されてきたときに既読で
+// 戻せるようにする。未読記事は対象にしない (planLocalPrune の結果は
+// 既読だけだが、単独で呼ばれても安全なようにここでも見る)。
+export function planTombstones(articles, prunedAtIso) {
+  const list = (Array.isArray(articles) ? articles : [])
+    .filter((a) => a && typeof a === 'object' && a.id && a.is_read);
+  const seen = new Set();
+  const out = [];
+  list.forEach((a) => {
+    if (seen.has(a.id)) return;
+    seen.add(a.id);
+    out.push({
+      id: a.id,
+      feed_id: a.feed_id || '',
+      read_at: a.read_at || prunedAtIso,
+      pruned_at: prunedAtIso,
+    });
+  });
+  return out;
+}
+
+// 墓標の掃除。保持期間を過ぎたものと、上限を超えた古いものから消す。
+export function planTombstonePrune(tombstones, nowIso, { retentionDays = TOMBSTONE_RETENTION_DAYS, maxTombstones = MAX_TOMBSTONES } = {}) {
+  const now = nowIso ? Date.parse(nowIso) : Date.now();
+  const retentionMs = retentionDays * 24 * 60 * 60 * 1000;
+  const list = (Array.isArray(tombstones) ? tombstones : [])
+    .filter((t) => t && typeof t === 'object' && t.id);
+  const sorted = list.slice().sort((a, b) => parseTimeMs(b.pruned_at) - parseTimeMs(a.pruned_at));
+  const keepRank = {};
+  sorted.forEach((t, idx) => { keepRank[t.id] = idx < maxTombstones; });
+  const ids = [];
+  list.forEach((t) => {
+    const at = parseTimeMs(t.pruned_at);
+    const tooOld = at > 0 && now - at > retentionMs;
+    if (tooOld || !keepRank[t.id]) ids.push(t.id);
   });
   return ids;
 }
@@ -426,14 +475,24 @@ let openDb = null;
 export function openLocalDb(env) {
   if (!dbPromise) {
     dbPromise = new Promise((resolve, reject) => {
-      const req = indexedDB.open(localDbName(env), 1);
+      const req = indexedDB.open(localDbName(env), 2);
       req.onupgradeneeded = () => {
         const db = req.result;
-        const articles = db.createObjectStore('articles', { keyPath: 'id' });
-        articles.createIndex('feed_id', 'feed_id', { unique: false });
-        articles.createIndex('published_at', 'published_at', { unique: false });
-        db.createObjectStore('feeds', { keyPath: 'id' });
-        db.createObjectStore('meta', { keyPath: 'key' });
+        if (!db.objectStoreNames.contains('articles')) {
+          const articles = db.createObjectStore('articles', { keyPath: 'id' });
+          articles.createIndex('feed_id', 'feed_id', { unique: false });
+          articles.createIndex('published_at', 'published_at', { unique: false });
+        }
+        if (!db.objectStoreNames.contains('feeds')) {
+          db.createObjectStore('feeds', { keyPath: 'id' });
+        }
+        if (!db.objectStoreNames.contains('meta')) {
+          db.createObjectStore('meta', { keyPath: 'key' });
+        }
+        if (!db.objectStoreNames.contains('tombstones')) {
+          const tombstones = db.createObjectStore('tombstones', { keyPath: 'id' });
+          tombstones.createIndex('feed_id', 'feed_id', { unique: false });
+        }
       };
       req.onsuccess = () => {
         openDb = req.result;
@@ -509,6 +568,18 @@ export function deleteLocalArticles(ids) {
   return deleteByIds('articles', ids);
 }
 
+export function loadLocalTombstones() {
+  return getAll('tombstones');
+}
+
+export function putLocalTombstones(records) {
+  return putAll('tombstones', records);
+}
+
+export function deleteLocalTombstones(ids) {
+  return deleteByIds('tombstones', ids);
+}
+
 // 1フィード分の取り込みを、単一の readwrite トランザクションで完結させる。
 // そのフィードの既存レコードの読み直し → レコード構築 → 付け替え状態の
 // 適用 → 書き込みを同じ tx で行う。IndexedDB の tx は直列化されるため、
@@ -520,12 +591,22 @@ export function deleteLocalArticles(ids) {
 export async function ingestFeedArticles(feed, entries, fetchedAtIso, transfer, options) {
   const resolved = await resolveEntryIds(entries, feed.id);
   const db = await openLocalDb();
-  const tx = db.transaction('articles', 'readwrite');
+  const tx = db.transaction(['articles', 'tombstones'], 'readwrite');
   const store = tx.objectStore('articles');
+  const tombStore = tx.objectStore('tombstones');
   const existing = await requestToPromise(store.index('feed_id').getAll(feed.id));
   const existingById = {};
   existing.forEach((r) => { existingById[r.id] = r; });
-  let records = buildUpsertRecords(existingById, resolved, feed, fetchedAtIso);
+  // 墓標 (掃除で消した既読記事の記録) は同じ tx で読み、新規レコードの
+  // 既読判定に使う。既読として戻せた墓標はここで消費する: 残しておくと、
+  // その記事を未読に戻してから消えたときに既読で復活してしまう。
+  const tombs = await requestToPromise(tombStore.index('feed_id').getAll(feed.id));
+  const tombstonesById = {};
+  tombs.forEach((t) => { tombstonesById[t.id] = t; });
+  let records = buildUpsertRecords(existingById, resolved, feed, fetchedAtIso, tombstonesById);
+  records.forEach((r) => {
+    if (!existingById[r.id] && tombstonesById[r.id]) tombStore.delete(r.id);
+  });
   let consumedKeys = [];
   if (transfer) {
     const applied = applyTransferredState(records, transfer, feed.id, existingById);

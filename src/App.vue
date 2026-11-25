@@ -66,15 +66,20 @@ import {
   clearLocalArticlePlayPos,
   closeLocalDb,
   deleteLocalArticles,
+  deleteLocalTombstones,
   getLocalMeta,
   ingestFeedArticles,
   loadLocalArticles,
   loadLocalFeeds,
+  loadLocalTombstones,
   markLocalArticlesRead,
   migrateFeedHashIds,
   migrateYouTubeChannelUrlIds,
   planLocalPrune,
   planOrphanArticles,
+  planTombstonePrune,
+  planTombstones,
+  putLocalTombstones,
   pruneTransferredState,
   saveLocalFeeds,
   setLocalArticlePlayPos,
@@ -825,9 +830,18 @@ async function refreshOnce() {
       if (rows.length) await syncLocalArticleStars(rows);
     }
 
-    // 保持ルール (既読60日・上限) でローカルを掃除する。
-    const pruneIds = planLocalPrune(await loadLocalArticles(), new Date().toISOString());
-    if (pruneIds.length) await deleteLocalArticles(pruneIds);
+    // 保持ルール (既読60日・上限) でローカルを掃除する。消す既読記事は
+    // 墓標を残し、フィードが再配信しても未読として復活させない。
+    const pruneNow = new Date().toISOString();
+    const allArticles = await loadLocalArticles();
+    const pruneIds = planLocalPrune(allArticles, pruneNow);
+    if (pruneIds.length) {
+      const pruneSet = new Set(pruneIds);
+      await putLocalTombstones(planTombstones(allArticles.filter((a) => pruneSet.has(a.id)), pruneNow));
+      await deleteLocalArticles(pruneIds);
+    }
+    const tombPruneIds = planTombstonePrune(await loadLocalTombstones(), pruneNow);
+    if (tombPruneIds.length) await deleteLocalTombstones(tombPruneIds);
 
     await reloadLocal();
     listError.value = '';

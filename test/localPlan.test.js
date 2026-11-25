@@ -3,6 +3,8 @@ import {
   planUpserts,
   effectivePastGuard,
   planLocalPrune,
+  planTombstones,
+  planTombstonePrune,
   planSyncDeletions,
   planOrphanArticles,
   articleRecordToView,
@@ -625,5 +627,57 @@ describe('planSyncDeletions', () => {
     const articles = [null, { feed_id: 'cal' }, rec('a'), rec('b', 'other')];
     const plan = planSyncDeletions(articles, 'cal', ['a']);
     expect(plan).toEqual({ deleteIds: [], blocked: false, candidates: 0 });
+  });
+});
+
+describe('planTombstones / planTombstonePrune', () => {
+  const PRUNED_AT = '2026-11-14T00:00:00.000Z';
+  const rec = (id, extra = {}) => ({
+    id, feed_id: 'nhk', title: id, link: `https://example.com/${id}`,
+    published_at: '', fetched_at: '', summary: '', author: '',
+    is_read: true, read_at: '2026-11-13T12:00:00.000Z',
+    ...extra,
+  });
+
+  it('既読記事だけを墓標にし、read_at と feed_id を引き継ぐ', () => {
+    const tombs = planTombstones([rec('a'), rec('b', { is_read: false }), null, { id: 'c' }], PRUNED_AT);
+    expect(tombs).toEqual([
+      { id: 'a', feed_id: 'nhk', read_at: '2026-11-13T12:00:00.000Z', pruned_at: PRUNED_AT },
+    ]);
+  });
+
+  it('read_at が無い既読は掃除時刻で埋める', () => {
+    expect(planTombstones([rec('a', { read_at: '' })], PRUNED_AT)[0].read_at).toBe(PRUNED_AT);
+  });
+
+  it('保持期間 (180日) を過ぎた墓標を消す', () => {
+    const tombs = [
+      { id: 'old', feed_id: 'nhk', read_at: '', pruned_at: '2026-05-01T00:00:00.000Z' },
+      { id: 'fresh', feed_id: 'nhk', read_at: '', pruned_at: '2026-11-01T00:00:00.000Z' },
+    ];
+    expect(planTombstonePrune(tombs, PRUNED_AT)).toEqual(['old']);
+  });
+
+  it('上限を超えたら古い墓標から消す', () => {
+    const tombs = [
+      { id: 't1', feed_id: 'nhk', read_at: '', pruned_at: '2026-11-10T00:00:00.000Z' },
+      { id: 't2', feed_id: 'nhk', read_at: '', pruned_at: '2026-11-11T00:00:00.000Z' },
+      { id: 't3', feed_id: 'nhk', read_at: '', pruned_at: '2026-11-12T00:00:00.000Z' },
+    ];
+    expect(planTombstonePrune(tombs, PRUNED_AT, { maxTombstones: 2 })).toEqual(['t1']);
+  });
+
+  it('planUpserts: 墓標のある新規記事は、公開が新しくても既読で作る', async () => {
+    const id = await articleId(FEED.id, 'g-tomb');
+    const e = entry('g-tomb');
+    const tombs = {
+      [id]: { id, feed_id: FEED.id, read_at: '2026-11-13T12:00:00.000Z', pruned_at: PRUNED_AT },
+    };
+    const records = await planUpserts({}, [e], FEED, FETCHED, tombs);
+    expect(records).toHaveLength(1);
+    expect(records[0].is_read).toBe(true);
+    expect(records[0].read_at).toBe('2026-11-13T12:00:00.000Z');
+    const plain = await planUpserts({}, [e], FEED, FETCHED);
+    expect(plain[0].is_read).toBe(false);
   });
 });
