@@ -2966,32 +2966,40 @@ function askDeleteFeed(feed) {
   confirmDeleteId.value = feed.id;
 }
 
-// 削除ボタンの入口。YouTube チャンネルフィードは購読同期が正で
-// リーダー側では消せないため、チャンネルを YouTube 側で開き、
-// 解除はそちらで行ってもらう (解除されれば次の同期でリーダー
-// からも消える)。それ以外は通常の削除確認へ進む。
+// 削除ボタンの入口。YouTube フィード (チャンネルとプレイリスト)
+// は YouTube 側で開き、解除や編集はそちらで行ってもらう。
+// チャンネルは購読同期が正で、解除されれば次の同期でリーダー
+// からも消える。プレイリストは同期の対象外だが、扱いをチャン
+// ネルと揃える (本人の判断)。プレイリストフィード自体をリー
+// ダーから消す必要が出たら、フィード一覧のシート側で外す。
+// それ以外は通常の削除確認へ進む。
 function onDeleteButton(feed) {
   const channelId = youtubeChannelIdFromUrl(feed.url);
   if (channelId) {
-    openYouTubeChannel(channelId);
+    openYouTubeApp(`channel/${channelId}`);
+    return;
+  }
+  const playlistId = youtubePlaylistIdFromUrl(feed.url);
+  if (playlistId) {
+    openYouTubeApp(`playlist?list=${playlistId}`);
     return;
   }
   askDeleteFeed(feed);
 }
 
-// YouTube チャンネルをアプリで直接開く。ウェブの URL を開くと
-// PWA ではアプリ内ブラウザのシートが開き、ユニバーサルリンクで
-// アプリへ渡ったあとに真っ白なシートだけが残る (戻ると白画面に
-// なる) ため、アプリの URL スキームで直接開く。アプリが無くて
-// 開けなかった場合 (ページが隠れなかった場合) だけ、少し待って
-// からウェブのチャンネルページを開く。
-function openYouTubeChannel(channelId) {
-  const webUrl = `https://www.youtube.com/channel/${channelId}`;
+// YouTube のページ (チャンネル・プレイリスト) をアプリで直接
+// 開く。ウェブの URL を開くと PWA ではアプリ内ブラウザのシート
+// が開き、ユニバーサルリンクでアプリへ渡ったあとに真っ白な
+// シートだけが残る (戻ると白画面になる) ため、アプリの URL
+// スキームで直接開く。アプリが無くて開けなかった場合 (ページ
+// が隠れなかった場合) だけ、少し待ってからウェブで開く。
+function openYouTubeApp(path) {
+  const webUrl = `https://www.youtube.com/${path}`;
   let leftPage = false;
   const markLeft = () => { leftPage = true; };
   document.addEventListener('visibilitychange', markLeft);
   window.addEventListener('pagehide', markLeft);
-  window.location.href = `youtube://www.youtube.com/channel/${channelId}`;
+  window.location.href = `youtube://www.youtube.com/${path}`;
   window.setTimeout(() => {
     document.removeEventListener('visibilitychange', markLeft);
     window.removeEventListener('pagehide', markLeft);
@@ -3739,14 +3747,13 @@ onMounted(async () => {
               <!-- 編集・削除はカード下段の専用行に置く (カード本体の
                    フレックス行の最後の要素で、全幅に折り返す)。削除
                    確認が出ている間は隠す (確認のボタンは本体側に出る)。
-                   YouTube チャンネルフィードも見た目は他のフィードと
-                   揃えて削除ボタンを出すが、追加・解除は YouTube 側が
-                   正 (購読同期) のため、押したときの動作だけが違い、
-                   チャンネルをアプリで開く (onDeleteButton)。ジャンル
-                   だけはリーダー側が正 (購読同期は既存行のジャンルに
-                   は触れない) なので、編集は通常どおり出す。判定は
-                   チャンネル ID が取れるかで、プレイリストフィードは
-                   購読同期の対象外のため通常の削除確認へ進む。 -->
+                   YouTube フィード (チャンネル・プレイリスト) も
+                   見た目は他のフィードと揃えて削除ボタンを出すが、
+                   追加・解除や編集は YouTube 側で行うため、押した
+                   ときの動作だけが違い、そのページをアプリで開く
+                   (onDeleteButton)。ジャンルだけはリーダー側が正
+                   (購読同期は既存行のジャンルには触れない) なので、
+                   編集は通常どおり出す。 -->
               <div v-if="confirmDeleteId !== f.id" class="feed-actions feed-card-actions">
                 <button class="ghost" type="button" @click="startEditFeed(f)">編集</button>
                 <button class="ghost danger" type="button" @click="onDeleteButton(f)">削除</button>

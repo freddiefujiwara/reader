@@ -396,6 +396,44 @@ describe('管理画面の YouTube フィード', () => {
     }
   });
 
+  it('プレイリストフィードの削除ボタンも、チャンネルと同じくアプリを開きに行き、開けなければウェブのプレイリストページへフォールバックする', async () => {
+    // FEEDS[3] をプレイリストフィードに差し替える (件数は同じ)。
+    const withPlaylist = FEEDS.map((f, i) =>
+      i === 3
+        ? {
+            ...f,
+            id: 'b64e3e3a21567fe3',
+            title: 'よく聴く曲',
+            url: 'https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjX9efdf',
+            category: '音楽',
+          }
+        : f
+    );
+    listFeeds.mockImplementation(async () => ({ ok: true, feeds: withPlaylist }));
+    listArticles.mockImplementation(async () => ({ ok: true, feeds: withPlaylist, articles: [] }));
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+    try {
+      await mountAdmin();
+      const card = el.querySelectorAll('.feed-card')[3];
+      findButton(card, '削除').click();
+      await flush();
+      expect(errors).toEqual([]);
+      expect(openSpy, '押した直後はウェブを開かない').not.toHaveBeenCalled();
+      expect(card.querySelector('.delete-confirm'), '削除確認は出ない').toBeNull();
+      expect(deleteFeed).not.toHaveBeenCalled();
+      const deadline = Date.now() + 3000;
+      while (!openSpy.mock.calls.length && Date.now() < deadline) {
+        await new Promise((resolve) => { setTimeout(resolve, 50); });
+      }
+      expect(openSpy).toHaveBeenCalledWith('https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjX9efdf', '_blank', 'noopener');
+      expect(errors).toEqual([]);
+    } finally {
+      openSpy.mockRestore();
+      listFeeds.mockImplementation(async () => ({ ok: true, feeds: FEEDS }));
+      listArticles.mockImplementation(async () => ({ ok: true, feeds: FEEDS, articles: [] }));
+    }
+  });
+
   it('YouTube フィードの編集を開くとジャンルだけ変更でき、保存すると元の ID / タイトル / URL のまま saveFeed へ渡る', async () => {
     await mountAdmin();
     const form = await openEdit(1);
