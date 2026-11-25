@@ -16,6 +16,10 @@ import {
   clearLocalArticleAudio,
   markLocalArticlesRead,
   ingestFeedArticles,
+  planTombstones,
+  putLocalTombstones,
+  loadLocalTombstones,
+  deleteLocalTombstones,
   getLocalMeta,
   setLocalMeta,
   planUpserts,
@@ -571,5 +575,58 @@ describe('ingestFeedArticles の削除同期 (syncDeletes)', () => {
     await ingestFeedArticles(ytFeed, [entry('a1'), entry('a2')], FETCHED1, null, { feedComplete: true });
     await ingestFeedArticles(ytFeed, [entry('a1')], FETCHED2, null, { feedComplete: true });
     expect((await rowsOfFeed(ytFeed.id)).length).toBe(2);
+  });
+});
+
+describe('墓標 (掃除で消した既読記事の復活防止)', () => {
+  const FEED = { id: 'tomb-feed', title: 'Tomb' };
+  const FETCHED1 = '2026-11-14T01:00:00.000Z';
+  const FETCHED2 = '2026-11-14T06:00:00.000Z';
+  const READ_AT = '2026-11-14T02:00:00.000Z';
+  const PRUNED_AT = '2026-11-14T03:00:00.000Z';
+  const makeEntries = () => ['a1', 'a2'].map((g) => ({
+    guid: g, title: `title-${g}`, link: `https://example.com/${g}`,
+    publishedAt: '2026-11-13T00:00:00.000Z', summary: '', author: '',
+  }));
+  const rowsOfFeed = async () =>
+    (await loadLocalArticles()).filter((a) => a.feed_id === FEED.id);
+  const tombsOfFeed = async () =>
+    (await loadLocalTombstones()).filter((t) => t.feed_id === FEED.id);
+  const cleanup = async () => {
+    await deleteLocalArticles((await rowsOfFeed()).map((a) => a.id));
+    await deleteLocalTombstones((await tombsOfFeed()).map((t) => t.id));
+  };
+
+  it('既読→掃除 (墓標あり) →再取り込みで既読に戻り、墓標は消費される', async () => {
+    await cleanup();
+    await ingestFeedArticles(FEED, makeEntries(), FETCHED1, null);
+    const target = (await rowsOfFeed()).find((a) => a.title === 'title-a1');
+    await setLocalArticleRead(target.id, true, READ_AT);
+    // App.vue の掃除と同じ手順: 墓標を書いてから記事を消す。
+    const rows = await rowsOfFeed();
+    await putLocalTombstones(planTombstones(rows.filter((a) => a.id === target.id), PRUNED_AT));
+    await deleteLocalArticles([target.id]);
+    expect((await rowsOfFeed()).length).toBe(1);
+    expect((await tombsOfFeed()).length).toBe(1);
+
+    await ingestFeedArticles(FEED, makeEntries(), FETCHED2, null);
+    const back = (await rowsOfFeed()).find((a) => a.id === target.id);
+    expect(back.is_read).toBe(true);
+    expect(back.read_at).toBe(READ_AT);
+    expect(await tombsOfFeed()).toEqual([]);
+    await cleanup();
+  });
+
+  it('墓標が無ければ、消えた既読記事は未読で戻る (対照)', async () => {
+    await cleanup();
+    await ingestFeedArticles(FEED, makeEntries(), FETCHED1, null);
+    const target = (await rowsOfFeed()).find((a) => a.title === 'title-a1');
+    await setLocalArticleRead(target.id, true, READ_AT);
+    await deleteLocalArticles([target.id]);
+
+    await ingestFeedArticles(FEED, makeEntries(), FETCHED2, null);
+    const back = (await rowsOfFeed()).find((a) => a.id === target.id);
+    expect(back.is_read).toBe(false);
+    await cleanup();
   });
 });
