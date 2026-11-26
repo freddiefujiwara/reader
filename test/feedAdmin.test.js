@@ -19,6 +19,7 @@ import {
   normalizeSortDirection,
   normalizeStarMode,
   normalizePastGuard,
+  normalizePruneExempt,
   normalizeStarCount,
   normalizeStarMinSec,
   defaultStarModeForUrl,
@@ -34,7 +35,7 @@ import {
 
 describe('createFeedForm / feedFormFromFeed', () => {
   it('追加フォームは URL とジャンルと並び順 (既定は新しい順)', () => {
-    expect(createFeedForm()).toEqual({ url: '', category: '', sortDirection: 'desc', syncDeletes: false, starMode: '', starCount: '', starMinSec: '', pastGuard: '' });
+    expect(createFeedForm()).toEqual({ url: '', category: '', sortDirection: 'desc', syncDeletes: false, starMode: '', starCount: '', starMinSec: '', pastGuard: '', pruneExempt: '' });
   });
   it('編集フォームは表示用の ID / タイトル / URL と、編集用のジャンルと並び順を持つ', () => {
     const feed = {
@@ -55,7 +56,7 @@ describe('createFeedForm / feedFormFromFeed', () => {
       starMode: '',
       starCount: '',
       starMinSec: '',
-      pastGuard: '',
+      pastGuard: '', pruneExempt: '',
     });
   });
   it('フィードの並び順が asc ならフォームにも asc が入る', () => {
@@ -67,7 +68,7 @@ describe('createFeedForm / feedFormFromFeed', () => {
     expect('enabled' in form).toBe(false);
   });
   it('null フィードでも空フォームになる', () => {
-    expect(feedFormFromFeed(null)).toEqual({ id: '', title: '', url: '', category: '', sortDirection: 'desc', syncDeletes: false, starMode: '', starCount: '', starMinSec: '', pastGuard: '' });
+    expect(feedFormFromFeed(null)).toEqual({ id: '', title: '', url: '', category: '', sortDirection: 'desc', syncDeletes: false, starMode: '', starCount: '', starMinSec: '', pastGuard: '', pruneExempt: '' });
   });
 });
 
@@ -285,7 +286,7 @@ describe('resolveFeedAddForm (取得結果でタイトルを決める)', () => {
     const resolved = resolveFeedAddForm({ url: ` ${url} `, category: ' tech ' }, { xml: RSS });
     expect(resolved).toEqual({
       ok: true,
-      form: { url, category: 'tech', sortDirection: 'desc', syncDeletes: false, starMode: '', starCount: null, starMinSec: null, pastGuard: '', title: 'Rebuild' },
+      form: { url, category: 'tech', sortDirection: 'desc', syncDeletes: false, starMode: '', starCount: null, starMinSec: null, pastGuard: '', pruneExempt: '', title: 'Rebuild' },
     });
     expect('id' in resolved.form).toBe(false);
   });
@@ -312,7 +313,7 @@ describe('buildSaveFeedPayload', () => {
       starMode: '',
       starCount: null,
       starMinSec: null,
-      pastGuard: '',
+      pastGuard: '', pruneExempt: '',
     });
     expect('id' in payload).toBe(false);
   });
@@ -331,7 +332,7 @@ describe('buildSaveFeedPayload', () => {
       starMode: '',
       starCount: null,
       starMinSec: null,
-      pastGuard: '',
+      pastGuard: '', pruneExempt: '',
     });
     expect('id' in payload).toBe(false);
   });
@@ -366,7 +367,7 @@ describe('buildSaveFeedPayload', () => {
       starMode: '',
       starCount: null,
       starMinSec: null,
-      pastGuard: '',
+      pastGuard: '', pruneExempt: '',
     });
   });
   it('編集でタイトルを空にすると、元のタイトルのまま送る', () => {
@@ -764,8 +765,34 @@ describe('過去分ガード (pastGuard) のフォームとペイロード', () 
     expect(buildSaveFeedPayload({ title: 'T', url: 'https://example.com/f', category: '', pastGuard: 'read' }).pastGuard).toBe('read');
   });
   it('過去分ガードだけの変更でも編集フォームは変更ありになる', () => {
-    const original = { title: 'X', category: '', sortDirection: 'desc', syncDeletes: false, pastGuard: '' };
+    const original = { title: 'X', category: '', sortDirection: 'desc', syncDeletes: false, pastGuard: '', pruneExempt: '' };
     expect(isFeedFormDirty(original, { ...original, pastGuard: 'read' })).toBe(true);
+    expect(isFeedFormDirty(original, { ...original })).toBe(false);
+  });
+});
+
+describe('ローカル掃除の対象外 (pruneExempt) のフォームとペイロード', () => {
+  it('正規化: on/off か未指定', () => {
+    expect(normalizePruneExempt(' ON ')).toBe('on');
+    expect(normalizePruneExempt('off')).toBe('off');
+    expect(normalizePruneExempt('junk')).toBe('');
+    expect(normalizePruneExempt(null)).toBe('');
+  });
+  it('フィードの設定がフォームに入り、未指定は空になる', () => {
+    const form = feedFormFromFeed({ id: 'x', title: 'X', url: 'https://example.com/f', category: '', pruneExempt: 'on' });
+    expect(form.pruneExempt).toBe('on');
+    const bare = feedFormFromFeed({ id: 'x', title: 'X', url: 'https://example.com/f', category: '' });
+    expect(bare.pruneExempt).toBe('');
+  });
+  it('ペイロードには常に入り、未指定は空文字', () => {
+    const base = { id: 'x', title: 'X', url: 'https://example.com/f', category: '' };
+    expect(buildSaveFeedPayload({ category: '', pruneExempt: 'off' }, base).pruneExempt).toBe('off');
+    expect(buildSaveFeedPayload({ category: '' }, base).pruneExempt).toBe('');
+    expect(buildSaveFeedPayload({ title: 'T', url: 'https://example.com/f', category: '', pruneExempt: 'on' }).pruneExempt).toBe('on');
+  });
+  it('対象外だけの変更でも編集フォームは変更ありになる', () => {
+    const original = { title: 'X', category: '', sortDirection: 'desc', syncDeletes: false, pastGuard: '', pruneExempt: '' };
+    expect(isFeedFormDirty(original, { ...original, pruneExempt: 'on' })).toBe(true);
     expect(isFeedFormDirty(original, { ...original })).toBe(false);
   });
 });

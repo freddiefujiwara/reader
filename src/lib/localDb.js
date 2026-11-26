@@ -9,6 +9,7 @@ import { feedIdFromUrl } from './feedHash.js';
 import {
   isYouTubeFeedUrl,
   normalizePastGuard,
+  normalizePruneExempt,
   youtubeChannelIdFromUrl,
   youtubePlaylistIdFromUrl,
   youtubeVideoIdFromLink,
@@ -134,6 +135,17 @@ export function effectivePastGuard(feed) {
   const mode = normalizePastGuard(feed && feed.pastGuard);
   if (mode) return mode;
   return isYouTubeManagedFeed(feed) ? 'read' : 'skip';
+}
+
+// ローカル掃除の対象外かどうか (純関数)。フィード設定 (pruneExempt)
+// があればそれを使い ('on' = 対象外、'off' = 対象)、未指定なら種別
+// 既定に倒す: YouTube 由来は対象外、それ以外は対象。YouTube を対象外
+// にするのは、最新分しか再配信されず、掃除で消した曲が二度と戻ら
+// ないため (保持ルールは「消しても再配信で戻る」前提で組まれている)。
+export function effectivePruneExempt(feed) {
+  const v = normalizePruneExempt(feed && feed.pruneExempt);
+  if (v) return v === 'on';
+  return isYouTubeManagedFeed(feed);
 }
 
 // 過去分 (アーカイブ) のエントリかどうか。公開日時が、取り込み時点から

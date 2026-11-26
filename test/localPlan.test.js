@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   planUpserts,
   effectivePastGuard,
+  effectivePruneExempt,
   planLocalPrune,
   planTombstones,
   planTombstonePrune,
@@ -212,6 +213,19 @@ describe('effectivePastGuard', () => {
     // 不正値・null (サーバー未対応) は未指定として種別既定に倒す。
     expect(effectivePastGuard({ ...FEED, pastGuard: null })).toBe('skip');
     expect(effectivePastGuard({ ...FEED, pastGuard: 'junk' })).toBe('skip');
+  });
+});
+
+describe('effectivePruneExempt', () => {
+  it('未指定なら種別既定 (通常=対象、YouTube=対象外)、保存値があればそれを使う', () => {
+    expect(effectivePruneExempt(FEED)).toBe(false);
+    expect(effectivePruneExempt({ id: 'yt1', url: 'https://www.youtube.com/channel/UC0123456789ab' })).toBe(true);
+    expect(effectivePruneExempt({ id: 'yt2', url: 'https://www.youtube.com/playlist?list=PL0123456789ab' })).toBe(true);
+    expect(effectivePruneExempt({ ...FEED, pruneExempt: 'on' })).toBe(true);
+    expect(effectivePruneExempt({ id: 'yt1', url: 'https://www.youtube.com/channel/UC0123456789ab', pruneExempt: 'off' })).toBe(false);
+    // 不正値・null (サーバー未対応) は未指定として種別既定に倒す。
+    expect(effectivePruneExempt({ ...FEED, pruneExempt: null })).toBe(false);
+    expect(effectivePruneExempt({ ...FEED, pruneExempt: 'junk' })).toBe(false);
   });
 });
 
