@@ -221,7 +221,11 @@ export async function planUpserts(existingById, entries, feed, fetchedAtIso, tom
 // ローカルの保持ルール: 既読記事は「取り込んでから60日」を過ぎたら消す。
 // 合計が上限を超える場合は、新しい順に残して古い既読から消す。
 // 未読は日数でも件数でも消さない (サーバー側 prunePlan と同じ考え方)。
-export function planLocalPrune(articles, nowIso, { retentionDays = RETENTION_DAYS, maxArticles = MAX_ARTICLES } = {}) {
+// exemptFeedIds に挙がったフィードの記事は、日数でも件数でも消さない。
+// YouTube のように配信側が最新分しか再配信しないフィードでは、消した
+// 記事は二度と戻らない (「消しても再配信で戻る」前提が成り立たない)
+// ため、呼び出し側がそれらのフィードを対象外として渡す。
+export function planLocalPrune(articles, nowIso, { retentionDays = RETENTION_DAYS, maxArticles = MAX_ARTICLES, exemptFeedIds = null } = {}) {
   const now = nowIso ? Date.parse(nowIso) : Date.now();
   const retentionMs = retentionDays * 24 * 60 * 60 * 1000;
   // レコードでない要素は計画の対象にしない (ID が無く、消しようがない)。
@@ -232,6 +236,7 @@ export function planLocalPrune(articles, nowIso, { retentionDays = RETENTION_DAY
   const ids = [];
   list.forEach((a) => {
     if (!a.is_read) return;
+    if (exemptFeedIds && exemptFeedIds.has(a.feed_id)) return;
     const t = parseTimeMs(a.fetched_at || a.published_at);
     const tooOld = t > 0 && now - t > retentionMs;
     if (tooOld || !keepRank[a.id]) ids.push(a.id);

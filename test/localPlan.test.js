@@ -366,6 +366,21 @@ describe('planLocalPrune', () => {
     ];
     expect(planLocalPrune(articles, NOW, { maxArticles: 2 })).toEqual(['read-old']);
   });
+  it('対象外フィードの既読は、日数でも件数でも消さない', () => {
+    const exemptOld = rec('exempt-old', {
+      feed_id: 'yt', published_at: '2020-01-01T00:00:00.000Z', fetched_at: '2020-01-01T00:00:00.000Z',
+    });
+    const normalOld = rec('normal-old', {
+      published_at: '2020-01-01T00:00:00.000Z', fetched_at: '2020-01-01T00:00:00.000Z',
+    });
+    const exemptFeedIds = new Set(['yt']);
+    // 60日超 (日数) でも消えない。通常フィードの同時刻の既読は消える。
+    expect(planLocalPrune([exemptOld, normalOld], NOW, { exemptFeedIds })).toEqual(['normal-old']);
+    // 上限超過 (件数) でも消えない。
+    expect(planLocalPrune([exemptOld, normalOld], NOW, { maxArticles: 1, exemptFeedIds })).toEqual(['normal-old']);
+    // 対象外を指定しなければ、どちらも消える (従来どおり)。
+    expect(planLocalPrune([exemptOld, normalOld], NOW)).toEqual(['exempt-old', 'normal-old']);
+  });
 });
 
 describe('planOrphanArticles / articleRecordToView', () => {

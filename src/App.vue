@@ -832,9 +832,16 @@ async function refreshOnce() {
 
     // 保持ルール (既読60日・上限) でローカルを掃除する。消す既読記事は
     // 墓標を残し、フィードが再配信しても未読として復活させない。
+    // YouTube フィードは最新分しか再配信されず、消した曲は戻らない
+    // ため、掃除の対象から外す。
     const pruneNow = new Date().toISOString();
     const allArticles = await loadLocalArticles();
-    const pruneIds = planLocalPrune(allArticles, pruneNow);
+    const pruneExemptFeedIds = new Set(
+      feeds
+        .filter((f) => youtubeChannelIdFromUrl(f.url) || youtubePlaylistIdFromUrl(f.url))
+        .map((f) => f.id)
+    );
+    const pruneIds = planLocalPrune(allArticles, pruneNow, { exemptFeedIds: pruneExemptFeedIds });
     if (pruneIds.length) {
       const pruneSet = new Set(pruneIds);
       await putLocalTombstones(planTombstones(allArticles.filter((a) => pruneSet.has(a.id)), pruneNow));
