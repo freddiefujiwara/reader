@@ -839,6 +839,7 @@ describe('管理画面の YouTube チャンネル URL 追加', () => {
       starCount: null,
       starMinSec: null,
       pastGuard: '',
+      pruneExempt: '',
     });
     // 保存後はフォームが閉じ、サーバーが返した解決済みフィードが一覧に出る。
     expect(el.querySelector('.feed-form'), '保存後はフォームが閉じる').toBeNull();
@@ -946,6 +947,7 @@ describe('管理画面の YouTube プレイリストフィード', () => {
       starCount: null,
       starMinSec: null,
       pastGuard: '',
+      pruneExempt: '',
     });
     expect(el.querySelector('.feed-form'), '保存後はフォームが閉じる').toBeNull();
     const titles = [...el.querySelectorAll('.feed-card .feed-name')].map((n) => n.textContent.trim());
@@ -1033,6 +1035,25 @@ describe('管理画面の YouTube プレイリストフィード', () => {
     expect(saveFeed).toHaveBeenCalledTimes(1);
     const [, payload] = saveFeed.mock.calls[0];
     expect(payload).toMatchObject({ pastGuard: 'off' });
+  });
+
+  it('古い既読の掃除は通常フィード・YouTube系のどちらにも出て、変更が保存ペイロードに乗る', async () => {
+    await mountAdmin();
+    const form = await openEdit(0);
+    expect(errors).toEqual([]);
+    const select = form.querySelector('#feed-prune-exempt');
+    expect(select, '通常フィードでも掃除のセレクトが出る').toBeTruthy();
+    expect(select.value).toBe('');
+    select.value = 'on';
+    select.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await flush();
+    form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+    await flush();
+    await flush();
+    expect(errors).toEqual([]);
+    expect(saveFeed).toHaveBeenCalledTimes(1);
+    const [, payload] = saveFeed.mock.calls[0];
+    expect(payload).toMatchObject({ pruneExempt: 'on' });
   });
 
   it('通常フィードの編集ではスター選定は出ない', async () => {

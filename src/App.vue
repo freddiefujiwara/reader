@@ -67,6 +67,7 @@ import {
   closeLocalDb,
   deleteLocalArticles,
   deleteLocalTombstones,
+  effectivePruneExempt,
   getLocalMeta,
   ingestFeedArticles,
   loadLocalArticles,
@@ -832,14 +833,13 @@ async function refreshOnce() {
 
     // 保持ルール (既読60日・上限) でローカルを掃除する。消す既読記事は
     // 墓標を残し、フィードが再配信しても未読として復活させない。
-    // YouTube フィードは最新分しか再配信されず、消した曲は戻らない
-    // ため、掃除の対象から外す。
+    // 掃除の対象外はフィード設定 (pruneExempt) で決める。未指定の
+    // 既定は YouTube = 対象外 (最新分しか再配信されず、消した曲が
+    // 戻らないため)、それ以外 = 対象。
     const pruneNow = new Date().toISOString();
     const allArticles = await loadLocalArticles();
     const pruneExemptFeedIds = new Set(
-      feeds
-        .filter((f) => youtubeChannelIdFromUrl(f.url) || youtubePlaylistIdFromUrl(f.url))
-        .map((f) => f.id)
+      feeds.filter((f) => effectivePruneExempt(f)).map((f) => f.id)
     );
     const pruneIds = planLocalPrune(allArticles, pruneNow, { exemptFeedIds: pruneExemptFeedIds });
     if (pruneIds.length) {
@@ -2846,6 +2846,7 @@ async function reflectSavedFeedToTimeline(payload) {
     starCount: payload.starCount,
     starMinSec: payload.starMinSec,
     pastGuard: payload.pastGuard,
+    pruneExempt: payload.pruneExempt,
   });
   state.value = { ...state.value, feeds: patch(state.value.feeds) };
   const cached = await loadLocalFeeds();
@@ -3671,6 +3672,15 @@ onMounted(async () => {
                 <option value="off">未読として取り込む（ガードなし）</option>
               </select>
               <p class="field-note">公開から60日を過ぎた記事を、まだ端末に無いときにどう取り込むかです。自動の既定は、通常のフィードは「取り込まない」、YouTubeは「既読として取り込む」です。</p>
+            </div>
+            <div class="field">
+              <label for="feed-prune-exempt">古い既読の掃除</label>
+              <select id="feed-prune-exempt" v-model="form.pruneExempt">
+                <option value="">自動（種別ごとの既定）</option>
+                <option value="on">掃除しない（残す）</option>
+                <option value="off">掃除する</option>
+              </select>
+              <p class="field-note">既読の記事は、取り込んでから60日を過ぎるか、全体の上限を超えると端末から消えます。自動の既定は、YouTubeは「掃除しない」（最新分しか再配信されず、消すと戻らないため）、それ以外は「掃除する」です。</p>
             </div>
             <p v-if="formError" class="error">{{ formError }}</p>
             <div class="form-actions">

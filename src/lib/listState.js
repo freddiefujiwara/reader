@@ -126,6 +126,7 @@ const FEED_ATTR_NORMALIZERS = {
   starCount: (v) => (Number.isInteger(v) ? v : null),
   starMinSec: (v) => (Number.isInteger(v) ? v : null),
   pastGuard: (v) => (v === 'skip' || v === 'read' || v === 'off' ? v : null),
+  pruneExempt: (v) => (v === 'on' || v === 'off' ? v : null),
 };
 
 export function patchFeedAttrs(feeds, feedId, fields) {

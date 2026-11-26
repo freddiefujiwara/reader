@@ -186,6 +186,19 @@ describe('patchFeedAttrs', () => {
     expect(patchFeedAttrs(feeds, 'b', { pastGuard: '' })[1].pastGuard).toBe(null);
     expect(patchFeedAttrs(feeds, 'b', { pastGuard: null })[1].pastGuard).toBe(null);
   });
+  it('掃除の対象外は API の形に寄せて差し替える', () => {
+    const feeds = [
+      { id: 'a', pruneExempt: null },
+      { id: 'b', pruneExempt: 'on' },
+    ];
+    const next = patchFeedAttrs(feeds, 'a', { pruneExempt: 'off' });
+    expect(next[0].pruneExempt).toBe('off');
+    expect(next[1].pruneExempt).toBe('on');
+    expect(feeds[0].pruneExempt).toBe(null);
+    // ペイロードの未指定 (空文字) は null に寄せる。
+    expect(patchFeedAttrs(feeds, 'b', { pruneExempt: '' })[1].pruneExempt).toBe(null);
+    expect(patchFeedAttrs(feeds, 'b', { pruneExempt: null })[1].pruneExempt).toBe(null);
+  });
   it('fields に含まれるキーだけを差し替え、含まれない属性は保つ', () => {
     const feeds = [{ id: 'a', category: '個人', sortDirection: 'asc', pastGuard: 'off' }];
     const next = patchFeedAttrs(feeds, 'a', { category: '川口' });
