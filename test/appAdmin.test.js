@@ -157,7 +157,7 @@ describe('管理画面の編集フォーム', () => {
     expect(errors).toEqual([]);
     expect(form, '編集フォームが開く').toBeTruthy();
     expect(form.querySelector('.feed-form-title').textContent).toContain('フィードを編集');
-    expect(form.querySelector('.field-static').textContent).toBe('Rebuild');
+    expect(form.querySelector('#feed-title').value).toBe('Rebuild');
     expect(form.querySelector('#feed-category').value).toBe('ポッドキャスト');
     // 開いたフォーム自体へ scrollIntoView されている (画面外に開きっぱなしにしない)。
     const call = scrollCalls.find((c) => c.el === form);
@@ -165,8 +165,8 @@ describe('管理画面の編集フォーム', () => {
     expect(call.opts).toMatchObject({ block: 'start' });
   });
 
-  it('タイトル未取得のフィードでは「（未取得）」と表示して開ける', async () => {
-    // 「（未取得）」の表示はフィード種別に依らないことの確認として、
+  it('タイトル未取得のフィードではタイトル欄が空で開ける', async () => {
+    // タイトル欄の初期値はフィード種別に依らないことの確認として、
     // FEEDS[1] (YouTube) をタイトル未取得の非 YouTube フィードに
     // 差し替えて確かめる。
     const untitled = FEEDS.map((f, i) =>
@@ -178,11 +178,31 @@ describe('管理画面の編集フォーム', () => {
       const form = await openEdit(1);
       expect(errors).toEqual([]);
       expect(form, '編集フォームが開く').toBeTruthy();
-      expect(form.querySelector('.field-static').textContent).toBe('（未取得）');
+      expect(form.querySelector('#feed-title').value).toBe('');
       expect(scrollCalls.some((c) => c.el === form)).toBe(true);
     } finally {
       listFeeds.mockImplementation(async () => ({ ok: true, feeds: FEEDS }));
     }
+  });
+
+  it('タイトルを変更して保存すると、新しいタイトルが saveFeed へ渡る', async () => {
+    await mountAdmin();
+    const form = await openEdit(0);
+    const input = form.querySelector('#feed-title');
+    input.value = '私の Rebuild';
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+    form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+    await flush();
+    await flush();
+    expect(errors).toEqual([]);
+    expect(saveFeed).toHaveBeenCalledTimes(1);
+    const [, payload] = saveFeed.mock.calls[0];
+    expect(payload).toMatchObject({
+      id: FEEDS[0].id,
+      title: '私の Rebuild',
+      url: 'https://feeds.rebuild.fm/rebuildfm',
+    });
+    expect(el.querySelector('.feed-form'), '保存後はフォームが閉じる').toBeNull();
   });
 
   it('ジャンルを変更して保存すると、元の ID / タイトル / URL のまま saveFeed へ渡り、フォームが閉じる', async () => {
@@ -396,14 +416,14 @@ describe('管理画面の YouTube フィード', () => {
     }
   });
 
-  it('YouTube フィードの編集を開くとジャンルだけ変更でき、保存すると元の ID / タイトル / URL のまま saveFeed へ渡る', async () => {
+  it('YouTube フィードの編集を開くとタイトルとジャンルを変更でき、保存すると元の ID / URL のまま saveFeed へ渡る', async () => {
     await mountAdmin();
     const form = await openEdit(1);
     expect(errors).toEqual([]);
     expect(form, '編集フォームが開く').toBeTruthy();
     expect(form.querySelector('.feed-form-title').textContent).toContain('フィードを編集');
-    // タイトルと URL は表示専用で、入力欄はジャンルだけ。
-    expect(form.querySelectorAll('.field-static').length).toBe(2);
+    // URL は表示専用で、入力欄はタイトルとジャンル。
+    expect(form.querySelectorAll('.field-static').length).toBe(1);
     expect(form.querySelector('#feed-url')).toBeNull();
     expect(form.querySelector('#feed-category').value).toBe('教養・ラジオ');
     // URL の注記は、削除できない YouTube 向けの文言になる。

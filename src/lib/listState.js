@@ -118,6 +118,7 @@ export function planArticleJump(state, article, displayLimit) {
 // patchFeedSortDirection / patchFeedSyncDeletes / patchFeedStarSettings /
 // patchFeedPastGuard の寄せをここへ集約した)。
 const FEED_ATTR_NORMALIZERS = {
+  title: (v) => String(v || ''),
   category: (v) => String(v || ''),
   sortDirection: (v) => (v === 'asc' ? 'asc' : 'desc'),
   syncDeletes: (v) => v === true,
