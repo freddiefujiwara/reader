@@ -330,9 +330,15 @@ describe('property: localDb の計画とプレイヤーのキュー', () => {
   });
 
   it('planOrphanArticles は、生きているフィードの記事を決して返さない', () => {
+    // 記事 ID は IndexedDB の主キーなので、同じ ID の記事は共存しない。
+    // 生成器の短い ID は衝突しうるため、添字を付けて一意化してから
+    // 渡す (同一 ID が別フィードに現れる入力は実在しない)。
+    const uniqueRecordsArb = fc
+      .array(fc.oneof(recordArb, fc.constant(null)), { maxLength: 10 })
+      .map((rs) => rs.map((r, i) => (r ? { ...r, id: `${r.id}#${i}` } : r)));
     fc.assert(
       fc.property(
-        fc.array(fc.oneof(recordArb, fc.constant(null)), { maxLength: 10 }),
+        uniqueRecordsArb,
         fc.subarray(['f1', 'f2']),
         (records, live) => {
           const ids = new Set(planOrphanArticles(records, live));
