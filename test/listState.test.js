@@ -128,6 +128,16 @@ describe('sortArticlesAsc', () => {
 });
 
 describe('patchFeedAttrs', () => {
+  it('タイトルも差し替える', () => {
+    const feeds = [
+      { id: 'a', title: '旧い名前' },
+      { id: 'b', title: 'そのまま' },
+    ];
+    const next = patchFeedAttrs(feeds, 'a', { title: '新しい名前' });
+    expect(next[0].title).toBe('新しい名前');
+    expect(next[1].title).toBe('そのまま');
+    expect(feeds[0].title).toBe('旧い名前');
+  });
   it('並び順は asc / desc に寄せて差し替える', () => {
     const feeds = [
       { id: 'a', sortDirection: 'desc' },

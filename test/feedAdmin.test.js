@@ -344,7 +344,7 @@ describe('buildSaveFeedPayload', () => {
     expect(payload.title).toBe('');
     expect('id' in payload).toBe(false);
   });
-  it('編集時は ID / タイトル / URL は元を引き継ぎ、ジャンルと並び順をフォームから取る', () => {
+  it('編集時は ID / URL は元を引き継ぎ、タイトルとジャンルと並び順をフォームから取る', () => {
     const base = {
       id: 'b81e59da11f890d2',
       title: 'Rebuild',
@@ -353,12 +353,12 @@ describe('buildSaveFeedPayload', () => {
       enabled: true,
     };
     const payload = buildSaveFeedPayload(
-      { id: '書き換えたふり', title: '書き換えたふり', url: 'https://evil.example/', category: ' new ', enabled: false },
+      { id: '書き換えたふり', title: ' 新しいタイトル ', url: 'https://evil.example/', category: ' new ', enabled: false },
       base
     );
     expect(payload).toEqual({
       id: 'b81e59da11f890d2',
-      title: 'Rebuild',
+      title: '新しいタイトル',
       url: 'https://feeds.rebuild.fm/rebuildfm',
       category: 'new',
       sortDirection: 'desc',
@@ -368,6 +368,11 @@ describe('buildSaveFeedPayload', () => {
       starMinSec: null,
       pastGuard: '',
     });
+  });
+  it('編集でタイトルを空にすると、元のタイトルのまま送る', () => {
+    const base = { id: 'x', title: 'X', url: 'https://example.com/f', category: '' };
+    expect(buildSaveFeedPayload({ title: '  ', category: '' }, base).title).toBe('X');
+    expect(buildSaveFeedPayload({ category: '' }, base).title).toBe('X');
   });
   it('並び順 asc は追加・編集どちらのペイロードにも入る', () => {
     const added = buildSaveFeedPayload({ title: 'T', url: 'https://example.com/f', category: '', sortDirection: 'asc' });

@@ -2831,6 +2831,7 @@ async function reflectSavedFeedToTimeline(payload) {
   const id = payload?.id;
   if (!id) return;
   const patch = (feeds) => patchFeedAttrs(feeds, id, {
+    title: payload.title,
     category: payload.category,
     sortDirection: payload.sortDirection,
     syncDeletes: payload.syncDeletes,
@@ -3125,7 +3126,7 @@ async function saveFeedForm(payload) {
 
 async function submitFeedForm() {
   if (formSaving.value || formFetching.value) return;
-  // 編集はジャンルと並び順だけ (ID・タイトル・URL は変更できない)。
+  // 編集はタイトル・ジャンル・並び順と各種設定 (ID・URL は変更できない)。
   if (formMode.value === 'edit') {
     // 未変更では保存しない (ボタンも非活性だが、入力欄からの
     // Enter 送信でも同じにそろえる)。
@@ -3554,8 +3555,14 @@ onMounted(async () => {
             <h2 class="feed-form-title">{{ formMode === 'edit' ? 'フィードを編集' : 'フィードを追加' }}</h2>
             <template v-if="formMode === 'edit'">
               <div class="field">
-                <span class="field-label">タイトル</span>
-                <p class="field-static">{{ form.title || '（未取得）' }}</p>
+                <label for="feed-title">タイトル</label>
+                <input
+                  id="feed-title"
+                  v-model="form.title"
+                  type="text"
+                  autocomplete="off"
+                />
+                <p class="field-note">空にすると、現在のタイトルのままになります。</p>
               </div>
               <div class="field">
                 <span class="field-label">URL</span>

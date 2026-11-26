@@ -4,7 +4,8 @@
 // フォームが扱うのは URL とジャンル (サーバー側の category) と
 // 並び順 (sortDirection) と削除同期 (syncDeletes) とスター選定
 // (starMode / starCount / starMinSec) と過去分ガード (pastGuard) だけ。
-// タイトルはフィードからの自動取得のみで、人は入力しない。
+// タイトルは追加時はフィードからの自動取得のみで、編集では人が
+// 書き換えられる。
 import { formatPublishedAt } from './format.js';
 import { parseFeedMeta } from './feedParse.js';
 
@@ -88,8 +89,9 @@ export function createFeedForm() {
   };
 }
 
-// 編集フォーム初期値。ID / タイトル / URL は表示専用 (変更できない)、
-// ジャンルと並び順と削除同期とスター選定と過去分ガードだけが編集対象。
+// 編集フォーム初期値。ID と URL は表示専用 (変更できない)、
+// タイトルとジャンルと並び順と削除同期とスター選定と過去分ガードが
+// 編集対象。
 // 本数・下限は未指定を '' (入力欄は空 = 既定値) で表す。
 export function feedFormFromFeed(feed) {
   return {
@@ -292,7 +294,9 @@ export function buildSaveFeedPayload(form, base = null) {
   if (base) {
     return {
       id: base.id,
-      title: base.title || '',
+      // タイトルはフォームの値を使う。空 (空白だけ) のときは元の
+      // タイトルのままにする (空で上書きしない)。
+      title: String(form?.title || '').trim() || (base.title || ''),
       url: base.url || '',
       category: String(form?.category || '').trim(),
       sortDirection: normalizeSortDirection(form?.sortDirection),
