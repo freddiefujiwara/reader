@@ -51,8 +51,8 @@ export function normalizeStarMinSec(value) {
 // 過去分ガードの正規化: 'skip' (取り込まない) / 'read' (既読として
 // 取り込む) / 'off' (未読として取り込む = ガードなし) か、未指定は ''。
 // サーバー側 (reader-gas の normalizePastGuard) と同じ規則。実効値の
-// 解決 (種別既定への fallback) は取り込み側 (localDb の
-// effectivePastGuard) が行う。
+// 解決は取り込み側 (localDb の effectivePastGuard) が行う (保存値
+// だけで決め、未指定は 'skip')。
 export function normalizePastGuard(value) {
   const v = String(value ?? '').trim().toLowerCase();
   return v === 'skip' || v === 'read' || v === 'off' ? v : '';
@@ -60,49 +60,57 @@ export function normalizePastGuard(value) {
 
 // ローカル掃除の対象外の正規化: 'on' (掃除しない) / 'off' (掃除する)
 // か、未指定は ''。サーバー側 (reader-gas の normalizePruneExempt) と
-// 同じ規則。実効値の解決 (種別既定への fallback) は掃除側 (localDb
-// の effectivePruneExempt) が行う。
+// 同じ規則。実効値の解決は掃除側 (localDb の effectivePruneExempt)
+// が行う (設定だけで決め、種別既定は持たない)。
 export function normalizePruneExempt(value) {
   const v = String(value ?? '').trim().toLowerCase();
   return v === 'on' || v === 'off' ? v : '';
 }
-
-// 本人のチャンネル (reader-gas の YT_AUDIO_ALWAYS_CHANNEL_ID と同じ)。
-// 種別既定では全件クラスになる。
-export const OWN_YOUTUBE_CHANNEL_ID = 'UCbiDZXbr391oT_vsRiqwPFg';
 
 // スター選定の既定値 (reader-gas の YT_AUDIO_TRIGGER_PER_FEED /
 // YT_AUDIO_TRIGGER_MIN_DURATION_SEC と同じ)。
 export const STAR_DEFAULT_COUNT = 3;
 export const STAR_DEFAULT_MIN_SEC = 90;
 
-// 種別ごとの既定モード: プレイリストと本人のチャンネルは全件、
-// 通常チャンネルは新しい順、それ以外はなし。
-export function defaultStarModeForUrl(url) {
-  if (youtubePlaylistIdFromUrl(url)) return 'all';
-  const channelId = youtubeChannelIdFromUrl(url);
-  if (!channelId) return 'none';
-  return channelId === OWN_YOUTUBE_CHANNEL_ID ? 'all' : 'recent';
+// 実効モード: 保存値だけで決める。未指定は 'none' (種別ごとの
+// 既定は持たない)。
+export function effectiveStarMode(feed) {
+  return normalizeStarMode(feed?.starMode) || 'none';
 }
 
-// 実効モード: 保存値があればそれ、無ければ種別既定。
-export function effectiveStarMode(feed) {
-  return normalizeStarMode(feed?.starMode) || defaultStarModeForUrl(feed?.url);
+// 新規追加フォームの初期値の提案 (URL の種別から)。「自動」という
+// 状態は持たず、フォームに表示される具体値として入れる。保存され
+// ればそのまま設定になる。利用者が触った項目には適用しない
+// (適用範囲の管理は App.vue 側)。
+export function suggestedSettingsForUrl(url) {
+  const base = { starCount: STAR_DEFAULT_COUNT, starMinSec: STAR_DEFAULT_MIN_SEC };
+  if (youtubePlaylistIdFromUrl(url)) {
+    return { ...base, starMode: 'all', pastGuard: 'read', pruneExempt: 'on' };
+  }
+  if (youtubeChannelIdFromUrl(url)) {
+    return { ...base, starMode: 'recent', pastGuard: 'read', pruneExempt: 'on' };
+  }
+  return { ...base, starMode: 'recent', pastGuard: 'skip', pruneExempt: 'off' };
 }
 
 // 新規追加フォームの初期値。扱うのは URL とジャンルと並び順と
 // 削除同期とスター選定と過去分ガードとローカル掃除の対象外だけ。
+// 設定項目は「自動」を持たず、常に具体値で始める (URL が YouTube
+// と分かった時点で、触っていない項目には suggestedSettingsForUrl
+// の提案が入る)。
 export function createFeedForm() {
   return {
     url: '', category: '', sortDirection: 'desc', syncDeletes: false,
-    starMode: '', starCount: '', starMinSec: '', pastGuard: '', pruneExempt: '',
+    starMode: 'recent', starCount: STAR_DEFAULT_COUNT, starMinSec: STAR_DEFAULT_MIN_SEC,
+    pastGuard: 'skip', pruneExempt: 'off',
   };
 }
 
 // 編集フォーム初期値。ID と URL は表示専用 (変更できない)、
 // タイトルとジャンルと並び順と削除同期とスター選定と過去分ガードと
 // ローカル掃除の対象外が編集対象。
-// 本数・下限は未指定を '' (入力欄は空 = 既定値) で表す。
+// 設定項目は「自動」を持たないため、未指定の項目は一律の初期値で
+// 埋めて表示する (保存すれば、その値がそのまま設定になる)。
 export function feedFormFromFeed(feed) {
   return {
     id: feed?.id || '',
@@ -111,11 +119,11 @@ export function feedFormFromFeed(feed) {
     category: feed?.category || '',
     sortDirection: normalizeSortDirection(feed?.sortDirection),
     syncDeletes: normalizeSyncDeletes(feed?.syncDeletes),
-    starMode: normalizeStarMode(feed?.starMode),
-    starCount: normalizeStarCount(feed?.starCount) ?? '',
-    starMinSec: normalizeStarMinSec(feed?.starMinSec) ?? '',
-    pastGuard: normalizePastGuard(feed?.pastGuard),
-    pruneExempt: normalizePruneExempt(feed?.pruneExempt),
+    starMode: normalizeStarMode(feed?.starMode) || 'recent',
+    starCount: normalizeStarCount(feed?.starCount) ?? STAR_DEFAULT_COUNT,
+    starMinSec: normalizeStarMinSec(feed?.starMinSec) ?? STAR_DEFAULT_MIN_SEC,
+    pastGuard: normalizePastGuard(feed?.pastGuard) || 'skip',
+    pruneExempt: normalizePruneExempt(feed?.pruneExempt) || 'off',
   };
 }
 
@@ -344,16 +352,24 @@ export function buildSaveFeedPayload(form, base = null) {
 export function isFeedFormDirty(original, form) {
   if (!original || !form) return true;
   const norm = (v) => String(v ?? '').trim();
+  // 設定項目は、フォーム初期値 (feedFormFromFeed) と同じ一律の埋め方で
+  // 両辺をそろえてから比べる (未指定の元フィードと、初期値で埋めた
+  // フォームが「変更あり」にならないように)。
+  const starModeOf = (o) => normalizeStarMode(o?.starMode) || 'recent';
+  const starCountOf = (o) => normalizeStarCount(o?.starCount) ?? STAR_DEFAULT_COUNT;
+  const starMinSecOf = (o) => normalizeStarMinSec(o?.starMinSec) ?? STAR_DEFAULT_MIN_SEC;
+  const pastGuardOf = (o) => normalizePastGuard(o?.pastGuard) || 'skip';
+  const pruneExemptOf = (o) => normalizePruneExempt(o?.pruneExempt) || 'off';
   return (
     norm(original.title) !== norm(form.title) ||
     norm(original.category) !== norm(form.category) ||
     normalizeSortDirection(original.sortDirection) !== normalizeSortDirection(form.sortDirection) ||
     normalizeSyncDeletes(original.syncDeletes) !== normalizeSyncDeletes(form.syncDeletes) ||
-    normalizeStarMode(original.starMode) !== normalizeStarMode(form.starMode) ||
-    normalizeStarCount(original.starCount) !== normalizeStarCount(form.starCount) ||
-    normalizeStarMinSec(original.starMinSec) !== normalizeStarMinSec(form.starMinSec) ||
-    normalizePastGuard(original.pastGuard) !== normalizePastGuard(form.pastGuard) ||
-    normalizePruneExempt(original.pruneExempt) !== normalizePruneExempt(form.pruneExempt)
+    starModeOf(original) !== starModeOf(form) ||
+    starCountOf(original) !== starCountOf(form) ||
+    starMinSecOf(original) !== starMinSecOf(form) ||
+    pastGuardOf(original) !== pastGuardOf(form) ||
+    pruneExemptOf(original) !== pruneExemptOf(form)
   );
 }
 

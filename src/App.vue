@@ -37,6 +37,7 @@ import {
   youtubeChannelIdFromUrl,
   youtubePlaylistIdFromUrl,
   effectiveStarMode,
+  suggestedSettingsForUrl,
   STAR_DEFAULT_COUNT,
   STAR_DEFAULT_MIN_SEC,
 } from './lib/feedAdmin.js';
@@ -231,9 +232,26 @@ const formScroll = createScrollRestorer(window);
 // 非活性の条件は編集フォームだけに効かせる。
 const formDirty = computed(() => isFeedFormDirty(formBase.value, form.value));
 
-// フォームのスター選定の実効モード (選択値が無ければ種別既定)。
+// フォームのスター選定の実効モード (フォームの値は常に具体値)。
 // 本数・下限の入力欄は、実効モードが「新しい順」のときだけ出す。
-const formStarMode = computed(() => effectiveStarMode({ starMode: form.value.starMode, url: form.value.url }));
+const formStarMode = computed(() => effectiveStarMode(form.value));
+
+// 追加フォームで利用者が触った設定項目。URL が YouTube と分かった
+// 時点で、触っていない項目にだけ種別からの提案 (具体値) を入れる。
+const formTouched = ref({});
+function markFormTouched(key) {
+  formTouched.value = { ...formTouched.value, [key]: true };
+}
+function applySuggestedSettings() {
+  const suggestion = suggestedSettingsForUrl(form.value.url);
+  ['starMode', 'starCount', 'starMinSec', 'pastGuard', 'pruneExempt'].forEach((key) => {
+    if (!formTouched.value[key]) form.value[key] = suggestion[key];
+  });
+}
+watch(() => form.value.url, () => {
+  if (formMode.value !== 'add') return;
+  applySuggestedSettings();
+});
 
 const isReadonly = computed(() => session.value?.role === 'readonly');
 const isOwner = computed(() => session.value?.role === 'owner');
@@ -833,9 +851,8 @@ async function refreshOnce() {
 
     // 保持ルール (既読60日・上限) でローカルを掃除する。消す既読記事は
     // 墓標を残し、フィードが再配信しても未読として復活させない。
-    // 掃除の対象外はフィード設定 (pruneExempt) で決める。未指定の
-    // 既定は YouTube = 対象外 (最新分しか再配信されず、消した曲が
-    // 戻らないため)、それ以外 = 対象。
+    // 掃除の対象外はフィード設定 (pruneExempt) だけで決める
+    // ('on' のフィードだけ対象外。種別による既定は持たない)。
     const pruneNow = new Date().toISOString();
     const allArticles = await loadLocalArticles();
     const pruneExemptFeedIds = new Set(
@@ -3065,6 +3082,7 @@ function startAddFeed() {
   formScroll.save();
   formMode.value = 'add';
   formBase.value = null;
+  formTouched.value = {};
   form.value = createFeedForm();
   formError.value = '';
   confirmDeleteId.value = '';
@@ -3075,6 +3093,7 @@ function startEditFeed(feed) {
   formScroll.save();
   formMode.value = 'edit';
   formBase.value = feed;
+  formTouched.value = {};
   form.value = feedFormFromFeed(feed);
   formError.value = '';
   confirmDeleteId.value = '';
@@ -3148,6 +3167,10 @@ async function submitFeedForm() {
     formError.value = urlInvalid;
     return;
   }
+  // 触っていない設定項目には、URL の種別からの提案 (具体値) を入れて
+  // から保存する。表示への反映は URL の watcher が先行して行うが、
+  // 送信のタイミングに依存しないよう、ここでもそろえる。
+  applySuggestedSettings();
   // YouTube (疑似フィード・チャンネルページ・@ハンドル・プレイリスト)
   // は直接読めないため取得を省き、タイトル '' で保存する (URL の
   // 正規形への解決とタイトル補完はサーバーが行う。プレイリスト URL の
@@ -3630,19 +3653,19 @@ onMounted(async () => {
             </div>
             <div v-if="youtubeChannelIdFromUrl(form.url) || youtubePlaylistIdFromUrl(form.url)" class="field">
               <label for="feed-star-mode">スター選定（再生対象）</label>
-              <select id="feed-star-mode" v-model="form.starMode">
-                <option value="">自動（種別ごとの既定）</option>
+              <select id="feed-star-mode" v-model="form.starMode" @change="markFormTouched('starMode')">
                 <option value="none">なし</option>
                 <option value="recent">新しい順</option>
                 <option value="all">全件</option>
               </select>
-              <p class="field-note">自動でスターが付く動画の選び方です。自動の既定は、チャンネルは新しい順{{ STAR_DEFAULT_COUNT }}本、プレイリストと本人のチャンネルは全件です。手動で付け外ししたスターは、この設定より優先されます。</p>
+              <p class="field-note">自動でスターが付く動画の選び方です。手動で付け外ししたスターは、この設定より優先されます。</p>
             </div>
             <div v-if="(youtubeChannelIdFromUrl(form.url) || youtubePlaylistIdFromUrl(form.url)) && formStarMode === 'recent'" class="field">
               <label for="feed-star-count">本数（新しい順）</label>
               <input
                 id="feed-star-count"
                 v-model="form.starCount"
+                @change="markFormTouched('starCount')"
                 type="number"
                 min="1"
                 max="100"
@@ -3655,32 +3678,31 @@ onMounted(async () => {
               <input
                 id="feed-star-min-sec"
                 v-model="form.starMinSec"
+                @change="markFormTouched('starMinSec')"
                 type="number"
                 min="0"
                 max="3600"
                 inputmode="numeric"
                 :placeholder="String(STAR_DEFAULT_MIN_SEC)"
               />
-              <p class="field-note">これより短いと分かっている動画は本数に数えません。空欄は既定の{{ STAR_DEFAULT_MIN_SEC }}秒、0で除外なしになります。</p>
+              <p class="field-note">これより短いと分かっている動画は本数に数えません。0で除外なしになります。</p>
             </div>
             <div class="field">
               <label for="feed-past-guard">過去分の扱い</label>
-              <select id="feed-past-guard" v-model="form.pastGuard">
-                <option value="">自動（種別ごとの既定）</option>
+              <select id="feed-past-guard" v-model="form.pastGuard" @change="markFormTouched('pastGuard')">
                 <option value="skip">取り込まない</option>
                 <option value="read">既読として取り込む</option>
                 <option value="off">未読として取り込む（ガードなし）</option>
               </select>
-              <p class="field-note">公開から60日を過ぎた記事を、まだ端末に無いときにどう取り込むかです。自動の既定は、通常のフィードは「取り込まない」、YouTubeは「既読として取り込む」です。</p>
+              <p class="field-note">公開から60日を過ぎた記事を、まだ端末に無いときにどう取り込むかです。</p>
             </div>
             <div class="field">
               <label for="feed-prune-exempt">古い既読の掃除</label>
-              <select id="feed-prune-exempt" v-model="form.pruneExempt">
-                <option value="">自動（種別ごとの既定）</option>
-                <option value="on">掃除しない（残す）</option>
+              <select id="feed-prune-exempt" v-model="form.pruneExempt" @change="markFormTouched('pruneExempt')">
                 <option value="off">掃除する</option>
+                <option value="on">掃除しない（残す）</option>
               </select>
-              <p class="field-note">既読の記事は、取り込んでから60日を過ぎるか、全体の上限を超えると端末から消えます。自動の既定は、YouTubeは「掃除しない」（最新分しか再配信されず、消すと戻らないため）、それ以外は「掃除する」です。</p>
+              <p class="field-note">既読の記事は、取り込んでから60日を過ぎるか、全体の上限を超えると端末から消えます。残したいフィードは「掃除しない」を選んでください。YouTubeのように最新分しか再配信しないフィードは、消すと戻りません。</p>
             </div>
             <p v-if="formError" class="error">{{ formError }}</p>
             <div class="form-actions">

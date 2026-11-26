@@ -167,10 +167,10 @@ describe('planUpserts', () => {
     expect(records[0].is_read).toBe(true);
     expect(records[0].title).toBe('new title');
   });
-  it('YouTube チャンネル／プレイリストのフィードでは過去分を既読として作る (既定 read)', async () => {
+  it('pastGuard=read の YouTube フィードでは過去分を既読として作る', async () => {
     const old = entry('v1', { publishedAt: '2020-01-01T00:00:00.000Z' });
-    const channelFeed = { id: 'yt1', title: 'ch', url: 'https://www.youtube.com/channel/UC0123456789ab' };
-    const playlistFeed = { id: 'yt2', title: 'pl', url: 'https://www.youtube.com/playlist?list=PL0123456789ab' };
+    const channelFeed = { id: 'yt1', title: 'ch', url: 'https://www.youtube.com/channel/UC0123456789ab', pastGuard: 'read' };
+    const playlistFeed = { id: 'yt2', title: 'pl', url: 'https://www.youtube.com/playlist?list=PL0123456789ab', pastGuard: 'read' };
     const [fromChannel] = await planUpserts({}, [old], channelFeed, FETCHED);
     expect(fromChannel.is_read).toBe(true);
     expect(fromChannel.read_at).toBe(FETCHED);
@@ -203,27 +203,28 @@ describe('planUpserts', () => {
 });
 
 describe('effectivePastGuard', () => {
-  it('未指定なら種別既定 (通常=skip、YouTube=read)、保存値があればそれを使う', () => {
+  it('保存値だけで決める (未指定・不正値は skip、種別既定は持たない)', () => {
     expect(effectivePastGuard(FEED)).toBe('skip');
-    expect(effectivePastGuard({ id: 'yt1', url: 'https://www.youtube.com/channel/UC0123456789ab' })).toBe('read');
-    expect(effectivePastGuard({ id: 'yt2', url: 'https://www.youtube.com/playlist?list=PL0123456789ab' })).toBe('read');
     expect(effectivePastGuard({ ...FEED, pastGuard: 'read' })).toBe('read');
     expect(effectivePastGuard({ ...FEED, pastGuard: 'off' })).toBe('off');
-    expect(effectivePastGuard({ id: 'yt1', url: 'https://www.youtube.com/channel/UC0123456789ab', pastGuard: 'skip' })).toBe('skip');
-    // 不正値・null (サーバー未対応) は未指定として種別既定に倒す。
+    expect(effectivePastGuard({ ...FEED, pastGuard: 'skip' })).toBe('skip');
+    // YouTube でも、設定が無ければ read にはならない (特殊扱いしない)。
+    expect(effectivePastGuard({ id: 'yt1', url: 'https://www.youtube.com/channel/UC0123456789ab' })).toBe('skip');
+    expect(effectivePastGuard({ id: 'yt1', url: 'https://www.youtube.com/channel/UC0123456789ab', pastGuard: 'read' })).toBe('read');
     expect(effectivePastGuard({ ...FEED, pastGuard: null })).toBe('skip');
     expect(effectivePastGuard({ ...FEED, pastGuard: 'junk' })).toBe('skip');
   });
 });
 
 describe('effectivePruneExempt', () => {
-  it('未指定なら種別既定 (通常=対象、YouTube=対象外)、保存値があればそれを使う', () => {
-    expect(effectivePruneExempt(FEED)).toBe(false);
-    expect(effectivePruneExempt({ id: 'yt1', url: 'https://www.youtube.com/channel/UC0123456789ab' })).toBe(true);
-    expect(effectivePruneExempt({ id: 'yt2', url: 'https://www.youtube.com/playlist?list=PL0123456789ab' })).toBe(true);
+  it('設定だけで決まる (on のときだけ対象外、種別既定は持たない)', () => {
     expect(effectivePruneExempt({ ...FEED, pruneExempt: 'on' })).toBe(true);
-    expect(effectivePruneExempt({ id: 'yt1', url: 'https://www.youtube.com/channel/UC0123456789ab', pruneExempt: 'off' })).toBe(false);
-    // 不正値・null (サーバー未対応) は未指定として種別既定に倒す。
+    expect(effectivePruneExempt({ ...FEED, pruneExempt: 'off' })).toBe(false);
+    expect(effectivePruneExempt(FEED)).toBe(false);
+    // YouTube でも、設定が無ければ対象外にはならない (特殊扱いしない)。
+    expect(effectivePruneExempt({ id: 'yt1', url: 'https://www.youtube.com/channel/UC0123456789ab' })).toBe(false);
+    expect(effectivePruneExempt({ id: 'yt1', url: 'https://www.youtube.com/channel/UC0123456789ab', pruneExempt: 'on' })).toBe(true);
+    // 不正値・null (サーバー未対応) は未指定として対象に倒す。
     expect(effectivePruneExempt({ ...FEED, pruneExempt: null })).toBe(false);
     expect(effectivePruneExempt({ ...FEED, pruneExempt: 'junk' })).toBe(false);
   });

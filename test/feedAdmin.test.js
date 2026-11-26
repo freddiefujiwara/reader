@@ -22,7 +22,7 @@ import {
   normalizePruneExempt,
   normalizeStarCount,
   normalizeStarMinSec,
-  defaultStarModeForUrl,
+  suggestedSettingsForUrl,
   effectiveStarMode,
   filterAdminFeeds,
   genreSuggestions,
@@ -35,7 +35,7 @@ import {
 
 describe('createFeedForm / feedFormFromFeed', () => {
   it('追加フォームは URL とジャンルと並び順 (既定は新しい順)', () => {
-    expect(createFeedForm()).toEqual({ url: '', category: '', sortDirection: 'desc', syncDeletes: false, starMode: '', starCount: '', starMinSec: '', pastGuard: '', pruneExempt: '' });
+    expect(createFeedForm()).toEqual({ url: '', category: '', sortDirection: 'desc', syncDeletes: false, starMode: 'recent', starCount: 3, starMinSec: 90, pastGuard: 'skip', pruneExempt: 'off' });
   });
   it('編集フォームは表示用の ID / タイトル / URL と、編集用のジャンルと並び順を持つ', () => {
     const feed = {
@@ -53,10 +53,10 @@ describe('createFeedForm / feedFormFromFeed', () => {
       category: 'news',
       sortDirection: 'desc',
       syncDeletes: false,
-      starMode: '',
-      starCount: '',
-      starMinSec: '',
-      pastGuard: '', pruneExempt: '',
+      starMode: 'recent',
+      starCount: 3,
+      starMinSec: 90,
+      pastGuard: 'skip', pruneExempt: 'off',
     });
   });
   it('フィードの並び順が asc ならフォームにも asc が入る', () => {
@@ -68,7 +68,7 @@ describe('createFeedForm / feedFormFromFeed', () => {
     expect('enabled' in form).toBe(false);
   });
   it('null フィードでも空フォームになる', () => {
-    expect(feedFormFromFeed(null)).toEqual({ id: '', title: '', url: '', category: '', sortDirection: 'desc', syncDeletes: false, starMode: '', starCount: '', starMinSec: '', pastGuard: '', pruneExempt: '' });
+    expect(feedFormFromFeed(null)).toEqual({ id: '', title: '', url: '', category: '', sortDirection: 'desc', syncDeletes: false, starMode: 'recent', starCount: 3, starMinSec: 90, pastGuard: 'skip', pruneExempt: 'off' });
   });
 });
 
@@ -704,23 +704,27 @@ describe('スター選定 (starMode / starCount / starMinSec) のフォームと
     expect(normalizeStarMinSec(-1)).toBe(null);
     expect(normalizeStarMinSec('90')).toBe(90);
   });
-  it('種別既定と実効モード: チャンネルは新しい順、プレイリストと本人のチャンネルは全件、それ以外はなし', () => {
-    expect(defaultStarModeForUrl('https://www.youtube.com/channel/UCxNfaRC6MbAnwSR1Dqqv69A')).toBe('recent');
-    expect(defaultStarModeForUrl('https://www.youtube.com/channel/UCbiDZXbr391oT_vsRiqwPFg')).toBe('all');
-    expect(defaultStarModeForUrl('https://www.youtube.com/playlist?list=PLxNfaRC6MbAnwSR1Dqqv69A00')).toBe('all');
-    expect(defaultStarModeForUrl('https://example.com/feed')).toBe('none');
+  it('実効モードは保存値だけで決める (未指定は none、種別既定は持たない)', () => {
+    expect(effectiveStarMode({ starMode: 'all', url: 'https://www.youtube.com/channel/UCxNfaRC6MbAnwSR1Dqqv69A' })).toBe('all');
     expect(effectiveStarMode({ starMode: 'none', url: 'https://www.youtube.com/channel/UCxNfaRC6MbAnwSR1Dqqv69A' })).toBe('none');
-    expect(effectiveStarMode({ url: 'https://www.youtube.com/channel/UCxNfaRC6MbAnwSR1Dqqv69A' })).toBe('recent');
+    expect(effectiveStarMode({ url: 'https://www.youtube.com/channel/UCxNfaRC6MbAnwSR1Dqqv69A' })).toBe('none');
+    expect(effectiveStarMode({ url: 'https://www.youtube.com/playlist?list=PLxNfaRC6MbAnwSR1Dqqv69A00' })).toBe('none');
+    expect(effectiveStarMode({})).toBe('none');
   });
-  it('フィードの設定がフォームに入り、未指定は空になる', () => {
+  it('追加フォームの提案: チャンネルは新しい順・read・on、プレイリストは全件・read・on、それ以外は skip・off', () => {
+    expect(suggestedSettingsForUrl('https://www.youtube.com/channel/UCxNfaRC6MbAnwSR1Dqqv69A')).toEqual({ starMode: 'recent', starCount: 3, starMinSec: 90, pastGuard: 'read', pruneExempt: 'on' });
+    expect(suggestedSettingsForUrl('https://www.youtube.com/playlist?list=PLxNfaRC6MbAnwSR1Dqqv69A00')).toEqual({ starMode: 'all', starCount: 3, starMinSec: 90, pastGuard: 'read', pruneExempt: 'on' });
+    expect(suggestedSettingsForUrl('https://example.com/feed')).toEqual({ starMode: 'recent', starCount: 3, starMinSec: 90, pastGuard: 'skip', pruneExempt: 'off' });
+  });
+  it('フィードの設定がフォームに入り、未指定は一律の初期値で埋まる', () => {
     const form = feedFormFromFeed({ id: 'x', title: 'X', url: 'https://www.youtube.com/channel/UCxNfaRC6MbAnwSR1Dqqv69A', category: '', starMode: 'recent', starCount: 5, starMinSec: 0 });
     expect(form.starMode).toBe('recent');
     expect(form.starCount).toBe(5);
     expect(form.starMinSec).toBe(0);
     const bare = feedFormFromFeed({ id: 'x', title: 'X', url: 'https://example.com/f', category: '' });
-    expect(bare.starMode).toBe('');
-    expect(bare.starCount).toBe('');
-    expect(bare.starMinSec).toBe('');
+    expect(bare.starMode).toBe('recent');
+    expect(bare.starCount).toBe(3);
+    expect(bare.starMinSec).toBe(90);
   });
   it('ペイロードには常に3項目が入り、未指定はモード空・数値 null', () => {
     const base = { id: 'x', title: 'X', url: 'https://www.youtube.com/channel/UCxNfaRC6MbAnwSR1Dqqv69A', category: '' };
@@ -752,11 +756,11 @@ describe('過去分ガード (pastGuard) のフォームとペイロード', () 
     expect(normalizePastGuard('junk')).toBe('');
     expect(normalizePastGuard(null)).toBe('');
   });
-  it('フィードの設定がフォームに入り、未指定は空になる', () => {
+  it('フィードの設定がフォームに入り、未指定は skip で埋まる', () => {
     const form = feedFormFromFeed({ id: 'x', title: 'X', url: 'https://example.com/f', category: '', pastGuard: 'off' });
     expect(form.pastGuard).toBe('off');
     const bare = feedFormFromFeed({ id: 'x', title: 'X', url: 'https://example.com/f', category: '' });
-    expect(bare.pastGuard).toBe('');
+    expect(bare.pastGuard).toBe('skip');
   });
   it('ペイロードには常に入り、未指定は空文字', () => {
     const base = { id: 'x', title: 'X', url: 'https://example.com/f', category: '' };
@@ -778,11 +782,11 @@ describe('ローカル掃除の対象外 (pruneExempt) のフォームとペイ�
     expect(normalizePruneExempt('junk')).toBe('');
     expect(normalizePruneExempt(null)).toBe('');
   });
-  it('フィードの設定がフォームに入り、未指定は空になる', () => {
+  it('フィードの設定がフォームに入り、未指定は off で埋まる', () => {
     const form = feedFormFromFeed({ id: 'x', title: 'X', url: 'https://example.com/f', category: '', pruneExempt: 'on' });
     expect(form.pruneExempt).toBe('on');
     const bare = feedFormFromFeed({ id: 'x', title: 'X', url: 'https://example.com/f', category: '' });
-    expect(bare.pruneExempt).toBe('');
+    expect(bare.pruneExempt).toBe('off');
   });
   it('ペイロードには常に入り、未指定は空文字', () => {
     const base = { id: 'x', title: 'X', url: 'https://example.com/f', category: '' };
