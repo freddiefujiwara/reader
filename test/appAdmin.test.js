@@ -835,11 +835,11 @@ describe('管理画面の YouTube チャンネル URL 追加', () => {
       category: '',
       sortDirection: 'desc',
       syncDeletes: false,
-      starMode: '',
-      starCount: null,
-      starMinSec: null,
-      pastGuard: '',
-      pruneExempt: '',
+      starMode: 'recent',
+      starCount: 3,
+      starMinSec: 90,
+      pastGuard: 'skip',
+      pruneExempt: 'off',
     });
     // 保存後はフォームが閉じ、サーバーが返した解決済みフィードが一覧に出る。
     expect(el.querySelector('.feed-form'), '保存後はフォームが閉じる').toBeNull();
@@ -868,6 +868,9 @@ describe('管理画面の YouTube プレイリストフィード', () => {
     title: 'お気に入りプレイリスト',
     url: 'https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjX9efdf',
     category: '音楽',
+    starMode: 'all',
+    pastGuard: 'read',
+    pruneExempt: 'on',
     lastStatus: '200',
     lastError: '',
     lastFetchedAt: '2026-11-15T01:00:00.000Z',
@@ -943,11 +946,11 @@ describe('管理画面の YouTube プレイリストフィード', () => {
       category: '',
       sortDirection: 'desc',
       syncDeletes: false,
-      starMode: '',
-      starCount: null,
-      starMinSec: null,
-      pastGuard: '',
-      pruneExempt: '',
+      starMode: 'all',
+      starCount: 3,
+      starMinSec: 90,
+      pastGuard: 'read',
+      pruneExempt: 'on',
     });
     expect(el.querySelector('.feed-form'), '保存後はフォームが閉じる').toBeNull();
     const titles = [...el.querySelectorAll('.feed-card .feed-name')].map((n) => n.textContent.trim());
@@ -987,12 +990,12 @@ describe('管理画面の YouTube プレイリストフィード', () => {
     });
   });
 
-  it('プレイリストの編集ではスター選定が出て、既定 (全件) では本数欄は出ない', async () => {
+  it('プレイリストの編集ではスター選定が出て、全件では本数欄は出ない', async () => {
     await mountAdminWithPlaylist();
     const form = await openEdit(WITH_PLAYLIST.length - 1);
     expect(errors).toEqual([]);
     expect(form.querySelector('#feed-star-mode'), 'スター選定のセレクトが出る').toBeTruthy();
-    expect(form.querySelector('#feed-star-mode').value).toBe('');
+    expect(form.querySelector('#feed-star-mode').value).toBe('all');
     expect(form.querySelector('#feed-star-count'), '全件では本数欄は出ない').toBeNull();
     expect(form.querySelector('#feed-sync-deletes'), 'YouTube系では削除同期は出ない').toBeNull();
   });
@@ -1015,7 +1018,7 @@ describe('管理画面の YouTube プレイリストフィード', () => {
     expect(errors).toEqual([]);
     expect(saveFeed).toHaveBeenCalledTimes(1);
     const [, payload] = saveFeed.mock.calls[0];
-    expect(payload).toMatchObject({ id: PLAYLIST_FEED.id, starMode: 'recent', starCount: 5, starMinSec: null });
+    expect(payload).toMatchObject({ id: PLAYLIST_FEED.id, starMode: 'recent', starCount: 5, starMinSec: 90 });
   });
 
   it('過去分の扱いは通常フィード・YouTube系のどちらにも出て、変更が保存ペイロードに乗る', async () => {
@@ -1024,7 +1027,7 @@ describe('管理画面の YouTube プレイリストフィード', () => {
     expect(errors).toEqual([]);
     const select = form.querySelector('#feed-past-guard');
     expect(select, '通常フィードでも過去分のセレクトが出る').toBeTruthy();
-    expect(select.value).toBe('');
+    expect(select.value).toBe('skip');
     select.value = 'off';
     select.dispatchEvent(new window.Event('change', { bubbles: true }));
     await flush();
@@ -1043,7 +1046,7 @@ describe('管理画面の YouTube プレイリストフィード', () => {
     expect(errors).toEqual([]);
     const select = form.querySelector('#feed-prune-exempt');
     expect(select, '通常フィードでも掃除のセレクトが出る').toBeTruthy();
-    expect(select.value).toBe('');
+    expect(select.value).toBe('off');
     select.value = 'on';
     select.dispatchEvent(new window.Event('change', { bubbles: true }));
     await flush();

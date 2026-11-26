@@ -125,16 +125,15 @@ function isYouTubeManagedFeed(feed) {
   return !!(youtubeChannelIdFromUrl(url) || youtubePlaylistIdFromUrl(url));
 }
 
-// 過去分ガードの実効モード (純関数)。フィード設定 (pastGuard) が
-// あればそれを使い、未指定なら種別既定に倒す: 通常フィードは
-// 'skip' (取り込まない)、YouTube 由来は 'read' (既読として取り込む)。
-// YouTube を 'read' にするのは、サーバー側で件数が絞られ (チャンネルは
-// 直近20件)、プレイリストの古い曲も記事として残したい一方で、
-// 既読にして掃除された古い動画が未読として戻ってくるのを防ぐため。
+// 過去分ガードの実効モード (純関数)。フィード設定 (pastGuard) だけで
+// 決める: 保存値があればそれ、未指定は 'skip' (取り込まない)。
+// 種別ごとの既定は持たない。YouTube 由来のフィードには 'read'
+// (既読として取り込む) を設定してある: サーバー側で件数が絞られ
+// (チャンネルは直近20件)、プレイリストの古い曲も記事として残したい
+// 一方で、既読にして掃除された古い動画が未読として戻ってくるのを
+// 防ぐため。
 export function effectivePastGuard(feed) {
-  const mode = normalizePastGuard(feed && feed.pastGuard);
-  if (mode) return mode;
-  return isYouTubeManagedFeed(feed) ? 'read' : 'skip';
+  return normalizePastGuard(feed && feed.pastGuard) || 'skip';
 }
 
 // ローカル掃除の対象外かどうか (純関数)。フィード設定 (pruneExempt)
