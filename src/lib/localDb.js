@@ -138,14 +138,12 @@ export function effectivePastGuard(feed) {
 }
 
 // ローカル掃除の対象外かどうか (純関数)。フィード設定 (pruneExempt)
-// があればそれを使い ('on' = 対象外、'off' = 対象)、未指定なら種別
-// 既定に倒す: YouTube 由来は対象外、それ以外は対象。YouTube を対象外
-// にするのは、最新分しか再配信されず、掃除で消した曲が二度と戻ら
-// ないため (保持ルールは「消しても再配信で戻る」前提で組まれている)。
+// だけで決める: 'on' のフィードだけ対象外で、未指定・'off' は対象。
+// 種別による既定は持たない。YouTube のように最新分しか再配信されず
+// 消すと戻らないフィードは、管理画面で 'on' を設定して守る (保持
+// ルールは「消しても再配信で戻る」前提で組まれているため)。
 export function effectivePruneExempt(feed) {
-  const v = normalizePruneExempt(feed && feed.pruneExempt);
-  if (v) return v === 'on';
-  return isYouTubeManagedFeed(feed);
+  return normalizePruneExempt(feed && feed.pruneExempt) === 'on';
 }
 
 // 過去分 (アーカイブ) のエントリかどうか。公開日時が、取り込み時点から

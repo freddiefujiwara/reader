@@ -60,8 +60,8 @@ export function normalizePastGuard(value) {
 
 // ローカル掃除の対象外の正規化: 'on' (掃除しない) / 'off' (掃除する)
 // か、未指定は ''。サーバー側 (reader-gas の normalizePruneExempt) と
-// 同じ規則。実効値の解決 (種別既定への fallback) は掃除側 (localDb
-// の effectivePruneExempt) が行う。
+// 同じ規則。実効値の解決は掃除側 (localDb の effectivePruneExempt)
+// が行う (設定だけで決め、種別既定は持たない)。
 export function normalizePruneExempt(value) {
   const v = String(value ?? '').trim().toLowerCase();
   return v === 'on' || v === 'off' ? v : '';

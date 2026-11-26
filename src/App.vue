@@ -833,9 +833,8 @@ async function refreshOnce() {
 
     // 保持ルール (既読60日・上限) でローカルを掃除する。消す既読記事は
     // 墓標を残し、フィードが再配信しても未読として復活させない。
-    // 掃除の対象外はフィード設定 (pruneExempt) で決める。未指定の
-    // 既定は YouTube = 対象外 (最新分しか再配信されず、消した曲が
-    // 戻らないため)、それ以外 = 対象。
+    // 掃除の対象外はフィード設定 (pruneExempt) だけで決める
+    // ('on' のフィードだけ対象外。種別による既定は持たない)。
     const pruneNow = new Date().toISOString();
     const allArticles = await loadLocalArticles();
     const pruneExemptFeedIds = new Set(
@@ -3676,11 +3675,11 @@ onMounted(async () => {
             <div class="field">
               <label for="feed-prune-exempt">古い既読の掃除</label>
               <select id="feed-prune-exempt" v-model="form.pruneExempt">
-                <option value="">自動（種別ごとの既定）</option>
+                <option value="">既定（掃除する）</option>
                 <option value="on">掃除しない（残す）</option>
                 <option value="off">掃除する</option>
               </select>
-              <p class="field-note">既読の記事は、取り込んでから60日を過ぎるか、全体の上限を超えると端末から消えます。自動の既定は、YouTubeは「掃除しない」（最新分しか再配信されず、消すと戻らないため）、それ以外は「掃除する」です。</p>
+              <p class="field-note">既読の記事は、取り込んでから60日を過ぎるか、全体の上限を超えると端末から消えます。残したいフィードは「掃除しない」を選んでください。YouTubeのように最新分しか再配信しないフィードは、消すと戻りません。</p>
             </div>
             <p v-if="formError" class="error">{{ formError }}</p>
             <div class="form-actions">
