@@ -3,7 +3,7 @@
 //   GET <exec>?u=<encodeURIComponent(fetchUrl)>&token=<値>
 //   -> { url, content, error } (content がフィード XML の生テキスト)
 // 失敗したフィードはその回だけ諦め、ローカルの記事を残す (呼び出し側の判断)。
-import { parseFeedXml, isCompleteFeedXml } from './feedParse.js';
+import { parseFeedXmlChunked, isCompleteFeedXml } from './feedParse.js';
 import { sha256Hex } from './articleId.js';
 import { withRetry } from './retry.js';
 
@@ -51,20 +51,21 @@ export async function fetchFeedXml(fetchUrl, { fetcher = fetch, proxyBase = URL_
   }, { retries, retryDelayMs, isRetryable });
 }
 
-// パースはメインスレッドで同期的に走る。大きいフィード (数百件の
-// ポッドキャスト等) では実機で秒単位のブロックになり、その間に
-// 落ちたタップはパースが終わるまで処理されず「ボタンの効きが悪い」
-// 体感になる。パース同士はもともと単一スレッドで順番にしか進まない
-// ため、直列のキューに載せ、1件ごとにメインスレッドへ制御を返して
-// から次を始める (入力や描画が合間に処理される)。全体の所要時間は
-// ほぼ変わらない。
+// パースはメインスレッドで走る。大きいフィード (数百件の
+// ポッドキャスト等) を単一の同期処理でパースすると実機で秒単位の
+// ブロックになり、その間に落ちたタップはパースが終わるまで処理
+// されず「ボタンの効きが悪い」体感になる。対策は2段で、パース
+// 自体が一定量ごとに制御を返す分割実行版 (parseFeedXmlChunked)
+// を使い、さらにパース同士を直列のキューに載せてフィードの合間
+// にも制御を返す (入力や描画が合間に処理される)。全体の所要時間
+// はほぼ変わらない。
 const yieldToMain = () => new Promise((resolve) => { setTimeout(resolve, 0); });
 let parseQueue = Promise.resolve();
 
 function parseFeedXmlQueued(xml, feed) {
   const run = parseQueue.then(async () => {
     await yieldToMain();
-    return parseFeedXml(xml, feed);
+    return parseFeedXmlChunked(xml, feed);
   });
   // 1件の失敗でキュー全体を止めない。
   parseQueue = run.then(() => {}, () => {});
