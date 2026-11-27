@@ -2397,17 +2397,21 @@ function applyDeckMetadata(el) {
 }
 
 // 要素に紐づく処理は、すべて「現在アクティブな要素」に対して
-// だけ働く。2つの要素の両方へ同じリスナーを付け、各ハンドラの
-// 冒頭でアクティブ側かどうかを確認する。待機側のイベントは、
+// だけ働く。要素の役割は入れ替わるので、イベントを受け取った
+// 時点で再生側かどうかを確認する。待機側のイベントは、
 // 先読みのエラー処理を除いて無視する (役割交代の前後で、旧要素
 // から遅れて来る 'pause' や 'error' で状態を壊さないため)。
 function attachDeckListeners(el) {
-  el.addEventListener('loadedmetadata', () => {
-    if (el !== audio) return;
+  const onActive = (event, handler) => {
+    el.addEventListener(event, () => {
+      if (el === audio) handler();
+    });
+  };
+
+  onActive('loadedmetadata', () => {
     applyDeckMetadata(el);
   });
-  el.addEventListener('timeupdate', () => {
-    if (el !== audio) return;
+  onActive('timeupdate', () => {
     if (!seeking.value) currentTime.value = audio.currentTime || 0;
     samplePlaybackRate();
     updatePreload();
@@ -2425,8 +2429,7 @@ function attachDeckListeners(el) {
     // では有効にしない。reachedKnownDurationEnd 側で判定)。
     checkKnownDurationEnd();
   });
-  el.addEventListener('play', () => {
-    if (el !== audio) return;
+  onActive('play', () => {
     isPlaying.value = true;
     // 視聴ログ: 再生区間を開く。
     listenTracker.start();
@@ -2434,8 +2437,7 @@ function attachDeckListeners(el) {
     // 誤判定しないため)。
     stallTracker.reset(performance.now());
   });
-  el.addEventListener('pause', () => {
-    if (el !== audio) return;
+  onActive('pause', () => {
     isPlaying.value = false;
     // 視聴ログ: 再生区間を閉じる (積算の確定は停止の区切りで行う)。
     listenTracker.pause();
@@ -2449,23 +2451,19 @@ function attachDeckListeners(el) {
     checkKnownDurationEnd();
   });
   // 読み込み表示: データ待ちの間だけ出し、再生可能になったら消す。
-  el.addEventListener('waiting', () => {
-    if (el !== audio) return;
+  onActive('waiting', () => {
     isLoading.value = true;
   });
-  el.addEventListener('seeking', () => {
-    if (el !== audio) return;
+  onActive('seeking', () => {
     rateSample = null;
     if (audio.readyState < 3) isLoading.value = true;
   });
-  el.addEventListener('seeked', () => {
-    if (el !== audio) return;
+  onActive('seeked', () => {
     if (audio.readyState >= 3) isLoading.value = false;
     // シーク直後はストール計測をやり直す (猶予を持たせる)。
     stallTracker.reset(performance.now());
   });
-  el.addEventListener('playing', () => {
-    if (el !== audio) return;
+  onActive('playing', () => {
     isLoading.value = false;
     // 実際に再生が始まったので、ここからストール検知の対象になる。
     episodePlayStarted = true;
@@ -2478,8 +2476,7 @@ function attachDeckListeners(el) {
     // (二重バッファ。再生中はページが生きている間に読み終える)。
     updatePreload();
   });
-  el.addEventListener('canplay', () => {
-    if (el !== audio) return;
+  onActive('canplay', () => {
     isLoading.value = false;
     // データが来たのにまだ開始していない場合の、開始チェックの
     // 実行機会 (タイマーが回らない状況でもイベントに連鎖させる)。
@@ -2498,9 +2495,7 @@ function attachDeckListeners(el) {
     if (!currentEpisode.value || !currentSrcUrl || audio.src !== currentSrcUrl) return;
     handlePlaybackFailure();
   });
-  el.addEventListener('ended', () => {
-    if (el === audio) handleEpisodeEnded();
-  });
+  onActive('ended', handleEpisodeEnded);
 }
 attachDeckListeners(deckA);
 // 待機側 (deckB) のリスナーは、生成時 (standbyDeck) に付ける。
