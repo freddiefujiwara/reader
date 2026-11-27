@@ -65,6 +65,7 @@ import {
   FEED_HASH_TRANSFER_KEY,
   articleRecordToView,
   clearLocalArticleAudio,
+  refreshLocalAudioTimestamps,
   clearLocalArticlePlayPos,
   closeLocalDb,
   deleteLocalArticles,
@@ -825,7 +826,15 @@ async function refreshOnce() {
       hasTransfer ? {} : { contentHashFor: (feed) => nextHashes[feed.id] || null }
     );
     for (const result of results) {
-      if (!result.ok || result.unchanged) continue;
+      if (!result.ok) continue;
+      if (result.unchanged) {
+        // 取り込みは省いても、音声URLの受け取り時刻は進める。
+        // 進めないと表示側の6時間ルールで、XML が変わらない
+        // フィードの再生ボタンが消えてしまう (localDb 側の
+        // refreshLocalAudioTimestamps のコメント参照)。
+        await refreshLocalAudioTimestamps(result.feed.id, fetchedAt);
+        continue;
+      }
       const { consumedKeys } = await ingestFeedArticles(
         result.feed, result.entries, fetchedAt, hasTransfer ? transfer : null,
         { feedComplete: result.complete === true }
