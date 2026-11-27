@@ -4,6 +4,7 @@
 //   -> { url, content, error } (content がフィード XML の生テキスト)
 // 失敗したフィードはその回だけ諦め、ローカルの記事を残す (呼び出し側の判断)。
 import { parseFeedXml, isCompleteFeedXml } from './feedParse.js';
+import { sha256Hex } from './articleId.js';
 import { withRetry } from './retry.js';
 
 // url-fetch-gas の /exec URL (portfolio-treemap と同じデプロイ)。
@@ -72,11 +73,27 @@ function parseFeedXmlQueued(xml, feed) {
 
 // フィード1件を取得してエントリまで変換する。失敗しても投げず、
 // { ok: false } で返して呼び出し側がそのフィードをスキップできるようにする。
+//
+// 前回取り込み済みの内容とバイト単位で同じ XML は、パースしても
+// 取り込んでも結果が変わらないため、変換を丸ごと省いて
+// { unchanged: true } で返す。大きいポッドキャスト (数MB・数百件)
+// の全件パースが更新のたびにメインスレッドを塞ぎ、スクロールや
+// タップの効きを悪くしていたのが主因のため。判定は
+// opts.contentHashFor(feed) が返す前回の { hash, url } と、今回の
+// XML の SHA-256・取得 URL の両方の一致で決める。ハッシュ計算は
+// ブラウザ標準の実装 (crypto.subtle) で、自前パーサより桁違いに
+// 速い。結果には今回の contentHash を載せ、呼び出し側が取り込みの
+// 成功後に保存する。
 export async function fetchOneFeed(feed, opts) {
   const fetchUrl = feed.fetchUrl || feed.url;
   try {
     const xml = await fetchFeedXml(fetchUrl, opts);
-    return { feed, ok: true, entries: await parseFeedXmlQueued(xml, feed), complete: isCompleteFeedXml(xml), error: null };
+    const contentHash = await sha256Hex(xml);
+    const known = opts && typeof opts.contentHashFor === 'function' ? opts.contentHashFor(feed) : null;
+    if (known && known.hash === contentHash && known.url === fetchUrl) {
+      return { feed, ok: true, unchanged: true, entries: [], complete: true, contentHash, error: null };
+    }
+    return { feed, ok: true, unchanged: false, entries: await parseFeedXmlQueued(xml, feed), complete: isCompleteFeedXml(xml), contentHash, error: null };
   } catch (error) {
     return { feed, ok: false, entries: [], error };
   }

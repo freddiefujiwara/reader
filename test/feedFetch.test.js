@@ -80,6 +80,37 @@ describe('fetchOneFeed / fetchAllFeeds', () => {
     expect(results.map((r) => [r.feed.id, r.ok])).toEqual([['a', true], ['b', false], ['c', true]]);
     expect(results[1].entries).toEqual([]);
   });
+  it('内容ハッシュが前回と一致したら、パースを省いて unchanged で返す', async () => {
+    const first = await fetchOneFeed(feeds[0], { fetcher: routerFetcher() });
+    expect(first.ok).toBe(true);
+    expect(first.unchanged).toBe(false);
+    expect(first.contentHash).toMatch(/^[0-9a-f]{64}$/);
+    const second = await fetchOneFeed(feeds[0], {
+      fetcher: routerFetcher(),
+      contentHashFor: (feed) => (feed.id === 'a'
+        ? { hash: first.contentHash, url: 'https://example.com/a.xml' }
+        : null),
+    });
+    expect(second.ok).toBe(true);
+    expect(second.unchanged).toBe(true);
+    expect(second.entries).toEqual([]);
+    expect(second.contentHash).toBe(first.contentHash);
+  });
+  it('ハッシュが違えば通常どおりパースし、URL が違えばハッシュが同じでもパースする', async () => {
+    const first = await fetchOneFeed(feeds[0], { fetcher: routerFetcher() });
+    const otherHash = await fetchOneFeed(feeds[0], {
+      fetcher: routerFetcher(),
+      contentHashFor: () => ({ hash: '0'.repeat(64), url: 'https://example.com/a.xml' }),
+    });
+    expect(otherHash.unchanged).toBe(false);
+    expect(otherHash.entries.length).toBe(1);
+    const otherUrl = await fetchOneFeed(feeds[0], {
+      fetcher: routerFetcher(),
+      contentHashFor: () => ({ hash: first.contentHash, url: 'https://example.com/moved.xml' }),
+    });
+    expect(otherUrl.unchanged).toBe(false);
+    expect(otherUrl.entries.length).toBe(1);
+  });
   it('空のフィード一覧では空配列', async () => {
     await expect(fetchAllFeeds([], { fetcher: routerFetcher() })).resolves.toEqual([]);
   });
