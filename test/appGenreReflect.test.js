@@ -13,8 +13,9 @@
 // (2) 実行中だった更新が旧一覧で上書きしても、戻る際の追随更新で
 // 最新に揃い直すこと、を固定する。
 import 'fake-indexeddb/auto';
+import { flushRound, flushUntil } from './helpers/flush.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createApp, nextTick } from 'vue';
+import { createApp } from 'vue';
 
 const FEED_A = {
   id: 'b81e59da11f890d2', // https://feeds.rebuild.fm/rebuildfm のハッシュID
@@ -109,24 +110,11 @@ let app = null;
 let el = null;
 let errors = [];
 
-const flushRound = async () => {
-  await new Promise((r) => setTimeout(r, 0));
-  await nextTick();
-};
-
 // 条件が成り立つまで flush を繰り返す。保存→反映→背景更新のような
 // 非同期チェーンが何マクロタスクで終わるかはマシンの負荷で変わる
 // ため、固定回数の flush では、速い環境では収まっても CI では
 // 完了前に検証へ進んでしまう。検証内容は変えず、「完了するまで
 // 待つ」ことだけを決定的にするためのヘルパー。
-const flushUntil = async (cond, maxRounds = 120) => {
-  for (let i = 0; i < maxRounds; i += 1) {
-    if (await cond()) return true;
-    await flushRound();
-  }
-  return !!(await cond());
-};
-
 // ヘッダーの更新ボタンは背景更新の実行中だけ「更新中…」になる。
 const isRefreshingShown = () =>
   !!el && [...el.querySelectorAll('button')].some((b) => b.textContent.includes('更新中'));
