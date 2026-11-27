@@ -126,6 +126,7 @@ import {
   toDisplayPosition,
   toElementPosition,
 } from './lib/player.js';
+import { clearPlayerMediaSession, setPlayerMediaSession } from './lib/mediaSession.js';
 import { createEventQueue, createListenTracker } from './lib/eventLog.js';
 
 // 画面に出す件数の初期値と「もっと見る」の増分 (v2 は全件ローカルにあるため、
@@ -2036,28 +2037,6 @@ function clearPlayPos(id) {
   clearLocalArticlePlayPos(id).catch(() => {});
 }
 
-function updateMediaSession(article) {
-  if (!('mediaSession' in navigator) || typeof MediaMetadata === 'undefined') return;
-  try {
-    navigator.mediaSession.metadata = new MediaMetadata({
-      title: article.title,
-      artist: article.feedTitle || article.feedId || '',
-    });
-    navigator.mediaSession.setActionHandler('play', () => tryPlayAudio());
-    navigator.mediaSession.setActionHandler('pause', () => {
-      // ロック画面等からの明示的な一時停止も、本人の意思による
-      // 一時停止として扱う。
-      pausePlayback();
-    });
-    navigator.mediaSession.setActionHandler('seekbackward', () => skipBy(-15));
-    navigator.mediaSession.setActionHandler('seekforward', () => skipBy(30));
-    navigator.mediaSession.setActionHandler('previoustrack', () => skipByTrack(-1));
-    navigator.mediaSession.setActionHandler('nexttrack', () => skipByTrack(1));
-  } catch {
-    // Media Session が使えない環境では何もしない。
-  }
-}
-
 // エピソードを Audio 要素へ載せて再生する共通処理。キューは触らない。
 // resume は「本人がそのエピソードを選んだ開始か」の区別: カードから
 // 直接選んだときだけ保存済みの再開位置 (play_pos) を復元し、自動
@@ -2134,7 +2113,9 @@ function loadEpisode(article, { resume = true, diagAdvance = false } = {}) {
     audio.src = ep.audioUrl;
     audio.playbackRate = speed.value;
   }
-  updateMediaSession(ep);
+  setPlayerMediaSession(ep, {
+    play: tryPlayAudio, pause: pausePlayback, seek: skipBy, skipTrack: skipByTrack,
+  });
   if (oldDeck) {
     // 旧要素は待機側になる。再生開始 (play()) を出す前に一度
     // 止めておく (play() と pause() はどちらも非同期に効くため、
@@ -2404,13 +2385,7 @@ function stopPlayer() {
   rateSample = null;
   currentTime.value = 0;
   duration.value = 0;
-  if ('mediaSession' in navigator) {
-    try {
-      navigator.mediaSession.metadata = null;
-    } catch {
-      // 何もしない。
-    }
-  }
+  clearPlayerMediaSession();
 }
 
 // 要素のメタデータが読めたときの初期化 (長さの反映・速度・
