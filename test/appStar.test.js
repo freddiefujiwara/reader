@@ -172,12 +172,21 @@ const flushRound = async () => {
 // 条件が満たされるまで待つ (固定回数の flush は、並列実行時の負荷で
 // 背景更新や IndexedDB 書き込みの完了前に尽きることがあるため、
 // 非同期処理の完了を待つ箇所ではこちらを使う)。
-const flushUntil = async (cond, maxRounds = 120) => {
-  for (let i = 0; i < maxRounds; i += 1) {
-    if (await cond()) return true;
+// 上限はラウンド数ではなく時間で数える。ラウンド数 (旧: 120回) だと、
+// CI の並列負荷で IndexedDB の処理が進む前に回数だけが尽き、条件が
+// 満たされる前に諦めてしまうことがある (2026-11-27 の main CI で
+// 「set_star が失敗したら元に戻る」がこれで落ちた)。時間切れの場合は
+// その場で例外にし、下流の assertion で不可解に落ちないようにする
+// (appAutoSkip などと同じ形)。
+const flushUntil = async (cond, timeoutMs = 5000) => {
+  const start = Date.now();
+  for (;;) {
     await flushRound();
+    if (await cond()) return;
+    if (Date.now() - start > timeoutMs) {
+      throw new Error('flushUntil: 条件が満たされませんでした');
+    }
   }
-  return !!(await cond());
 };
 
 const latestAudio = () => audioInstances[audioInstances.length - 1];
