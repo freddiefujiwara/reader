@@ -9,8 +9,9 @@
 // すべて既読にしてもカードは消えず既読表示で残ること、(5) 境界
 // (99件では確認なし／100件では確認あり) と100件でのキャンセルを固定する。
 import 'fake-indexeddb/auto';
+import { flushRound, flushUntil } from './helpers/flush.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createApp, nextTick } from 'vue';
+import { createApp } from 'vue';
 
 const FEED_A = {
   id: 'b81e59da11f890d2', // https://feeds.rebuild.fm/rebuildfm のハッシュID
@@ -88,19 +89,6 @@ const rec = (id, feedId, title, publishedAt, isRead = false) => ({
 let app = null;
 let el = null;
 let errors = [];
-
-const flushRound = async () => {
-  await new Promise((r) => setTimeout(r, 0));
-  await nextTick();
-};
-
-const flushUntil = async (cond, maxRounds = 120) => {
-  for (let i = 0; i < maxRounds; i += 1) {
-    if (await cond()) return true;
-    await flushRound();
-  }
-  return !!(await cond());
-};
 
 const isRefreshingShown = () =>
   !!el && [...el.querySelectorAll('button')].some((b) => b.textContent.includes('更新中'));
