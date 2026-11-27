@@ -31,6 +31,7 @@ import {
   toDisplayPosition,
   toElementPosition,
   interpretStoredPlayPos,
+  planPlayPositionSave,
   isWithinEndGuard,
   RESUME_END_GUARD_SEC,
   isWithinStartGuard,
@@ -414,6 +415,36 @@ describe('isWithinStartGuard', () => {
     expect(isWithinStartGuard(-3)).toBe(false);
     expect(isWithinStartGuard(Number.NaN)).toBe(false);
     expect(isWithinStartGuard(null)).toBe(false);
+  });
+});
+
+describe('planPlayPositionSave', () => {
+  it('終了済みなら表示位置が曲の途中でもDBを変更しない', () => {
+    expect(planPlayPositionSave({ finished: true, elementPosition: 120, displayDuration: 300 }))
+      .toEqual({ position: 0, storage: 'keep' });
+  });
+
+  it.each([5, 295])('冒頭・終端の境界 %s 秒はDBの位置を消す', (elementPosition) => {
+    expect(planPlayPositionSave({ elementPosition, displayDuration: 300 }))
+      .toEqual({ position: 0, storage: 'clear' });
+  });
+
+  it.each([6, 294])('境界の外側 %s 秒はDBへ保存する', (elementPosition) => {
+    expect(planPlayPositionSave({ elementPosition, displayDuration: 300 }))
+      .toEqual({ position: elementPosition, storage: 'save' });
+  });
+
+  it('表示時間に変換してから秒未満を切り捨てる', () => {
+    expect(planPlayPositionSave({
+      elementPosition: 245.5,
+      displayDuration: 300,
+      mapping: { model: 'scaled', trueSec: 300, elementDuration: 600 },
+    })).toEqual({ position: 122, storage: 'save' });
+  });
+
+  it('0秒では既存のDBの位置を変更しない', () => {
+    expect(planPlayPositionSave({ elementPosition: 0, displayDuration: 300 }))
+      .toEqual({ position: 0, storage: 'keep' });
   });
 });
 
