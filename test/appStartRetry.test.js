@@ -269,6 +269,40 @@ describe('遷移直後に play() がブロックされたときの開始チェ�
     expect(eventsOf('start_failed', 'ep-2').length).toBe(1);
   });
 
+  it('画面が見えていないときは交代せず、鳴っていた要素へ読み直して始める', async () => {
+    const { deckA, deckB } = await startAndPreload();
+    // 交代先は常に拒否される設定にしておく (背面での実測の再現)。
+    // 背面では交代自体を試みないため、この拒否に当たらない。
+    deckB.playHook = () => 'NotAllowedError';
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+    try {
+      await endDeck(deckA);
+    } finally {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
+    }
+    expect(errors).toEqual([]);
+    // 曲は EP2 のまま。交代先は一度も試されず、直前まで鳴って
+    // いた deckA が EP2 を読み直して再生が始まっている。
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+    expect(deckB.playCalls, '交代先は試されない').toBe(0);
+    expect(deckA.src).toBe('https://example.com/ep2.mp3');
+    expect(deckA.paused).toBe(false);
+
+    // 実際に開始したことにする (ウォッチドッグが解除される)。
+    deckA.dispatchEvent(new window.Event('playing'));
+    await flush();
+    // 終了の区切りでキューが送られ、遷移は advance_load として
+    // 残る (advance_swap ではない)。拒否・再発行・フォールバック
+    // の診断は出ない。
+    await endDeck(deckA);
+    expect(errors).toEqual([]);
+    expect(eventsOf('advance_load', 'ep-2').length).toBe(1);
+    expect(eventsOf('advance_swap', 'ep-2')).toEqual([]);
+    expect(eventsOf('play_rejected_not_allowed', 'ep-2')).toEqual([]);
+    expect(eventsOf('start_retry', 'ep-2')).toEqual([]);
+    expect(eventsOf('start_fallback', 'ep-2')).toEqual([]);
+  });
+
   it('正常に開始した場合は、再発行もフォールバックも起きず、診断も残らない', async () => {
     await mountWith([EP1, EP2]);
     await startCard(0);

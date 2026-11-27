@@ -1289,6 +1289,17 @@ function unloadDeck(el) {
   el.removeAttribute('src');
   el.load();
 }
+
+// 画面が見えていない (ロック画面・バックグラウンド) か。背面では
+// 待機側の要素の play() が WebKit に拒否されやすい (2026-11-27 の
+// 実測: 前面での役割交代は成功する一方、背面での交代は8回すべて
+// 拒否され、毎回フォールバックで直前まで鳴っていた要素へ戻った)。
+// 背面での曲の切り替わりは、最初から鳴っていた要素へ読み直す
+// 経路 (役割交代をしない従来経路) を取り、拒否→再発行→
+// フォールバックの迂回と、その間の無音を無くす。
+function isDocumentHidden() {
+  return typeof document !== 'undefined' && document.visibilityState === 'hidden';
+}
 const currentEpisode = ref(null);
 const isPlaying = ref(false);
 // 音声データ待ち (初回再生前・シーク中) の読み込み表示。
@@ -2069,10 +2080,13 @@ function loadEpisode(article, { resume = true, diagAdvance = false } = {}) {
   // ままアクティブへ昇格させる。読み込みの完了は条件にしない
   // (途中の要素でも、昇格後の play() で取得が続き、再生しながら
   // 残りを読み込めるため)。それ以外は先読みを破棄し、従来どおり
-  // アクティブ側へ URL を載せ直す。
+  // アクティブ側へ URL を載せ直す。画面が見えていないときも
+  // 交代しない (背面では待機側の play() が拒否されやすいため。
+  // isDocumentHidden のコメント参照)。
   const standby = existingStandby();
   const swap = !!standby && preloadId === ep.id && !preloadFailed && !!ep.audioUrl
-    && standby.src === ep.audioUrl;
+    && standby.src === ep.audioUrl
+    && !isDocumentHidden();
   if (!swap) discardPreload();
   savePlayPos();
   // 視聴ログ: 前のエピソードの再生時間は、切り替えの前に確定だけ
