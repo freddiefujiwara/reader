@@ -12,8 +12,9 @@
 // - 読み取り専用では何も送らない。
 // - 管理画面を開くと stats を1回だけ取得し、今週分を表示する。
 import 'fake-indexeddb/auto';
+import { flushRound, flushUntil } from './helpers/flush.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createApp, nextTick } from 'vue';
+import { createApp } from 'vue';
 
 const FEED_A = {
   id: 'b81e59da11f890d2', // https://feeds.rebuild.fm/rebuildfm のハッシュID
@@ -132,19 +133,6 @@ let el = null;
 let errors = [];
 let fakeNow = 0;
 let nowSpy = null;
-
-const flushRound = async () => {
-  await new Promise((r) => setTimeout(r, 0));
-  await nextTick();
-};
-
-const flushUntil = async (cond, maxRounds = 120) => {
-  for (let i = 0; i < maxRounds; i += 1) {
-    if (await cond()) return true;
-    await flushRound();
-  }
-  return !!(await cond());
-};
 
 const isRefreshingShown = () =>
   !!el && [...el.querySelectorAll('button')].some((b) => b.textContent.includes('更新中'));
