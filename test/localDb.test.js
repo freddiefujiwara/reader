@@ -14,6 +14,8 @@ import {
   setLocalArticlePlayPos,
   clearLocalArticlePlayPos,
   clearLocalArticleAudio,
+  refreshLocalAudioTimestamps,
+  articleRecordToView,
   markLocalArticlesRead,
   ingestFeedArticles,
   planTombstones,
@@ -145,6 +147,33 @@ describe('音声URLの取り消し', () => {
     await clearLocalArticleAudio('no-such-episode');
     const all = await loadLocalArticles();
     expect(all.some((a) => a.id === 'no-such-episode')).toBe(false);
+  });
+});
+
+describe('未変更フィードの音声URL時刻の更新 (refreshLocalAudioTimestamps)', () => {
+  it('新鮮なURLを持つ記事だけ受け取り時刻が進み、表示側の6時間ルールを抜ける', async () => {
+    const OLD_AT = '2026-11-14T00:00:00.000Z';
+    const NOW = '2026-11-14T12:00:00.000Z';
+    await putLocalArticles([
+      rec('touch-1', { audio_url: 'https://example.com/touch-1.mp3', audio_url_at: OLD_AT, audio_stale: false }),
+      rec('touch-2', { audio_url: 'https://example.com/touch-2.mp3', audio_url_at: OLD_AT, audio_stale: true }),
+      rec('touch-3', {}),
+      rec('touch-4', { feed_id: 'other', audio_url: 'https://example.com/touch-4.mp3', audio_url_at: OLD_AT, audio_stale: false }),
+    ]);
+    // 更新前は、touch-1 は受け取りから12時間経っており表示側で消える。
+    let rows = await loadLocalArticles();
+    expect(articleRecordToView(rows.find((a) => a.id === 'touch-1'), 'NHK', Date.parse(NOW)).audioUrl).toBe('');
+    await refreshLocalAudioTimestamps('nhk', NOW);
+    rows = await loadLocalArticles();
+    const byId = (id) => rows.find((a) => a.id === id);
+    expect(byId('touch-1').audio_url_at).toBe(NOW);
+    expect(byId('touch-2').audio_url_at).toBe(OLD_AT); // 印つきは保持判定の起点を保つ
+    expect(byId('touch-3').audio_url_at).toBeUndefined(); // URLが無い記事は触らない
+    expect(byId('touch-4').audio_url_at).toBe(OLD_AT); // 他フィードは触らない
+    // 表示側でもURLが戻る (再生ボタンが出る状態)。
+    expect(articleRecordToView(byId('touch-1'), 'NHK', Date.parse(NOW)).audioUrl)
+      .toBe('https://example.com/touch-1.mp3');
+    await deleteLocalArticles(['touch-1', 'touch-2', 'touch-3', 'touch-4']);
   });
 });
 

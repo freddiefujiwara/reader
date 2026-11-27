@@ -750,6 +750,30 @@ export function clearLocalArticleAudio(id) {
   });
 }
 
+// 取得した XML が前回とバイト単位で同じで、取り込みを省いた
+// フィードについて、音声URLの受け取り時刻だけを今へ進める。
+// 同じ XML を取り込み直しても、新鮮な enclosure が付いた記事は
+// 同じ URL で受け取り時刻だけが更新される (resolveAudioFields)
+// ため、その時刻更新だけを行う。省いたままだと、表示側の
+// 6時間ルール (articleRecordToView) で、XML が変わらない
+// フィードの再生ボタンが6時間後に全部消えてしまう。
+// 印 (audio_stale) が立っているレコードは、最後に新鮮なURLを
+// 受け取った時点が保持判定の起点のままなので触らない
+// (取り込み側の保持判定と同じ)。
+export async function refreshLocalAudioTimestamps(feedId, fetchedAtIso) {
+  const db = await openLocalDb();
+  const tx = db.transaction('articles', 'readwrite');
+  const store = tx.objectStore('articles');
+  const records = await requestToPromise(store.index('feed_id').getAll(feedId));
+  for (const record of records || []) {
+    if (!record || !record.audio_url || record.audio_stale) continue;
+    if (record.audio_url_at === fetchedAtIso) continue;
+    record.audio_url_at = fetchedAtIso;
+    store.put(record);
+  }
+  await txDone(tx);
+}
+
 // フィード一覧はサーバーの並び順が正本。sortOrder を付けて保存し、
 // 読み出し時に元の順序へ戻す (keyPath の辞書順にはしない)。
 export async function saveLocalFeeds(feeds) {
