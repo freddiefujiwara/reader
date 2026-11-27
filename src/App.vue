@@ -61,6 +61,7 @@ import {
   withUnreadCounts,
 } from './lib/listState.js';
 import {
+  FEED_CONTENT_HASHES_KEY,
   FEED_HASH_TRANSFER_KEY,
   articleRecordToView,
   clearLocalArticleAudio,
@@ -804,18 +805,39 @@ async function refreshOnce() {
     // スナップショットを書き込みの根拠にすると、取得の合間に付けた
     // 既読・再生位置が古いレコードごと上書きされ巻き戻るため使わない。
     const fetchedAt = new Date().toISOString();
-    const results = await fetchAllFeeds(feeds);
     // ID 移行で退避した状態 (既読・再生位置) を、再取得した記事へ戻す。
     let transfer = await getLocalMeta(FEED_HASH_TRANSFER_KEY);
     const hasTransfer = !!transfer && Object.keys(transfer).length > 0;
+    // 前回取り込み済みの内容ハッシュ。XML が前回とバイト単位で同じ
+    // フィードは、パース・取り込みとも結果が変わらないため丸ごと
+    // 省く (fetchOneFeed の unchanged)。大きいポッドキャストの
+    // 全件パースが更新のたびに走り、操作の効きを悪くしていた。
+    // 付け替え (transfer) が残っている間は、取り込みの中で付け替え
+    // を行う必要があるため省かない。
+    const storedHashes = (await getLocalMeta(FEED_CONTENT_HASHES_KEY)) || {};
+    const nextHashes = {};
+    feeds.forEach((f) => { if (storedHashes[f.id]) nextHashes[f.id] = storedHashes[f.id]; });
+    const results = await fetchAllFeeds(
+      feeds,
+      hasTransfer ? {} : { contentHashFor: (feed) => nextHashes[feed.id] || null }
+    );
     for (const result of results) {
-      if (!result.ok) continue;
+      if (!result.ok || result.unchanged) continue;
       const { consumedKeys } = await ingestFeedArticles(
         result.feed, result.entries, fetchedAt, hasTransfer ? transfer : null,
         { feedComplete: result.complete === true }
       );
       consumedKeys.forEach((key) => { delete transfer[key]; });
+      // ハッシュは取り込みが成功したフィードだけ更新する。失敗した
+      // フィードは前回の値を残し、次回に取り込み直す。
+      if (result.contentHash) {
+        nextHashes[result.feed.id] = {
+          hash: result.contentHash,
+          url: result.feed.fetchUrl || result.feed.url,
+        };
+      }
     }
+    await setLocalMeta(FEED_CONTENT_HASHES_KEY, nextHashes);
     if (hasTransfer) {
       // 取得できたフィード分は付け替え終了。一致しなかった記事は
       // フィードから外れているので落とす。取得に失敗した分は次回へ残す。

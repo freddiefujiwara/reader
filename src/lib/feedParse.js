@@ -52,16 +52,55 @@ function parseAttrs(attrText) {
 }
 
 // 最小 XML パーサ。Node: { name (ローカル名・小文字), attrs, children, text }
+// 本体はジェネレータ (parseXmlGen) で、入力を一定量進めるごとに
+// yield する。同期版 (parseXml) は最後まで一気に進め、非同期版
+// (parseXmlChunked) は yield のたびにメインスレッドへ制御を返す。
+// 大きいフィード (数MB) のパースが単一の同期処理のままだと、その間
+// タップやスクロールが一切処理されず「ボタンの効きが悪い」体感に
+// なるためで、出来上がる木は両版で完全に同じになる。
+const PARSE_YIELD_CHARS = 256 * 1024;
+const EXTRACT_YIELD_ITEMS = 50;
+
+const yieldToMain = () => new Promise((resolve) => { setTimeout(resolve, 0); });
+
+function drainSync(gen) {
+  let step = gen.next();
+  while (!step.done) step = gen.next();
+  return step.value;
+}
+
+async function drainAsync(gen) {
+  let step = gen.next();
+  while (!step.done) {
+    await yieldToMain();
+    step = gen.next();
+  }
+  return step.value;
+}
+
 export function parseXml(xmlText) {
+  return drainSync(parseXmlGen(xmlText));
+}
+
+export async function parseXmlChunked(xmlText) {
+  return drainAsync(parseXmlGen(xmlText));
+}
+
+function* parseXmlGen(xmlText) {
   const src = String(xmlText || '');
   const root = { name: '#root', attrs: {}, children: [], text: '' };
   const stack = [root];
   let i = 0;
+  let lastYieldAt = 0;
   const pushText = (raw, isCdata) => {
     if (!raw) return;
     stack[stack.length - 1].text += isCdata ? raw : decodeXmlEntities(raw);
   };
   while (i < src.length) {
+    if (i - lastYieldAt >= PARSE_YIELD_CHARS) {
+      yield;
+      lastYieldAt = i;
+    }
     const lt = src.indexOf('<', i);
     if (lt < 0) { pushText(src.slice(i), false); break; }
     if (lt > i) pushText(src.slice(i, lt), false);
@@ -252,8 +291,26 @@ export function isCompleteFeedXml(xmlText) {
 
 export function parseFeedXml(xmlText, feed) {
   void feed;
-  const root = parseXml(xmlText);
+  return drainSync(parseFeedXmlGen(xmlText));
+}
+
+// 非同期版: 処理の合間にメインスレッドへ制御を返す (parseXml の
+// コメント参照)。背景更新からの呼び出しはこちらを使う。
+export async function parseFeedXmlChunked(xmlText, feed) {
+  void feed;
+  return drainAsync(parseFeedXmlGen(xmlText));
+}
+
+function* parseFeedXmlGen(xmlText) {
+  const root = yield* parseXmlGen(xmlText);
+  return yield* extractItemsGen(root);
+}
+
+// エントリ抽出。本文の整形 (summarize) は件数に比例して重いため、
+// 一定件数ごとに yield して、合間に操作を処理できるようにする。
+function* extractItemsGen(root) {
   const items = [];
+  let seen = 0;
   const pushItem = (guid, title, link, publishedAt, summarySource, author, audioUrl, durationSec, contentSource) => {
     const key = guid || link;
     if (!key || !link) return;
@@ -274,8 +331,8 @@ export function parseFeedXml(xmlText, feed) {
     });
   };
   // RSS 2.0: rss > channel > item
-  findAllNodes(root, 'channel').forEach((channel) => {
-    childNodes(channel, 'item').forEach((item) => {
+  for (const channel of findAllNodes(root, 'channel')) {
+    for (const item of childNodes(channel, 'item')) {
       pushItem(
         childText(item, 'guid') || childText(item, 'link'),
         childText(item, 'title'),
@@ -287,12 +344,14 @@ export function parseFeedXml(xmlText, feed) {
         parseItunesDuration(childText(item, 'duration')),
         childText(item, 'encoded')
       );
-    });
-  });
+      seen += 1;
+      if (seen % EXTRACT_YIELD_ITEMS === 0) yield;
+    }
+  }
   // RSS 1.0 / RDF: ルート要素の直下にある item 要素。
   const docEl = root.children.length ? root.children[0] : null;
   if (docEl) {
-    childNodes(docEl, 'item').forEach((item) => {
+    for (const item of childNodes(docEl, 'item')) {
       pushItem(
         item.attrs.about || childText(item, 'link'),
         childText(item, 'title'),
@@ -304,10 +363,12 @@ export function parseFeedXml(xmlText, feed) {
         parseItunesDuration(childText(item, 'duration')),
         childText(item, 'encoded')
       );
-    });
+      seen += 1;
+      if (seen % EXTRACT_YIELD_ITEMS === 0) yield;
+    }
   }
   // Atom: feed ルート配下の entry 要素。
-  findAllNodes(root, 'entry').forEach((entry) => {
+  for (const entry of findAllNodes(root, 'entry')) {
     const links = childNodes(entry, 'link');
     let href = '';
     links.forEach((l) => {
@@ -326,6 +387,8 @@ export function parseFeedXml(xmlText, feed) {
       parseItunesDuration(childText(entry, 'duration')),
       childText(entry, 'content')
     );
-  });
+    seen += 1;
+    if (seen % EXTRACT_YIELD_ITEMS === 0) yield;
+  }
   return items;
 }

@@ -3,7 +3,8 @@
 //   GET <exec>?u=<encodeURIComponent(fetchUrl)>&token=<値>
 //   -> { url, content, error } (content がフィード XML の生テキスト)
 // 失敗したフィードはその回だけ諦め、ローカルの記事を残す (呼び出し側の判断)。
-import { parseFeedXml, isCompleteFeedXml } from './feedParse.js';
+import { parseFeedXmlChunked, isCompleteFeedXml } from './feedParse.js';
+import { sha256Hex } from './articleId.js';
 import { withRetry } from './retry.js';
 
 // url-fetch-gas の /exec URL (portfolio-treemap と同じデプロイ)。
@@ -50,20 +51,21 @@ export async function fetchFeedXml(fetchUrl, { fetcher = fetch, proxyBase = URL_
   }, { retries, retryDelayMs, isRetryable });
 }
 
-// パースはメインスレッドで同期的に走る。大きいフィード (数百件の
-// ポッドキャスト等) では実機で秒単位のブロックになり、その間に
-// 落ちたタップはパースが終わるまで処理されず「ボタンの効きが悪い」
-// 体感になる。パース同士はもともと単一スレッドで順番にしか進まない
-// ため、直列のキューに載せ、1件ごとにメインスレッドへ制御を返して
-// から次を始める (入力や描画が合間に処理される)。全体の所要時間は
-// ほぼ変わらない。
+// パースはメインスレッドで走る。大きいフィード (数百件の
+// ポッドキャスト等) を単一の同期処理でパースすると実機で秒単位の
+// ブロックになり、その間に落ちたタップはパースが終わるまで処理
+// されず「ボタンの効きが悪い」体感になる。対策は2段で、パース
+// 自体が一定量ごとに制御を返す分割実行版 (parseFeedXmlChunked)
+// を使い、さらにパース同士を直列のキューに載せてフィードの合間
+// にも制御を返す (入力や描画が合間に処理される)。全体の所要時間
+// はほぼ変わらない。
 const yieldToMain = () => new Promise((resolve) => { setTimeout(resolve, 0); });
 let parseQueue = Promise.resolve();
 
 function parseFeedXmlQueued(xml, feed) {
   const run = parseQueue.then(async () => {
     await yieldToMain();
-    return parseFeedXml(xml, feed);
+    return parseFeedXmlChunked(xml, feed);
   });
   // 1件の失敗でキュー全体を止めない。
   parseQueue = run.then(() => {}, () => {});
@@ -72,11 +74,27 @@ function parseFeedXmlQueued(xml, feed) {
 
 // フィード1件を取得してエントリまで変換する。失敗しても投げず、
 // { ok: false } で返して呼び出し側がそのフィードをスキップできるようにする。
+//
+// 前回取り込み済みの内容とバイト単位で同じ XML は、パースしても
+// 取り込んでも結果が変わらないため、変換を丸ごと省いて
+// { unchanged: true } で返す。大きいポッドキャスト (数MB・数百件)
+// の全件パースが更新のたびにメインスレッドを塞ぎ、スクロールや
+// タップの効きを悪くしていたのが主因のため。判定は
+// opts.contentHashFor(feed) が返す前回の { hash, url } と、今回の
+// XML の SHA-256・取得 URL の両方の一致で決める。ハッシュ計算は
+// ブラウザ標準の実装 (crypto.subtle) で、自前パーサより桁違いに
+// 速い。結果には今回の contentHash を載せ、呼び出し側が取り込みの
+// 成功後に保存する。
 export async function fetchOneFeed(feed, opts) {
   const fetchUrl = feed.fetchUrl || feed.url;
   try {
     const xml = await fetchFeedXml(fetchUrl, opts);
-    return { feed, ok: true, entries: await parseFeedXmlQueued(xml, feed), complete: isCompleteFeedXml(xml), error: null };
+    const contentHash = await sha256Hex(xml);
+    const known = opts && typeof opts.contentHashFor === 'function' ? opts.contentHashFor(feed) : null;
+    if (known && known.hash === contentHash && known.url === fetchUrl) {
+      return { feed, ok: true, unchanged: true, entries: [], complete: true, contentHash, error: null };
+    }
+    return { feed, ok: true, unchanged: false, entries: await parseFeedXmlQueued(xml, feed), complete: isCompleteFeedXml(xml), contentHash, error: null };
   } catch (error) {
     return { feed, ok: false, entries: [], error };
   }

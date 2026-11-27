@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseFeedXml, parseFeedMeta, parseItunesDuration, decodeXmlEntities, stripTags, toIsoDate, summarize, isCompleteFeedXml } from '../src/lib/feedParse.js';
+import { parseFeedXml, parseFeedXmlChunked, parseXml, parseXmlChunked, parseFeedMeta, parseItunesDuration, decodeXmlEntities, stripTags, toIsoDate, summarize, isCompleteFeedXml } from '../src/lib/feedParse.js';
 
 const RSS2 = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
@@ -478,6 +478,35 @@ describe('補助関数', () => {
   it('空の入力ではエントリゼロ', () => {
     expect(parseFeedXml('', { id: 'x' })).toEqual([]);
     expect(parseFeedXml('<html><body>not a feed</body></html>', { id: 'x' })).toEqual([]);
+  });
+});
+
+describe('分割実行版 (parseFeedXmlChunked / parseXmlChunked)', () => {
+  it('同期版と完全に同じ結果を返す', async () => {
+    for (const xml of [RSS2, ATOM, RDF]) {
+      await expect(parseFeedXmlChunked(xml, { id: 'x' })).resolves.toEqual(parseFeedXml(xml, { id: 'x' }));
+      const tree = await parseXmlChunked(xml);
+      expect(JSON.stringify(tree)).toBe(JSON.stringify(parseXml(xml)));
+    }
+    await expect(parseFeedXmlChunked('', { id: 'x' })).resolves.toEqual([]);
+  });
+  it('大きい文書では、完了前にメインスレッドへ制御が返る', async () => {
+    // 256KB ごとの yield を固定する。同期のまま進むと、先に登録した
+    // 0ms タイマーはパース完了まで処理されない。
+    const body = 'あ'.repeat(2000);
+    const items = Array.from({ length: 300 }, (_, i) => (
+      `<item><title>t${i}</title><link>https://example.com/${i}</link><description>${body}</description></item>`
+    )).join('');
+    const xml = `<rss version="2.0"><channel>${items}</channel></rss>`;
+    expect(xml.length).toBeGreaterThan(512 * 1024);
+    let resolved = false;
+    let timerFiredBeforeResolve = false;
+    setTimeout(() => { if (!resolved) timerFiredBeforeResolve = true; }, 0);
+    const entries = await parseFeedXmlChunked(xml, { id: 'big' });
+    resolved = true;
+    expect(entries.length).toBe(300);
+    expect(entries).toEqual(parseFeedXml(xml, { id: 'big' }));
+    expect(timerFiredBeforeResolve).toBe(true);
   });
 });
 

@@ -342,6 +342,12 @@ export function planOrphanArticles(articles, feedIds) {
 export const FEED_HASH_MIGRATED_KEY = 'feedHashMigratedV3';
 export const FEED_HASH_TRANSFER_KEY = 'feedHashTransferV3';
 
+// フィード XML の内容ハッシュの置き場 (meta ストアのキー)。値は
+// { [feedId]: { hash, url } } で、取り込みが成功したフィードだけを
+// 記録する。次回の更新で XML がバイト単位で同じなら、パースと
+// 取り込みは結果が同じになるため丸ごと省ける (feedFetch 参照)。
+export const FEED_CONTENT_HASHES_KEY = 'feedContentHashesV1';
+
 // 付け替え状態のキー: 新フィードID＋リンク。記事レコードには guid が
 // 残っていないため、付け替えは (フィード, リンク) で対応付ける。
 export function transferKey(feedId, link) {
