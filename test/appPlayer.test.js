@@ -1506,6 +1506,45 @@ describe('フォアグラウンド復帰時の再生回復', () => {
     expect(audio.paused).toBe(false);
   });
 
+  it('ロック画面から一時停止しても復帰時に勝手に再生しない', async () => {
+    const actions = new Map();
+    const mediaSession = { metadata: null, setActionHandler: (name, handler) => actions.set(name, handler) };
+    const original = Object.getOwnPropertyDescriptor(navigator, 'mediaSession');
+    const originalVisibility = Object.getOwnPropertyDescriptor(document, 'visibilityState');
+    Object.defineProperty(navigator, 'mediaSession', { configurable: true, value: mediaSession });
+    vi.stubGlobal('MediaMetadata', class {
+      constructor(init) { Object.assign(this, init); }
+    });
+
+    try {
+      await mountPlayer();
+      await startCard(0);
+      const audio = latestAudio();
+      expect(mediaSession.metadata).toMatchObject({ title: 'エピソード1', artist: 'Rebuild' });
+      expect([...actions.keys()]).toEqual(['play', 'pause', 'seekbackward', 'seekforward', 'previoustrack', 'nexttrack']);
+      expect(audio.paused).toBe(false);
+
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+      document.dispatchEvent(new window.Event('visibilitychange'));
+      actions.get('pause')();
+      expect(audio.paused).toBe(true);
+
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+      await fireVisible();
+      expect(audio.paused).toBe(true);
+      expect(el.querySelector('.player-title').textContent).toBe('エピソード1');
+      expect(errors).toEqual([]);
+
+      el.querySelector('.player-close').click();
+      expect(mediaSession.metadata).toBeNull();
+    } finally {
+      if (original) Object.defineProperty(navigator, 'mediaSession', original);
+      else delete navigator.mediaSession;
+      if (originalVisibility) Object.defineProperty(document, 'visibilityState', originalVisibility);
+      else delete document.visibilityState;
+    }
+  });
+
   it('本人が一時停止していたら、復帰しても勝手に再生しない', async () => {
     await mountPlayer();
     await startCard(0);
