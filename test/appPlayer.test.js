@@ -1027,6 +1027,40 @@ describe('次の曲の先読み (二重バッファ)', () => {
     expect(el.querySelectorAll('.article-card')[0].classList.contains('is-read')).toBe(false);
   });
 
+  it('役割交代後は旧要素の遅延イベントを無視し、新しい再生側のイベントには反応する', async () => {
+    await mountPlayer();
+    await startCard(0);
+    const previous = latestAudio();
+    const active = await startPreload(previous);
+    active.duration = 1800;
+
+    previous.ended = true;
+    previous.paused = true;
+    previous.dispatchEvent(new window.Event('ended'));
+    await flush();
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+    expect(active.paused).toBe(false);
+
+    const label = () => el.querySelector('.player-play').getAttribute('aria-label');
+    active.dispatchEvent(new window.Event('canplay'));
+    await flush();
+    expect(label()).toBe('一時停止');
+
+    previous.duration = 60;
+    for (const event of ['loadedmetadata', 'timeupdate', 'waiting', 'pause', 'ended']) {
+      previous.dispatchEvent(new window.Event(event));
+    }
+    await flush();
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+    expect(el.querySelector('.player-total').textContent).toBe('30:00');
+    expect(label()).toBe('一時停止');
+
+    active.dispatchEvent(new window.Event('waiting'));
+    await flush();
+    expect(label()).toBe('読み込み中');
+    expect(errors).toEqual([]);
+  });
+
   it('先読みが始まった直後 (ほぼ進んでいない状態) でも役割交代する', async () => {
     // 前の曲が短く、先読みの窓がほとんど無いケース。待機側は
     // src をセットしただけで、メタデータも来ていない。
