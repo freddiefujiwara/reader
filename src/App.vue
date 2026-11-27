@@ -110,7 +110,7 @@ import {
   formatTime,
   interpretStoredPlayPos,
   isWithinEndGuard,
-  isWithinStartGuard,
+  planPlayPositionSave,
   loadPlayMode,
   loadTimeModel,
   nextEpisodePlan,
@@ -2008,28 +2008,18 @@ function tryPlayAudio() {
 function savePlayPos() {
   const ep = currentEpisode.value;
   if (!ep) return;
-  // 再生し終えた要素の現在位置は「終わり」そのもので再開位置ではない。
-  // 終了直後の自動送り (loadEpisode 内の保存) で、クリア済みの位置を
-  // 末尾で上書きしてしまわないよう、ここで 0 に倒す。'ended' イベント
-  // 経由でない終了 (表示位置ベースの判定経由) では audio.ended が
-  // 立たないため、終了フロー済みかどうかでも判定する。
-  if (audio.ended || endFlowDone) {
-    playPosMemory.set(ep.id, 0);
+  const { position, storage } = planPlayPositionSave({
+    finished: audio.ended || endFlowDone,
+    elementPosition: audio.currentTime,
+    displayDuration: displayDuration.value,
+    mapping: mappingCtx.value,
+  });
+  if (storage === 'clear') {
+    clearPlayPos(ep.id);
     return;
   }
-  // 再開位置は正しい長さ基準 (表示スケール) で保存する。
-  const pos = Math.floor(toDisplayPosition(audio.currentTime || 0, mappingCtx.value));
-  // 終端間際 (残り5秒以内) の位置は再開位置として保存しない。開始
-  // 直後に終了判定へ入る毒になるため、DB 側も 0 に倒しておく。
-  // 冒頭 (5秒以下) の位置も同じ扱いにする: 数秒だけ再生して止めた
-  // 位置が残ると、次に始めたとき冒頭が飛んだように見えるため。
-  if (isWithinEndGuard(pos, displayDuration.value) || isWithinStartGuard(pos)) {
-    playPosMemory.set(ep.id, 0);
-    clearLocalArticlePlayPos(ep.id).catch(() => {});
-    return;
-  }
-  playPosMemory.set(ep.id, pos);
-  if (pos > 0) setLocalArticlePlayPos(ep.id, pos).catch(() => {});
+  playPosMemory.set(ep.id, position);
+  if (storage === 'save') setLocalArticlePlayPos(ep.id, position).catch(() => {});
 }
 
 function clearPlayPos(id) {
