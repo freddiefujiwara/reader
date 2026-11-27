@@ -14,6 +14,7 @@
 // - 既読にしてもボタンは消えない。測定は次ティック＋次のフレームの
 //   二段で行い、レイアウト確定前の空振りの測定で判定を落とさない。
 import 'fake-indexeddb/auto';
+import { flushUntil } from './helpers/flush.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createApp, nextTick } from 'vue';
 
@@ -134,19 +135,6 @@ const flush = async () => {
     await new Promise((r) => setTimeout(r, 0));
     await nextTick();
   }
-};
-
-const flushRound = async () => {
-  await new Promise((r) => setTimeout(r, 0));
-  await nextTick();
-};
-
-const flushUntil = async (cond, maxRounds = 120) => {
-  for (let i = 0; i < maxRounds; i += 1) {
-    if (await cond()) return true;
-    await flushRound();
-  }
-  return !!(await cond());
 };
 
 async function mountApp(records) {
