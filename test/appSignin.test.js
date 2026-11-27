@@ -6,8 +6,9 @@
 //   forbidden のときだけ権限なしの文言に振り分ける
 // - 無効な共有リンクは一時アクセスリンクの文言で案内する
 import 'fake-indexeddb/auto';
+import { flushRound, flushUntil } from './helpers/flush.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createApp, nextTick } from 'vue';
+import { createApp } from 'vue';
 
 vi.mock('../src/lib/api.js', () => ({
   setStar: vi.fn(async () => ({ ok: true })),
@@ -43,19 +44,6 @@ let app = null;
 let el = null;
 let errors = [];
 let credentialCallback = null;
-
-const flushRound = async () => {
-  await new Promise((r) => setTimeout(r, 0));
-  await nextTick();
-};
-
-const flushUntil = async (cond, maxRounds = 120) => {
-  for (let i = 0; i < maxRounds; i += 1) {
-    if (await cond()) return true;
-    await flushRound();
-  }
-  return !!(await cond());
-};
 
 const signinBox = () => (el ? el.querySelector('.signin-box') : null);
 
