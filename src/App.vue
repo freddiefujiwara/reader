@@ -1329,6 +1329,18 @@ let playHistory = [];
 function queueIds() {
   return playQueue.value.map((a) => a.id);
 }
+
+// 先読みと曲の終了で、現在のキューと再生モードから同じ規則で次曲を選ぶ。
+function planNextEpisode(currentId) {
+  return nextEpisodePlan({
+    queue: queueIds(),
+    currentId,
+    repeat: repeatMode.value,
+    shuffle: shuffleOn.value,
+    playedIds: playedInRound,
+  });
+}
+
 // 再生位置のメモリ上の控え (DB 読み直しを待たずに再開するため)。
 const playPosMemory = new Map();
 let pendingSeek = 0;
@@ -1765,13 +1777,7 @@ function plannedPreloadArticle(plan) {
 function preloadTarget() {
   if (!currentEpisode.value || repeatMode.value === 'one') return null;
   if (shuffleOn.value) return shufflePreloadTarget();
-  const plan = nextEpisodePlan({
-    queue: queueIds(),
-    currentId: currentEpisode.value.id,
-    repeat: repeatMode.value,
-    shuffle: false,
-    playedIds: playedInRound,
-  });
+  const plan = planNextEpisode(currentEpisode.value.id);
   return plannedPreloadArticle(plan);
 }
 
@@ -1784,13 +1790,7 @@ function preloadTarget() {
 function shufflePreloadTarget() {
   const committed = committedPlan();
   if (committed) return playQueue.value.find((a) => a.id === committed.id) || null;
-  const plan = nextEpisodePlan({
-    queue: queueIds(),
-    currentId: currentEpisode.value.id,
-    repeat: repeatMode.value,
-    shuffle: true,
-    playedIds: playedInRound,
-  });
+  const plan = planNextEpisode(currentEpisode.value.id);
   const next = plannedPreloadArticle(plan);
   if (!next) return null;
   committedNext = {
@@ -2594,13 +2594,7 @@ function handleEpisodeEnded() {
   // 抽選し直さずその確定曲へ進む (先読み済みの待機側と遷移先を
   // 一致させ、役割交代で進めるため)。確定が無ければ従来どおり
   // 遷移時に抽選する。
-  const plan = (shuffleOn.value ? committedPlan() : null) || nextEpisodePlan({
-    queue: queueIds(),
-    currentId: ep.id,
-    repeat: repeatMode.value,
-    shuffle: shuffleOn.value,
-    playedIds: playedInRound,
-  });
+  const plan = (shuffleOn.value ? committedPlan() : null) || planNextEpisode(ep.id);
   // 次へ進む場合は loadEpisode 側で再生時間を確定する。進まずに
   // 止まる場合は、ここが再生の終わりなので確定して送る (再生の
   // 意思もここで下ろす。フォアグラウンド復帰時の回復で、末尾で
