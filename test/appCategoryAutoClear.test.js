@@ -8,8 +8,9 @@
 // 選択を '' へ戻して全件表示に戻ることを固定する。あわせて、
 // カテゴリがまだ存在する間は選択が維持されることも確認する。
 import 'fake-indexeddb/auto';
+import { flushRound, flushUntil } from './helpers/flush.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createApp, nextTick } from 'vue';
+import { createApp } from 'vue';
 
 const FEED_A = {
   id: 'b81e59da11f890d2', // https://feeds.rebuild.fm/rebuildfm のハッシュID
@@ -98,22 +99,9 @@ let app = null;
 let el = null;
 let errors = [];
 
-const flushRound = async () => {
-  await new Promise((r) => setTimeout(r, 0));
-  await nextTick();
-};
-
 // 条件が成り立つまで flush を繰り返す (appGenreReflect と同じ理由:
 // 非同期チェーンの完了タイミングはマシンの負荷で変わるため、
 // 固定回数の flush では CI で完了前に検証へ進んでしまう)。
-const flushUntil = async (cond, maxRounds = 120) => {
-  for (let i = 0; i < maxRounds; i += 1) {
-    if (await cond()) return true;
-    await flushRound();
-  }
-  return !!(await cond());
-};
-
 // ヘッダーの更新ボタンは背景更新の実行中だけ「更新中…」になる。
 const isRefreshingShown = () =>
   !!el && [...el.querySelectorAll('button')].some((b) => b.textContent.includes('更新中'));
