@@ -317,6 +317,19 @@ export function isWithinEndGuard(pos, totalSec) {
   return pos >= totalSec - RESUME_END_GUARD_SEC;
 }
 
+// 保存位置と、端末DBに行う操作を決める。終了フローで消した位置を
+// 次曲の読み込み時に上書きしないよう、終了済みならメモリだけを0にする。
+export function planPlayPositionSave({ finished, elementPosition, displayDuration, mapping }) {
+  if (finished) return { position: 0, storage: 'keep' };
+
+  // 保存は Audio 要素の時間ではなく、表示上の秒数に揃える。
+  const position = Math.floor(toDisplayPosition(elementPosition || 0, mapping));
+  if (isWithinEndGuard(position, displayDuration) || isWithinStartGuard(position)) {
+    return { position: 0, storage: 'clear' };
+  }
+  return { position, storage: position > 0 ? 'save' : 'keep' };
+}
+
 // 保存済み再開位置の解釈。旧バージョンは要素スケールで保存していた
 // ため、補正が効いているエピソードで正しい長さを超える値は、要素
 // スケールの値とみなして比率で割り戻す。新しく保存する値は正しい
