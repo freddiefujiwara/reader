@@ -9,8 +9,9 @@
 //   ボタンだけ「コピーしました」表示になる。
 // - 読み取り専用 (共有リンク) セッションでも共有ボタンは出る。
 import 'fake-indexeddb/auto';
+import { flushRound, flushUntil } from './helpers/flush.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createApp, nextTick } from 'vue';
+import { createApp } from 'vue';
 
 // https://www.youtube.com/channel/UCabcdefghij1234567890 のハッシュID。
 const YT_FEED_ID = '3995346beb8a4c3f';
@@ -131,21 +132,8 @@ let el = null;
 let errors = [];
 let writeText = null;
 
-const flushRound = async () => {
-  await new Promise((r) => setTimeout(r, 0));
-  await nextTick();
-};
-
 const flush = async () => {
   for (let i = 0; i < 6; i += 1) await flushRound();
-};
-
-const flushUntil = async (cond, maxRounds = 120) => {
-  for (let i = 0; i < maxRounds; i += 1) {
-    if (await cond()) return true;
-    await flushRound();
-  }
-  return !!(await cond());
 };
 
 async function mountApp(records) {
