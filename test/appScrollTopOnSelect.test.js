@@ -6,8 +6,9 @@
 // ユーザー操作による選択変更だけで、初期表示や背景更新では
 // スクロール位置を動かさないこともあわせて固定する。
 import 'fake-indexeddb/auto';
+import { flushRound, flushUntil } from './helpers/flush.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createApp, nextTick } from 'vue';
+import { createApp } from 'vue';
 
 const FEED_A = {
   id: 'b81e59da11f890d2', // https://feeds.rebuild.fm/rebuildfm のハッシュID
@@ -89,20 +90,7 @@ let el = null;
 let errors = [];
 let scrollToCalls = [];
 
-const flushRound = async () => {
-  await new Promise((r) => setTimeout(r, 0));
-  await nextTick();
-};
-
 // 条件が成り立つまで flush を繰り返す (appGenreReflect と同じ作法)。
-const flushUntil = async (cond, maxRounds = 120) => {
-  for (let i = 0; i < maxRounds; i += 1) {
-    if (await cond()) return true;
-    await flushRound();
-  }
-  return !!(await cond());
-};
-
 // ヘッダーの更新ボタンは背景更新の実行中だけ「更新中…」になる。
 const isRefreshingShown = () =>
   !!el && [...el.querySelectorAll('button')].some((b) => b.textContent.includes('更新中'));

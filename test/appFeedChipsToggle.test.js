@@ -11,6 +11,7 @@
 // - チップの顔ぶれが変わる (カテゴリ選択など) と、閉じた状態に戻る。
 //   収まる件数ではトグルは出ない。
 import 'fake-indexeddb/auto';
+import { flushUntil } from './helpers/flush.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createApp, nextTick } from 'vue';
 
@@ -119,19 +120,6 @@ const flush = async () => {
     await new Promise((r) => setTimeout(r, 0));
     await nextTick();
   }
-};
-
-const flushRound = async () => {
-  await new Promise((r) => setTimeout(r, 0));
-  await nextTick();
-};
-
-const flushUntil = async (cond, maxRounds = 120) => {
-  for (let i = 0; i < maxRounds; i += 1) {
-    if (await cond()) return true;
-    await flushRound();
-  }
-  return !!(await cond());
 };
 
 async function mountApp() {

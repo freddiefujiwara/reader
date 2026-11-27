@@ -5,8 +5,9 @@
 // の2経路で「保存済みセッションが消え、サインイン画面へ戻り、
 // 期限切れの案内が出る」ことを固定する。ハーネスは appRoute と同じ。
 import 'fake-indexeddb/auto';
+import { flushRound, flushUntil } from './helpers/flush.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createApp, nextTick } from 'vue';
+import { createApp } from 'vue';
 
 const FEEDS = [
   {
@@ -58,19 +59,6 @@ const unauthorized = async () => {
 let app = null;
 let el = null;
 let errors = [];
-
-const flushRound = async () => {
-  await new Promise((r) => setTimeout(r, 0));
-  await nextTick();
-};
-
-const flushUntil = async (cond, maxRounds = 120) => {
-  for (let i = 0; i < maxRounds; i += 1) {
-    if (await cond()) return true;
-    await flushRound();
-  }
-  return !!(await cond());
-};
 
 const isRefreshingShown = () =>
   !!el && [...el.querySelectorAll('button')].some((b) => b.textContent.includes('更新中'));
