@@ -768,7 +768,9 @@ async function refreshOnce() {
       // 全項目は要らないため、スター同期専用の軽量形 (scope=stars)
       // で取り、応答を小さくする。
       const payload = await listArticles(session.value.token, { limit: IMPORT_LIMIT, scope: needImport ? '' : 'stars' });
-      if (Array.isArray(payload.feeds)) feeds = payload.feeds;
+      // 一覧の欠落は「購読が0件」とは別。端末の一覧で更新を続ける。
+      if (!Array.isArray(payload?.feeds)) throw new Error('Invalid feed list');
+      feeds = payload.feeds;
       if (needImport) importPayload = payload;
       if (Array.isArray(payload.articles)) starRows = payload.articles;
       listOk = true;
@@ -790,13 +792,13 @@ async function refreshOnce() {
     // たびに試し直す (素材はキャッシュ済みの旧形式一覧のため、
     // キャッシュの上書き前に呼ぶ)。
     await migrateYouTubeChannelUrlIds(feeds);
-    if (listOk) await saveLocalFeeds(feeds);
+    if (listOk) {
+      await saveLocalFeeds(feeds);
 
-    // サーバー側で消えたフィードの記事はローカルからも落とす。
-    const records = await loadLocalArticles();
-    const orphanIds = planOrphanArticles(records, feeds.map((f) => f.id));
-    if (orphanIds.length) {
-      await deleteLocalArticles(orphanIds);
+      // サーバーの一覧を確認できた場合だけ、削除済みフィードの記事を落とす。
+      const records = await loadLocalArticles();
+      const orphanIds = planOrphanArticles(records, feeds.map((f) => f.id));
+      if (orphanIds.length) await deleteLocalArticles(orphanIds);
     }
 
     // (b) 全フィード取得 → 取り込み。

@@ -236,3 +236,45 @@ describe('フィード削除と背景更新の競合', () => {
     await settleApp();
   });
 });
+
+describe('背景更新のフィード一覧が欠けた場合', () => {
+  async function refreshWith(payload) {
+    const calls = listArticles.mock.calls.length;
+    listArticles.mockResolvedValueOnce(payload);
+    findButton(el, '更新').click();
+    expect(await flushUntil(() => listArticles.mock.calls.length > calls)).toBe(true);
+    await settleApp();
+    expect(errors).toEqual([]);
+  }
+
+  it.each([
+    ['欠落', { ok: true, articles: [] }],
+    ['配列ではない', { ok: true, feeds: {}, articles: [] }],
+  ])('一覧が%sなら、購読・記事・再生位置を端末に残す', async (_, payload) => {
+    await mountTimeline();
+    await putLocalArticles([{ ...rec('art-a', FEED_A.id, '記事A'), play_pos: 45 }]);
+    await refreshWith(payload);
+
+    const [feeds, records] = await Promise.all([loadLocalFeeds(), loadLocalArticles()]);
+    expect({
+      feedIds: feeds.map((feed) => feed.id).sort(),
+      articleIds: records.map((record) => record.id).sort(),
+      playPosition: records.find((record) => record.id === 'art-a')?.play_pos,
+    }).toEqual({
+      feedIds: [FEED_A.id, FEED_B.id].sort(),
+      articleIds: ['art-a', 'art-b'],
+      playPosition: 45,
+    });
+    expect(articleTitles()).toEqual(['記事A', '記事B']);
+  });
+
+  it('サーバーが明示的に空の一覧を返した場合は、端末の購読と記事を削除する', async () => {
+    await mountTimeline();
+    expect(articleTitles()).toEqual(['記事A', '記事B']);
+    await refreshWith({ ok: true, feeds: [], articles: [] });
+
+    expect(await loadLocalFeeds()).toEqual([]);
+    expect(await loadLocalArticles()).toEqual([]);
+    expect(articleTitles()).toEqual([]);
+  });
+});
