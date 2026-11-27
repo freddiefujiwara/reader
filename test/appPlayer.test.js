@@ -1229,27 +1229,33 @@ describe('ランダム再生の先読み (確定した次曲への役割交代)'
   }
 
   it('ランダムでも再生開始で次曲が確定して先読みされ、終了時はその曲へ役割交代する', async () => {
-    await mountWithEpisodes([{ ...EP1 }, { ...EP2 }]);
+    await mountWithEpisodes([{ ...EP1 }, { ...EP2 }, { ...EP3 }]);
     const bar = await startCard(0);
     await toggleShuffleBtn(bar);
     expect(bar.querySelector('button[aria-label^="ランダム"]').getAttribute('aria-label')).toBe('ランダム：オン');
     const audio = latestAudio();
 
-    // 候補は ep-2 だけなので、抽選は一意に定まる。
-    const pre = await armPreload(audio);
-    expect(audioInstances.length).toBe(2);
-    expect(pre.src).toBe('https://example.com/ep2.mp3');
-
-    await endActive(audio);
+    // ep-3 を先読みしたあと、引き直せば ep-2 が選ばれる値に変える。
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.99);
+    let pre;
+    try {
+      pre = await armPreload(audio);
+      expect(audioInstances.length).toBe(2);
+      expect(pre.src).toBe('https://example.com/ep3.mp3');
+      random.mockReturnValue(0);
+      await endActive(audio);
+    } finally {
+      random.mockRestore();
+    }
     expect(errors).toEqual([]);
-    expect(el.querySelector('.player-title').textContent).toBe('エピソード2');
+    expect(el.querySelector('.player-title').textContent).toBe('エピソード3');
     // 役割交代で進み、診断にも advance_swap が残る。
     expect(audioInstances.length).toBe(2);
     expect(pre.paused).toBe(false);
     expect(audio.src).toBe('');
     const diag = logEvents.mock.calls.flatMap((c) => c[1]).filter((e) => e.type.startsWith('advance_'));
     expect(diag).toEqual([
-      expect.objectContaining({ type: 'advance_swap', article_id: 'ep-2' }),
+      expect.objectContaining({ type: 'advance_swap', article_id: 'ep-3' }),
     ]);
   });
 
